@@ -1,31 +1,67 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Sidebar, NavPage } from "./components/layout/Sidebar";
-import { TopBar } from "./components/layout/TopBar";
-import { OverviewPage, ProjectData, RunData, IdeConnectionState } from "./pages/OverviewPage";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { RunsPage } from "./pages/RunsPage";
-import { IdePage } from "./pages/IdePage";
-import { ProvidersPage } from "./pages/ProvidersPage";
-import { PoliciesPage } from "./pages/PoliciesPage";
-import { GitPage } from "./pages/GitPage";
-import { TimelinePage } from "./pages/TimelinePage";
-import { DiagnosticsPage } from "./pages/DiagnosticsPage";
-import { SettingsPage } from "./pages/SettingsPage";
+import { IdeConnectionDeck } from "./features/ide/IdeConnectionDeck";
 import { ProjectWizard } from "./features/wizard/ProjectWizard";
+import { TaskInspector } from "./features/tasks/TaskInspector";
+import { HumanDirectionBar } from "./features/inbox/HumanDirectionBar";
+import { ProviderSettingsModal } from "./features/settings/ProviderSettingsModal";
+import { Drawer } from "./components/common/Drawer";
+import { GitPage } from "./pages/GitPage";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { PoliciesPage } from "./pages/PoliciesPage";
+import { SettingsPage } from "./pages/SettingsPage";
+
+import { ProjectData } from "./pages/OverviewPage";
+
+export interface RunData {
+  id: string;
+  projectId: string;
+  status: "pending" | "running" | "paused" | "completed" | "failed" | "stopped" | "blocked";
+  iterationCount: number;
+  currentTaskId: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  stopReason?: string | null;
+}
+
+export type ActiveDrawer =
+  | "none"
+  | "ide"
+  | "settings"
+  | "git"
+  | "diagnostics"
+  | "policies"
+  | "history"
+  | "export";
 
 export function App() {
-  const [currentPage, setCurrentPage] = useState<NavPage>("overview");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  // 1. Theme State (Defaulting to restrained dark theme per Section 3)
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [backendHealthy, setBackendHealthy] = useState(false);
 
+  // 2. Project State
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectData | null>(null);
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
 
+  // 3. Execution & Run State
   const [runs, setRuns] = useState<RunData[]>([]);
   const [activeRun, setActiveRun] = useState<RunData | null>(null);
+  const [activeTask, setActiveTask] = useState<{
+    id: string;
+    title: string;
+    objective: string;
+    status: string;
+  } | null>(null);
 
-  const [ideState, setIdeState] = useState<IdeConnectionState | null>(null);
+  // 4. Drawer & Modal Controls
+  const [activeDrawer, setActiveDrawer] = useState<ActiveDrawer>("none");
+  const [inspectTaskId, setInspectTaskId] = useState<string | null>(null);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"json" | "markdown">("json");
+  const [exportData, setExportData] = useState<string | null>(null);
+
+  // 5. IDE & Provider State
+  const [ideState, setIdeState] = useState<any | null>(null);
   const [activeProvider, setActiveProvider] = useState<{
     id: string;
     displayName: string;
@@ -36,7 +72,8 @@ export function App() {
     privacyClass: "local",
   });
 
-  const [events, setEvents] = useState<Array<{ id: string; time: string; type: string; message: string }>>([
+  // 6. Timeline Events
+  const [events, setEvents] = useState<Array<{ id: string; time: string; type: string; message: string; details?: any }>>([
     {
       id: "ev-0",
       time: new Date().toLocaleTimeString(),
@@ -44,8 +81,10 @@ export function App() {
       message: "Autonomous Development Orchestrator running on 127.0.0.1:4317",
     },
   ]);
-
-  const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [timelineFilter, setTimelineFilter] = useState<string>("all");
+  const [timelineSearch, setTimelineSearch] = useState<string>("");
+  const [autoScrollTimeline, setAutoScrollTimeline] = useState<boolean>(true);
+  const timelineEndRef = useRef<HTMLDivElement | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // Apply theme to document
@@ -61,11 +100,7 @@ export function App() {
   const checkHealth = async () => {
     try {
       const res = await fetch("/api/v1/health");
-      if (res.ok) {
-        setBackendHealthy(true);
-      } else {
-        setBackendHealthy(false);
-      }
+      setBackendHealthy(res.ok);
     } catch {
       setBackendHealthy(false);
     }
@@ -104,7 +139,7 @@ export function App() {
     try {
       const res = await fetch("/api/v1/projects");
       if (res.ok) {
-        const list: ProjectData[] = await res.json();
+        const list = await res.json();
         setProjects(list);
         if (list.length > 0 && !activeProject) {
           setActiveProject(list[0]);
@@ -168,7 +203,7 @@ export function App() {
     }
   }, [activeProject]);
 
-  // 6. Connect to SSE Stream for active project
+  // Connect to SSE Stream for active project
   useEffect(() => {
     if (!activeProject) return;
 
@@ -189,6 +224,7 @@ export function App() {
               time: new Date(parsed.timestamp || Date.now()).toLocaleTimeString(),
               type: parsed.type || "event",
               message: typeof parsed.payload === "string" ? parsed.payload : JSON.stringify(parsed.payload),
+              details: parsed.payload,
             },
             ...prev,
           ]);
@@ -196,6 +232,14 @@ export function App() {
           // Refresh runs on run lifecycle events
           if (parsed.type?.startsWith("run.") || parsed.type?.startsWith("task.")) {
             fetchRuns(activeProject.id);
+            if (parsed.payload?.title) {
+              setActiveTask({
+                id: parsed.payload.taskId || "task-01",
+                title: parsed.payload.title,
+                objective: parsed.payload.objective || "Fulfill planned requirements",
+                status: "running",
+              });
+            }
           }
         } catch (err) {
           console.error("SSE parse error:", err);
@@ -203,7 +247,7 @@ export function App() {
       };
 
       sse.onerror = () => {
-        // Handle reconnection automatically
+        // SSE reconnection handled automatically
       };
     } catch (err) {
       console.error("SSE connection error:", err);
@@ -216,21 +260,21 @@ export function App() {
     };
   }, [activeProject]);
 
+  // Auto-scroll timeline when enabled
+  useEffect(() => {
+    if (autoScrollTimeline && timelineEndRef.current) {
+      timelineEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [events, autoScrollTimeline]);
+
   // Run lifecycle actions
+  const isRunning = activeRun?.status === "running";
+  const isPaused = activeRun?.status === "paused";
+
   const handleStartRun = async () => {
     let proj = activeProject;
     if (!proj && projects.length > 0) {
       proj = projects[0];
-    }
-    if (!proj) {
-      try {
-        const pRes = await fetch("/api/v1/projects");
-        const list = await pRes.json();
-        if (list.length > 0) {
-          proj = list[0];
-          setActiveProject(list[0]);
-        }
-      } catch {}
     }
     if (!proj) return;
 
@@ -301,137 +345,720 @@ export function App() {
     }
   };
 
+  const handleTriggerExport = async (format: "json" | "markdown") => {
+    if (!activeProject) return;
+    setExportFormat(format);
+    setIsExportModalOpen(true);
+    try {
+      const res = await fetch(`/api/v1/projects/${activeProject.id}/export?format=${format}`);
+      if (res.ok) {
+        const data = await res.text();
+        setExportData(data);
+      }
+    } catch (err) {
+      console.error("Export error:", err);
+    }
+  };
+
+  // Filtered Events
+  const filteredEvents = events.filter((ev) => {
+    const matchesFilter =
+      timelineFilter === "all" ||
+      (timelineFilter === "run" && ev.type.startsWith("run.")) ||
+      (timelineFilter === "task" && ev.type.startsWith("task.")) ||
+      (timelineFilter === "agent" && ev.type.startsWith("agent.")) ||
+      (timelineFilter === "verif" && ev.type.startsWith("verif."));
+    const matchesSearch =
+      !timelineSearch ||
+      ev.message.toLowerCase().includes(timelineSearch.toLowerCase()) ||
+      ev.type.toLowerCase().includes(timelineSearch.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
+
   const workspaceMatch = Boolean(ideState?.selectedWorkspace?.isMatchingProject);
-  const isRunActive = activeRun?.status === "running";
+  const ideReady = ideState?.status === "ready";
 
   return (
-    <div className="app-layout">
-      {/* 1. Sidebar Navigation */}
-      <Sidebar
-        currentPage={currentPage}
-        onNavigate={setCurrentPage}
-        projectName={activeProject?.name}
-        projectPath={activeProject?.rootPath}
-        activeRunCount={isRunActive ? 1 : 0}
-        isCollapsed={isSidebarCollapsed}
-        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+    <div className="single-dashboard">
+      {/* 1. COMPACT TOP HEADER */}
+      <header className="dashboard-header">
+        <div className="dashboard-header-left">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+            <span style={{ color: "var(--accent-primary)", fontSize: "1.2rem" }}>⚡</span>
+            <span className="brand-title" style={{ fontWeight: 700, fontSize: "1.05rem", letterSpacing: "-0.01em" }}>
+              Autonomous Development Orchestrator
+            </span>
+          </div>
+
+          {/* Project Selector Dropdown */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginLeft: "0.5rem" }}>
+            <select
+              className="form-select form-select-sm"
+              style={{ minWidth: "170px", fontWeight: 600, fontSize: "0.8rem", padding: "0.25rem 0.5rem" }}
+              value={activeProject?.id || ""}
+              onChange={(e) => {
+                if (e.target.value === "__NEW__") {
+                  setIsWizardOpen(true);
+                } else {
+                  const p = projects.find((item) => item.id === e.target.value);
+                  if (p) setActiveProject(p);
+                }
+              }}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  📁 {p.name}
+                </option>
+              ))}
+              <option value="__NEW__">+ New Project Wizard...</option>
+            </select>
+            <button
+              className="btn btn-sm btn-outline"
+              title="Open Project Wizard"
+              onClick={() => setIsWizardOpen(true)}
+              style={{ padding: "0.25rem 0.45rem", fontSize: "0.75rem" }}
+            >
+              + Add
+            </button>
+          </div>
+        </div>
+
+        {/* Center / Status Badges */}
+        <div className="dashboard-header-center">
+          <span
+            id="badge-reasoning"
+            className="badge badge-info"
+            style={{ cursor: "pointer", fontSize: "0.75rem" }}
+            onClick={() => setActiveDrawer("settings")}
+            title="Click to configure reasoning model"
+          >
+            Reasoning: {activeProvider.privacyClass === "local" ? "Local (Ollama)" : "Cloud (OpenAI)"}
+          </span>
+
+          <span
+            id="badge-agent"
+            className={`badge ${ideReady ? "badge-success" : "badge-warning"}`}
+            style={{ cursor: "pointer", fontSize: "0.75rem" }}
+            onClick={() => setActiveDrawer("ide")}
+            title="Click to manage Antigravity IDE connection"
+          >
+            Agent: Antigravity ({ideState?.status || "disconnected"})
+          </span>
+
+          <span
+            className={`badge ${workspaceMatch ? "badge-success" : "badge-danger"}`}
+            style={{ fontSize: "0.75rem" }}
+            title={`Workspace match: ${workspaceMatch ? "Matched" : "Mismatch"}`}
+          >
+            {workspaceMatch ? "✓ Matched" : "⚠ Mismatch"}
+          </span>
+
+          <span
+            className={`badge ${backendHealthy ? "badge-success" : "badge-danger"}`}
+            style={{ fontSize: "0.75rem" }}
+          >
+            Backend: {backendHealthy ? "Online (4317)" : "Offline"}
+          </span>
+        </div>
+
+        {/* Right / Quick Actions */}
+        <div className="dashboard-header-right">
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={toggleTheme}
+            title="Toggle Light / Dark Mode"
+            style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+          >
+            {theme === "light" ? "🌙 Dark" : "☀️ Light"}
+          </button>
+
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={() => setActiveDrawer("settings")}
+            title="Open Settings Drawer"
+            style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+          >
+            ⚙️ Settings
+          </button>
+        </div>
+      </header>
+
+      {/* 2. PROJECT SUMMARY STRIP */}
+      <section className="dashboard-project-strip">
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+          <div>
+            <strong style={{ color: "var(--text-main)", marginRight: "0.4rem" }}>
+              {activeProject?.name || "No Project Selected"}
+            </strong>
+            <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+              — {activeProject?.objective || "Create or select a project to begin autonomous orchestration"}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>Workspace:</span>
+            <code
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.75rem",
+                padding: "0.15rem 0.4rem",
+                background: "var(--bg-card)",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              {activeProject?.rootPath || "Not configured"}
+            </code>
+            <button
+              className="btn btn-sm btn-outline"
+              style={{ padding: "0.1rem 0.35rem", fontSize: "0.7rem" }}
+              onClick={() => {
+                if (activeProject?.rootPath) {
+                  navigator.clipboard.writeText(activeProject.rootPath);
+                }
+              }}
+              title="Copy Workspace Path"
+            >
+              📋
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <span className="badge badge-info" style={{ fontSize: "0.7rem" }}>
+            Mode: {activeProject?.autonomyMode || "creative_within_constraints"}
+          </span>
+          <span className="badge" style={{ fontSize: "0.7rem" }}>
+            {activeRun ? `Active Run: ${activeRun.id.slice(0, 12)}...` : "IDLE"}
+          </span>
+        </div>
+      </section>
+
+      {/* 3. COMPACT SYSTEM & RUN STATUS STRIP */}
+      <section className="dashboard-status-strip">
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <span
+            className={`badge ${
+              isRunning
+                ? "badge-success pulse"
+                : isPaused
+                ? "badge-warning"
+                : activeRun?.status === "completed"
+                ? "badge-info"
+                : activeRun?.status === "failed"
+                ? "badge-danger"
+                : "badge-secondary"
+            }`}
+            style={{ fontWeight: 700, letterSpacing: "0.05em", fontSize: "0.75rem", padding: "0.2rem 0.55rem" }}
+          >
+            {activeRun ? activeRun.status.toUpperCase() : "IDLE"}
+          </span>
+
+          {/* 5-Phase Lifecycle Stepper */}
+          <div className="lifecycle-stepper">
+            <span className={`lifecycle-step ${isRunning ? "passed" : ""}`}>1. Planning</span>
+            <span style={{ color: "var(--text-dim)" }}>→</span>
+            <span className={`lifecycle-step ${isRunning ? "active" : ""}`}>2. Execution</span>
+            <span style={{ color: "var(--text-dim)" }}>→</span>
+            <span className="lifecycle-step">3. Verification</span>
+            <span style={{ color: "var(--text-dim)" }}>→</span>
+            <span className="lifecycle-step">4. Critic Review</span>
+            <span style={{ color: "var(--text-dim)" }}>→</span>
+            <span className="lifecycle-step">5. Acceptance Gate</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          <span>
+            <strong>Iteration / Attempts:</strong> {activeRun?.iterationCount || 0} / 3
+          </span>
+          <span>
+            <strong>Cost Ceiling:</strong> $0.00 / $10.00
+          </span>
+          <span>
+            <strong>Verifier:</strong> <span style={{ color: "var(--accent-emerald)" }}>Deterministic (Shell-free)</span>
+          </span>
+        </div>
+      </section>
+
+      {/* 4. MAIN TWO-COLUMN CONTENT REGION */}
+      <main className="dashboard-main-region">
+        {/* Left Column: Live Activity Timeline */}
+        <section className="card" style={{ display: "flex", flexDirection: "column", minHeight: "460px" }}>
+          <div className="card-header" style={{ borderBottom: "1px solid var(--border-subtle)", paddingBottom: "0.75rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <span className="dot-indicator pulse" style={{ backgroundColor: "var(--accent-emerald)" }}></span>
+              <h2 className="card-title" style={{ fontSize: "1rem" }}>Live Event Timeline & Activity</h2>
+              <span className="badge" style={{ fontSize: "0.7rem" }}>{filteredEvents.length} events</span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <label style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.3rem", color: "var(--text-dim)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={autoScrollTimeline}
+                  onChange={(e) => setAutoScrollTimeline(e.target.checked)}
+                />
+                Auto-scroll
+              </label>
+              <button
+                className="btn btn-sm btn-outline"
+                style={{ fontSize: "0.7rem", padding: "0.15rem 0.4rem" }}
+                onClick={() => setEvents([])}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          {/* Timeline Search & Filter Bar */}
+          <div style={{ display: "flex", gap: "0.4rem", padding: "0.5rem 0", borderBottom: "1px solid var(--border-subtle)" }}>
+            <input
+              type="text"
+              placeholder="Search timeline events..."
+              className="form-input form-input-sm"
+              value={timelineSearch}
+              onChange={(e) => setTimelineSearch(e.target.value)}
+              style={{ fontSize: "0.75rem", flex: 1 }}
+            />
+            {["all", "run", "task", "agent", "verif"].map((f) => (
+              <button
+                key={f}
+                className={`btn btn-sm ${timelineFilter === f ? "btn-primary" : "btn-outline"}`}
+                style={{ fontSize: "0.7rem", padding: "0.15rem 0.45rem", textTransform: "capitalize" }}
+                onClick={() => setTimelineFilter(f)}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {/* Event Stream Container (Playwright matches this ID) */}
+          <div
+            id="event-stream-container"
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "0.5rem 0",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.75rem",
+              maxHeight: "460px",
+            }}
+          >
+            {filteredEvents.length === 0 ? (
+              <div style={{ color: "var(--text-dim)", textAlign: "center", padding: "2rem" }}>
+                No events match the current filter
+              </div>
+            ) : (
+              filteredEvents.map((ev) => (
+                <div
+                  key={ev.id}
+                  style={{
+                    padding: "0.35rem 0.6rem",
+                    borderRadius: "var(--radius-sm)",
+                    background: "var(--bg-subtle)",
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.5rem",
+                    borderLeft: `3px solid ${
+                      ev.type.startsWith("run.")
+                        ? "var(--accent-primary)"
+                        : ev.type.startsWith("task.")
+                        ? "var(--accent-cyan)"
+                        : ev.type.startsWith("verif.")
+                        ? "var(--accent-emerald)"
+                        : "var(--accent-amber)"
+                    }`,
+                  }}
+                >
+                  <span style={{ color: "var(--text-dim)", flexShrink: 0 }}>[{ev.time}]</span>
+                  <span
+                    style={{
+                      color: "var(--accent-primary)",
+                      fontWeight: 600,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {ev.type}
+                  </span>
+                  <span style={{ color: "var(--text-main)", wordBreak: "break-word" }}>
+                    {ev.message}
+                  </span>
+                </div>
+              ))
+            )}
+            <div ref={timelineEndRef} />
+          </div>
+        </section>
+
+        {/* Right Column: Execution Information & Antigravity IDE Integration Deck */}
+        <section style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+          {/* Current Run Card */}
+          <div className="card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title" style={{ fontSize: "1rem" }}>Current Execution</h2>
+                <div className="card-subtitle" style={{ fontSize: "0.75rem" }}>
+                  {activeRun ? `Run ID: ${activeRun.id}` : "No active run in progress"}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <button
+                  id="btn-inspect-task"
+                  className="btn btn-sm btn-outline"
+                  onClick={() => setInspectTaskId(activeTask?.id || activeRun?.currentTaskId || "task-01")}
+                  style={{ fontSize: "0.75rem" }}
+                  title="Inspect real verifier logs, exit codes, and critic reviews"
+                >
+                  🔍 Inspect Evidence
+                </button>
+              </div>
+            </div>
+
+            {/* Active Task Summary */}
+            <div style={{ background: "var(--bg-subtle)", padding: "0.75rem", borderRadius: "var(--radius-sm)", marginBottom: "0.75rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" }}>
+                  Active Planned Task
+                </span>
+                <span className="badge badge-info" style={{ fontSize: "0.65rem" }}>
+                  {activeTask ? activeTask.status : "Idle"}
+                </span>
+              </div>
+              <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-main)" }}>
+                {activeTask?.title || "Auto-planning next task linked to approved roadmap"}
+              </div>
+              <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+                {activeTask?.objective || "When a run is launched, tasks are decomposed and dispatched with isolated attempt branches."}
+              </p>
+            </div>
+
+            {/* Live Terminal / Output Box */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)" }}>
+                  Live Execution Logs
+                </span>
+                <button
+                  className="btn btn-sm btn-outline"
+                  style={{ fontSize: "0.65rem", padding: "0.1rem 0.35rem" }}
+                  onClick={() => {
+                    const text = events.map((e) => `[${e.time}] ${e.type}: ${e.message}`).join("\n");
+                    navigator.clipboard.writeText(text);
+                  }}
+                >
+                  📋 Copy Output
+                </button>
+              </div>
+
+              <pre
+                className="code-block"
+                style={{
+                  height: "110px",
+                  fontSize: "0.75rem",
+                  overflowY: "auto",
+                  padding: "0.5rem",
+                  background: "var(--bg-card)",
+                }}
+              >
+                {events.length > 0
+                  ? events.slice(0, 8).map((e) => `[${e.time}] ${e.message}`).join("\n")
+                  : "No live execution logs recorded yet."}
+              </pre>
+            </div>
+          </div>
+
+          {/* Embedded Antigravity IDE Connection Deck (Playwright tests locate #ide-connection-deck directly) */}
+          <IdeConnectionDeck projectRootPath={activeProject?.rootPath} />
+        </section>
+      </main>
+
+      {/* 5. PERSISTENT HUMAN DIRECTION COMPOSER */}
+      <section className="dashboard-composer-strip">
+        <HumanDirectionBar
+          projectId={activeProject?.id || null}
+          onSafeInterruptTriggered={handleStopRun}
+        />
+      </section>
+
+      {/* 6. COMPACT BOTTOM FOOTER & ACTION STRIP */}
+      <footer className="dashboard-footer-action-strip">
+        {/* Run Controls */}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <button
+            id="btn-start"
+            className="btn btn-primary"
+            onClick={handleStartRun}
+            disabled={isRunning || !backendHealthy}
+            style={{ fontWeight: 600 }}
+          >
+            ▶ New Run
+          </button>
+
+          <button
+            id="btn-pause"
+            className="btn btn-secondary"
+            onClick={handlePauseRun}
+            disabled={!isRunning}
+          >
+            ⏸ Pause
+          </button>
+
+          <button
+            className="btn btn-secondary"
+            onClick={handleResumeRun}
+            disabled={!isPaused}
+          >
+            ▶ Resume
+          </button>
+
+          <button
+            id="btn-stop"
+            className="btn btn-danger"
+            onClick={handleStopRun}
+            disabled={!isRunning && !isPaused}
+          >
+            ⏹ Stop
+          </button>
+        </div>
+
+        {/* Drawer Tool Triggers */}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => setActiveDrawer("history")}
+            title="Inspect Past Runs & Execution History"
+          >
+            📜 History ({runs.length})
+          </button>
+
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => setActiveDrawer("git")}
+            title="Inspect Git Working Tree, Diffs, and Checkpoints"
+          >
+            🌿 Git & Diff
+          </button>
+
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => setActiveDrawer("diagnostics")}
+            title="View Real-Time Subsystem Health"
+          >
+            🩺 Diagnostics
+          </button>
+
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => setActiveDrawer("policies")}
+            title="Configure Execution Profiles & Autonomy Modes"
+          >
+            🛡️ Policies
+          </button>
+
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => handleTriggerExport("json")}
+            title="Export Project Memory & Run Reports"
+          >
+            📦 Export
+          </button>
+        </div>
+      </footer>
+
+      {/* 7. CONTEXTUAL SLIDEOUT DRAWERS & OVERLAYS */}
+
+      {/* A. Git Diff & Recovery Drawer */}
+      <Drawer
+        isOpen={activeDrawer === "git"}
+        onClose={() => setActiveDrawer("none")}
+        title="Git & Version Control Recovery"
+        subtitle="Inspect working tree status, unified diffs, and orchestrator checkpoints"
+        width="700px"
+      >
+        <GitPage project={activeProject} />
+      </Drawer>
+
+      {/* B. System Diagnostics Drawer */}
+      <Drawer
+        isOpen={activeDrawer === "diagnostics"}
+        onClose={() => setActiveDrawer("none")}
+        title="Subsystem Diagnostics & Runtime Health"
+        subtitle="Real-time observability across SQLite WAL, process supervisors, IDE window detection, and memory"
+        width="720px"
+      >
+        <DiagnosticsPage />
+      </Drawer>
+
+      {/* C. Policies & Profiles Drawer */}
+      <Drawer
+        isOpen={activeDrawer === "policies"}
+        onClose={() => setActiveDrawer("none")}
+        title="Execution Policies & Profile Presets"
+        subtitle="Configure autonomy constraints, verification strategies, and safety boundaries"
+        width="680px"
+      >
+        <PoliciesPage
+          project={activeProject}
+          onProjectUpdated={(p) => setActiveProject(p)}
+        />
+      </Drawer>
+
+      {/* D. Settings Drawer (Provider & System Options) */}
+      <Drawer
+        isOpen={activeDrawer === "settings"}
+        onClose={() => setActiveDrawer("none")}
+        title="System Settings & Reasoning Model"
+        subtitle="Configure OpenAI Cloud API keys, Local Ollama runtime, execution timeouts, and secret redaction"
+        width="700px"
+      >
+        <SettingsPage theme={theme} onToggleTheme={toggleTheme} />
+      </Drawer>
+
+      {/* E. History & Past Runs Drawer */}
+      <Drawer
+        isOpen={activeDrawer === "history"}
+        onClose={() => setActiveDrawer("none")}
+        title="Execution Run History"
+        subtitle={`Total of ${runs.length} recorded run(s) for ${activeProject?.name || "current project"}`}
+        width="680px"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {runs.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-dim)" }}>
+              No execution runs recorded yet. Click "▶ New Run" on the dashboard to begin.
+            </div>
+          ) : (
+            runs.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  padding: "0.75rem",
+                  background: "var(--bg-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  border: `1px solid ${r.id === activeRun?.id ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+                }}
+              >
+                <div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "0.8rem" }}>
+                    {r.id}
+                  </div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.15rem" }}>
+                    Started: {new Date(r.startedAt).toLocaleString()} • Iterations: {r.iterationCount}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <span
+                    className={`badge ${
+                      r.status === "completed"
+                        ? "badge-success"
+                        : r.status === "running"
+                        ? "badge-info"
+                        : r.status === "failed"
+                        ? "badge-danger"
+                        : "badge-secondary"
+                    }`}
+                    style={{ fontSize: "0.7rem" }}
+                  >
+                    {r.status}
+                  </span>
+                  <button
+                    className="btn btn-sm btn-outline"
+                    style={{ fontSize: "0.7rem", padding: "0.15rem 0.4rem" }}
+                    onClick={() => {
+                      setInspectTaskId(r.currentTaskId || "task-01");
+                      setActiveDrawer("none");
+                    }}
+                  >
+                    Inspect
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </Drawer>
+
+      {/* F. Task Evidence Inspector Modal */}
+      <TaskInspector
+        isOpen={Boolean(inspectTaskId)}
+        onClose={() => setInspectTaskId(null)}
+        taskId={inspectTaskId}
       />
 
-      {/* 2. Main Content Area */}
-      <div className="app-main">
-        {/* Top Bar */}
-        <TopBar
-          currentPage={currentPage}
-          projectName={activeProject?.name}
-          backendHealthy={backendHealthy}
-          ideStatus={ideState?.status || "disconnected"}
-          workspaceMatch={workspaceMatch}
-          isRunActive={isRunActive}
-          activeProviderName={activeProvider.displayName}
-          theme={theme}
-          onToggleTheme={toggleTheme}
-          onNavigate={setCurrentPage}
-        />
-
-        {/* Dynamic Page Router */}
-        {currentPage === "overview" && (
-          <OverviewPage
-            project={activeProject}
-            activeRun={activeRun}
-            recentRuns={runs}
-            ideState={ideState}
-            backendHealthy={backendHealthy}
-            activeProvider={activeProvider}
-            events={events}
-            onStartRun={handleStartRun}
-            onPauseRun={handlePauseRun}
-            onResumeRun={handleResumeRun}
-            onStopRun={handleStopRun}
-            onNavigate={setCurrentPage}
-            onOpenWizard={() => setIsWizardOpen(true)}
-          />
-        )}
-
-        {currentPage === "projects" && (
-          <ProjectsPage
-            projects={projects}
-            activeProject={activeProject}
-            onSelectProject={(p) => setActiveProject(p)}
-            onProjectCreated={(p) => {
-              setProjects((prev) => [p, ...prev]);
-              setActiveProject(p);
-            }}
-            onNavigate={setCurrentPage}
-          />
-        )}
-
-        {currentPage === "runs" && (
-          <RunsPage
-            project={activeProject}
-            activeRun={activeRun}
-            runs={runs}
-            onStartRun={handleStartRun}
-            onPauseRun={handlePauseRun}
-            onResumeRun={handleResumeRun}
-            onStopRun={handleStopRun}
-          />
-        )}
-
-        {currentPage === "ide" && (
-          <IdePage
-            project={activeProject}
-            onProjectUpdated={(p) => setActiveProject(p)}
-          />
-        )}
-
-        {currentPage === "providers" && (
-          <ProvidersPage
-            onProviderChanged={(p) => setActiveProvider(p)}
-          />
-        )}
-
-        {currentPage === "policies" && (
-          <PoliciesPage
-            project={activeProject}
-            onProjectUpdated={(p) => setActiveProject(p)}
-          />
-        )}
-
-        {currentPage === "git" && (
-          <GitPage
-            project={activeProject}
-          />
-        )}
-
-        {currentPage === "timeline" && (
-          <TimelinePage
-            project={activeProject}
-            events={events}
-          />
-        )}
-
-        {currentPage === "diagnostics" && (
-          <DiagnosticsPage />
-        )}
-
-        {currentPage === "settings" && (
-          <SettingsPage
-            theme={theme}
-            onToggleTheme={toggleTheme}
-          />
-        )}
-      </div>
-
-      {/* Global Project Creation Wizard Modal */}
+      {/* G. Project Wizard Modal */}
       <ProjectWizard
         isOpen={isWizardOpen}
         onClose={() => setIsWizardOpen(false)}
         onProjectCreated={(newProj) => {
           setProjects((prev) => [newProj, ...prev]);
           setActiveProject(newProj);
-          setActiveRun(null);
+          setIsWizardOpen(false);
         }}
       />
+
+      {/* H. Export Modal */}
+      {isExportModalOpen && (
+        <div className="drawer-backdrop" onClick={() => setIsExportModalOpen(false)}>
+          <div
+            className="drawer-panel"
+            style={{ maxWidth: "680px" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="drawer-header">
+              <div>
+                <h3 style={{ fontSize: "1.05rem", fontWeight: 700 }}>Export Project Memory & Evidence</h3>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Download structured run history, task verifications, and Critic reviews</p>
+              </div>
+              <button className="btn btn-sm btn-outline" onClick={() => setIsExportModalOpen(false)}>✕</button>
+            </div>
+            <div className="drawer-body">
+              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+                <button
+                  className={`btn btn-sm ${exportFormat === "json" ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => handleTriggerExport("json")}
+                >
+                  JSON Bundle
+                </button>
+                <button
+                  className={`btn btn-sm ${exportFormat === "markdown" ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => handleTriggerExport("markdown")}
+                >
+                  Markdown Report
+                </button>
+              </div>
+
+              <pre className="code-block" style={{ height: "350px", overflowY: "auto", fontSize: "0.75rem", padding: "0.75rem" }}>
+                {exportData || "Generating export bundle..."}
+              </pre>
+            </div>
+            <div className="drawer-footer">
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  if (!exportData) return;
+                  const blob = new Blob([exportData], { type: exportFormat === "json" ? "application/json" : "text/markdown" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${activeProject?.name || "orchestrator"}-export.${exportFormat === "json" ? "json" : "md"}`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                💾 Download {exportFormat.toUpperCase()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
