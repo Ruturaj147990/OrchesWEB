@@ -136,4 +136,55 @@ describe("Milestone 2 — Providers, Adapters, and Budget Enforcement", () => {
       budgetService.reserveAndCheckPreflight("gpt-4o", 20_000); // 20k tokens will push total over $0.10
     }).toThrow(BudgetExceededError);
   });
+
+  it("supports querying and switching active reasoning provider via REST API", async () => {
+    const { buildApp } = await import("../src/app.js");
+    const { closeDb } = await import("../src/storage/db.js");
+
+    closeDb();
+    const app = await buildApp(":memory:");
+
+    try {
+      // 1. Get reasoning providers
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/providers/reasoning",
+      });
+      expect(res.statusCode).toBe(200);
+      const data = res.json();
+      expect(data.providers.length).toBeGreaterThanOrEqual(2);
+      expect(data.activeProviderId).toBe("openai-compatible-local");
+
+      // 2. Switch to OpenAI provider
+      const selectRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/providers/reasoning/select",
+        payload: {
+          providerId: "openai",
+          apiKey: "sk-test-live-key-1234567890abcdef",
+          model: "gpt-4o-mini",
+        },
+      });
+      expect(selectRes.statusCode).toBe(200);
+      const selectData = selectRes.json();
+      expect(selectData.success).toBe(true);
+      expect(selectData.activeProviderId).toBe("openai");
+      expect(selectData.activeProvider.privacyClass).toBe("cloud");
+
+      // 3. Switch back to local
+      const switchBackRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/providers/reasoning/select",
+        payload: {
+          providerId: "openai-compatible-local",
+        },
+      });
+      expect(switchBackRes.statusCode).toBe(200);
+      expect(switchBackRes.json().activeProviderId).toBe("openai-compatible-local");
+    } finally {
+      await app.close();
+      closeDb();
+    }
+  });
 });
+

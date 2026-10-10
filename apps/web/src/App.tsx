@@ -38,6 +38,15 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [eventSearch, setEventSearch] = useState("");
   const [eventCategoryFilter, setEventCategoryFilter] = useState("all");
+  const [activeReasoningProvider, setActiveReasoningProvider] = useState<{
+    id: string;
+    displayName: string;
+    privacyClass: string;
+  }>({
+    id: "openai-compatible-local",
+    displayName: "OpenAI-Compatible Local (Ollama)",
+    privacyClass: "local",
+  });
   const [inspectingTaskId, setInspectingTaskId] = useState<string | null>("task-0001");
   const [activeTask, setActiveTask] = useState<{ id: string; title: string; status: string } | null>({
     id: "task-0001",
@@ -62,12 +71,21 @@ export function App() {
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  // 1. Fetch Health and Ensure Active Project Exists
+  // 1. Fetch Health, Active Reasoning Provider, and Ensure Active Project Exists
   useEffect(() => {
     fetch("/api/v1/health")
       .then((res) => res.json())
       .then((data: HealthData) => setHealth(data))
       .catch((err) => console.error("Health fetch error:", err));
+
+    fetch("/api/v1/providers/reasoning")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.activeProvider) {
+          setActiveReasoningProvider(data.activeProvider);
+        }
+      })
+      .catch((err) => console.error("Providers fetch error:", err));
 
     fetch("/api/v1/projects")
       .then((res) => res.json())
@@ -249,16 +267,20 @@ export function App() {
           >
             ⚙ Settings & Policy
           </button>
-          <div className="badge badge-local" id="badge-reasoning">
+          <div
+            className={`badge ${activeReasoningProvider.id === "openai-compatible-local" ? "badge-local" : "badge-unknown"}`}
+            id="badge-reasoning"
+            style={activeReasoningProvider.id === "openai" ? { background: "rgba(99, 102, 241, 0.2)", color: "#a5b4fc", border: "1px solid rgba(99, 102, 241, 0.4)" } : {}}
+          >
             <span className="dot-indicator pulse"></span>
-            Reasoning: Local (Ollama)
+            Reasoning: {activeReasoningProvider.id === "openai" ? "Cloud (OpenAI)" : "Local (Ollama)"}
           </div>
           <div className="badge badge-unknown" id="badge-agent">
             <span className="dot-indicator"></span>
             Agent: Antigravity CLI (Remote)
           </div>
           <div className="badge badge-status" style={{ background: "rgba(255,255,255,0.05)" }}>
-            Privacy: Hybrid (Not Offline)
+            Privacy: {activeReasoningProvider.id === "openai" ? "Cloud (Remote)" : "Hybrid (Not Offline)"}
           </div>
         </div>
       </header>
@@ -524,6 +546,18 @@ export function App() {
         <ProviderSettingsModal
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
+          onProviderChanged={(newProvider) => {
+            setActiveReasoningProvider(newProvider);
+            setEvents((prev) => [
+              {
+                id: `ev-${Date.now()}`,
+                time: new Date().toLocaleTimeString(),
+                type: "provider.switched",
+                message: `Active reasoning engine switched to ${newProvider.displayName}`,
+              },
+              ...prev,
+            ]);
+          }}
         />
       </main>
     </>

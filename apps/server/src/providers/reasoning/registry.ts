@@ -34,6 +34,10 @@ export class ReasoningRegistry {
     return Array.from(this.providers.values());
   }
 
+  public getDefaultId(): string {
+    return this.defaultProviderId;
+  }
+
   public getDefault(): ReasoningProvider {
     return this.providers.get(this.defaultProviderId) || Array.from(this.providers.values())[0];
   }
@@ -44,4 +48,14 @@ export class ReasoningRegistry {
     }
     this.defaultProviderId = id;
   }
+
+  public configureOpenAI(apiKey: string, model?: string): void {
+    const cloud = new OpenAIProvider({
+      apiKey,
+      model: model || "gpt-4o-mini",
+    });
+    this.register(cloud);
+  }
 }
+
+export const reasoningRegistry = new ReasoningRegistry();
