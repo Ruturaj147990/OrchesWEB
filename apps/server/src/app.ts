@@ -7,6 +7,7 @@ import { healthRoutes } from "./api/routes/health.js";
 import { projectRoutes } from "./api/routes/projects.js";
 import { runRoutes } from "./api/routes/runs.js";
 import { eventRoutes } from "./api/routes/events.js";
+import { blueprintRoutes } from "./api/routes/blueprints.js";
 
 export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
   // Initialize SQLite database and apply migrations
@@ -41,6 +42,7 @@ export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
   await app.register(projectRoutes, { prefix: "/api/v1" });
   await app.register(runRoutes, { prefix: "/api/v1" });
   await app.register(eventRoutes, { prefix: "/api/v1" });
+  await app.register(blueprintRoutes, { prefix: "/api/v1" });
 
   return app;
 }

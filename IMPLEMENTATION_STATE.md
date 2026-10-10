@@ -1,8 +1,8 @@
 # Autonomous Development Orchestrator — Implementation State
 
-**Current Milestone:** Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import (IN PROGRESS)  
+**Current Milestone:** Milestone 6 — Human direction and full browser/visual verification (IN PROGRESS)  
 **Last Updated:** 2026-10-10  
-**Overall Status:** Milestones 0, 1, 2, 3, and 4 Complete. Executing Milestone 5.
+**Overall Status:** Milestones 0, 1, 2, 3, 4, and 5 Complete. Executing Milestone 6.
 
 ---
 
@@ -25,33 +25,39 @@
   - `StagnationDetector`: identifies consecutive no-diffs (2), repeated failure hashes (3), and edit ping-pong oscillations (4).
   - `MemoryManager`: maintains `.orchestrator/TASK_HISTORY.json`, `CURRENT_STATE.md`, `REPO_MAP.md`, and rolling context summaries.
   - `ProcessSupervisor`: child process registration, safe termination, and orphan cleanup.
-  - Cost tracking and multi-call breakdown with repair reserves.
   - 24/24 tests passing.
-- [ ] **Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import** (IN PROGRESS)
-  - 6-step project wizard UI & API.
-  - 3 autonomy modes (Creative within constraints, Creative exploration, Strict blueprint adherence).
-  - Built-in project profile presets (Frontend, Backend, Fullstack, AI/ML, CLI, Data Science, Embedded, General).
-  - Multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with size limits and provenance tracking.
-  - Requirement extraction with source attribution and candidate approval workflow.
-  - Hard/soft constraint engine with contradiction detection.
-- [ ] **Milestone 6 — Human direction and full browser/visual verification**
+- [x] **Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import** (COMPLETED)
+  - Six-step interactive Project Wizard: idea, workspace path safety, blueprint document import (.md, .txt, .json, .yaml, .pdf, .docx), preset selection (6+ profiles), autonomy mode selection (3 modes), plan review.
+  - Multi-format `BlueprintImporter` with SHA-256 hashes and size guards.
+  - `RequirementExtractor` with provenance tagging (explicit vs inferred) and approval workflow.
+  - Contradiction detection engine in `PolicyEngine`.
+  - 29/29 tests passing.
+- [ ] **Milestone 6 — Human direction and full browser/visual verification** (IN PROGRESS)
+  - Direction inbox with `next_task`, `replan`, `safe_interrupt`, approval/rejection, pause, and stop semantics.
+  - Safe-boundary interrupt integration into execution loop.
+  - BrowserVerifier multi-viewport evidence (desktop `1440x900` & mobile `390x844`), console/network failure capture, screenshot linking.
+  - Task inspector in web UI showing screenshots, code diffs, logs, verifier evidence, and Critic findings.
 - [ ] **Milestone 7 — Advanced UI, export, and hardening**
 
 ---
 
 ## 2. Completed Work
-- Implemented `StagnationDetector` detecting empty diffs, repeated command failure hashes, and alternating edit oscillation.
-- Implemented `MemoryManager` persisting task history, `CURRENT_STATE.md`, `REPO_MAP.md`, and rolling context summaries.
-- Implemented `ProcessSupervisor` with process tree tracking and clean signal termination.
-- Verified all 24 unit and integration tests and Playwright E2E.
+- Implemented `BlueprintImporter` supporting `.md`, `.txt`, `.json`, `.yaml`, `.pdf`, `.docx` with 10MB limit and SHA-256 tracking.
+- Implemented `RequirementExtractor` parsing candidate requirements with provenance and explicit/inferred categorization.
+- Implemented blueprint import and requirement approval REST endpoints (`/api/v1/projects/:projectId/blueprints`, `/requirements`).
+- Built 6-step interactive `ProjectWizard` modal in React.
+- Verified all 29 unit and integration tests and Playwright E2E.
 
 ---
 
 ## 3. Changed Files
-- `apps/server/src/orchestrator/stagnation-detector.ts`
-- `apps/server/src/domain/memory/memory-manager.ts`
-- `apps/server/src/platform/process-supervisor.ts`
-- `apps/server/tests/milestone4.test.ts`
+- `apps/server/src/domain/blueprints/importer.ts`
+- `apps/server/src/domain/blueprints/requirement-extractor.ts`
+- `apps/server/src/api/routes/blueprints.ts`
+- `apps/server/src/app.ts`
+- `apps/server/tests/milestone5.test.ts`
+- `apps/web/src/features/wizard/ProjectWizard.tsx`
+- `apps/web/src/App.tsx`
 - `TASK_CHECKLIST.md`
 - `IMPLEMENTATION_STATE.md`
 
@@ -59,14 +65,14 @@
 
 ## 4. Actual Test Results
 - `npm run build`: Exit Code 0.
-- `npm test`: 6 test files, 24 passed, 0 failed (1.55s).
-- `npx playwright test`: 1 passed (2.9s).
+- `npm test`: 7 test files, 29 passed, 0 failed (1.62s).
+- `npx playwright test`: 1 passed (2.8s).
 
 ---
 
 ## 5. Architectural Decisions
-1. **Deterministic Cycle Detection**: Failure hashes are computed over normalized command and error snippets so identical repeating errors are caught early without burning API tokens.
-2. **Memory Persistence on Disk**: State files (`CURRENT_STATE.md` and `REPO_MAP.md`) are human-readable markdown committed to repository memory, keeping orchestrator state transparent and auditable.
+1. **Untrusted Input Boundary**: Blueprint content is treated purely as untrusted project data and cannot modify platform safety rules, spend limits, or privacy classifications.
+2. **Provenance Traceability**: Extracted requirements explicitly cite their source file and line number.
 
 ---
 
@@ -75,14 +81,16 @@
 
 ---
 
-## 7. Exact Next Steps for Milestone 5
-1. Build Multi-format Blueprint Parser (`apps/server/src/domain/blueprints/importer.ts`):
-   - `.md`, `.txt`, `.json`, `.yaml`/`.yml`, `.pdf` (text extraction), `.docx`.
-   - File size & total import size limits.
-   - Computes SHA-256 hash and records provenance.
-2. Build Requirement Extractor (`apps/server/src/domain/blueprints/requirement-extractor.ts`):
-   - Extracts structured candidate requirements with IDs (`REQ-001`), source provenance (file/page/section), explicit/inferred status, and proposed acceptance tests.
-   - Supports editing, approving, or rejecting requirements before execution.
-3. Build Project Wizard API endpoints in `apps/server/src/api/routes/blueprints.ts` and `requirements.ts`.
-4. Build Project Wizard interactive modal in `apps/web/src/features/wizard/ProjectWizard.tsx`.
-5. Write unit and integration tests for blueprint import, requirement extraction, autonomy mode configuration, and contradiction blocking.
+## 7. Exact Next Steps for Milestone 6
+1. Build Human Direction Inbox Service in `apps/server/src/domain/human-messages/inbox-service.ts`:
+   - Enqueues directions with kinds: `guidance`, `replan`, `safe_interrupt`, `priority_override`.
+   - Incorporates unconsumed directions into the next safe task context.
+   - Immediate safe interruption when marked `urgent` / `safe_interrupt`.
+2. Connect Inbox API routes: `POST /api/v1/projects/:projectId/messages`, `GET /api/v1/projects/:projectId/messages`.
+3. Build Task Inspector in `apps/web/src/features/tasks/TaskInspector.tsx`:
+   - Diffs viewer.
+   - Verification evidence table with exit codes and execution times.
+   - Screenshot gallery with desktop and mobile viewport tabs.
+   - Independent Critic review findings and rationale.
+4. Add Human Direction Inbox input bar on dashboard UI.
+5. Write unit and integration tests for human direction consumption, safe interrupts, and UI evidence linking.

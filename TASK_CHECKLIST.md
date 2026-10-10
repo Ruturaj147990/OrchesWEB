@@ -58,13 +58,13 @@
 - [x] Commit Milestone 4 checkpoint.
 
 ## Milestone 5 — Project Wizard, Autonomy Modes, Profiles, and Blueprint Import
-- [ ] Implement 6-step project wizard UI & API.
-- [ ] Implement 3 autonomy modes (Creative within constraints, Creative exploration, Strict blueprint adherence).
-- [ ] Implement built-in project profile presets (Frontend, Backend, Fullstack, AI/ML, CLI, Data Science, Embedded, General).
-- [ ] Implement multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with size limits and provenance tracking.
-- [ ] Implement requirement extraction with source attribution and candidate approval workflow.
-- [ ] Implement hard/soft constraint engine with contradiction detection.
-- [ ] Commit Milestone 5 checkpoint.
+- [x] Implement 6-step project wizard UI & API.
+- [x] Implement 3 autonomy modes (Creative within constraints, Creative exploration, Strict blueprint adherence).
+- [x] Implement built-in project profile presets (Frontend, Backend, Fullstack, AI/ML, CLI, Data Science, Embedded, General).
+- [x] Implement multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with size limits and provenance tracking.
+- [x] Implement requirement extraction with source attribution and candidate approval workflow.
+- [x] Implement hard/soft constraint engine with contradiction detection.
+- [x] Commit Milestone 5 checkpoint.
 
 ## Milestone 6 — Human Direction and Full Browser/Visual Verification
 - [ ] Implement human direction inbox (`next_task`, `replan`, `safe_interrupt`, approvals/rejections).

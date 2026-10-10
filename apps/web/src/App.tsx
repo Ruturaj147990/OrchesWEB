@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { ProjectWizard } from "./features/wizard/ProjectWizard";
 
 interface HealthData {
   status: string;
@@ -29,6 +30,7 @@ export function App() {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [activeRun, setActiveRun] = useState<RunData | null>(null);
   const [runState, setRunState] = useState<"ready" | "running" | "paused" | "stopped">("ready");
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [activeTask, setActiveTask] = useState<{ id: string; title: string; status: string } | null>({
     id: "task-0001",
     title: "Project Initialization & Verification Gates",
@@ -192,6 +194,14 @@ export function App() {
         </div>
 
         <div className="header-badges">
+          <button
+            id="btn-open-wizard"
+            className="btn btn-secondary"
+            onClick={() => setIsWizardOpen(true)}
+            style={{ fontSize: "0.75rem", padding: "0.3rem 0.75rem" }}
+          >
+            + New Project
+          </button>
           <div className="badge badge-local" id="badge-reasoning">
             <span className="dot-indicator pulse"></span>
             Reasoning: Local (Ollama)
@@ -205,6 +215,16 @@ export function App() {
           </div>
         </div>
       </header>
+
+      <ProjectWizard
+        isOpen={isWizardOpen}
+        onClose={() => setIsWizardOpen(false)}
+        onProjectCreated={(newProj) => {
+          setProject(newProj);
+          setActiveRun(null);
+          setRunState("ready");
+        }}
+      />
 
       <main className="dashboard-container">
         {/* Control Deck Bar */}
