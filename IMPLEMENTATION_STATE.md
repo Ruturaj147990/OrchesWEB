@@ -1,8 +1,8 @@
 # Autonomous Development Orchestrator — Implementation State
 
-**Current Milestone:** Milestone 4 — Cost accuracy, reliability, context compaction, and recovery (IN PROGRESS)  
+**Current Milestone:** Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import (IN PROGRESS)  
 **Last Updated:** 2026-10-10  
-**Overall Status:** Milestones 0, 1, 2, and 3 (Mandatory Feasibility Gate) Complete. Executing Milestone 4.
+**Overall Status:** Milestones 0, 1, 2, 3, and 4 Complete. Executing Milestone 5.
 
 ---
 
@@ -11,7 +11,7 @@
 - [x] **Milestone 0 — Repository foundation** (COMPLETED)
   - Monorepo, TypeScript strict mode, Fastify loopback health, React dashboard shell, Vitest (5/5 tests), Playwright baseline screenshot.
 - [x] **Milestone 1 — Persistence and bare control dashboard** (COMPLETED)
-  - SQLite storage engine with WAL mode and idempotent migrations runner.
+  - SQLite storage engine with WAL mode and migrations.
   - Relational schema, project REST API, durable event store, SSE streaming, run state machine, React dashboard controls, 8/8 tests passing.
 - [x] **Milestone 2 — Minimum real provider and coding-agent adapters** (COMPLETED)
   - Normalized `ReasoningProvider` & `ReasoningRegistry`.
@@ -19,49 +19,39 @@
   - Official Antigravity CLI adapter (`agy`) & deterministic MockAgentAdapter.
   - Budget pre-flight checks and token cost catalogue. 14/14 tests passing.
 - [x] **Milestone 3 — Early autonomous vertical slice (Mandatory Feasibility Gate)** (COMPLETED)
-  - Complete autonomous loop pipeline: Planner context assembly -> Planner task generation -> isolated Git worktree/branch -> Executor dispatch (fresh session per attempt) -> independent Orchestrator verifier -> Playwright BrowserVerifier with screenshots -> independent Critic review -> deterministic Acceptance Gate -> Git checkpoint commit.
-  - Bounded repair loop on verifier/Critic rejection with fresh context.
-  - Pre-flight budget cut-off blocking dispatch before provider call.
-  - Feasibility gate tests passing (18/18 tests + Playwright E2E):
-    1. Failing test fixture -> mock repair attempt -> verifier pass -> Critic accept -> commit checkpoint.
-    2. UI task verifying Playwright browser assertions + full-page screenshot artifact (`.png`).
-    3. Budget-exhaustion blocking dispatch.
-    4. Resumption of existing run after restart without duplicate execution.
-- [ ] **Milestone 4 — Cost accuracy, reliability, context compaction, and recovery** (IN PROGRESS)
-  - Cost estimation catalogue including Planner + Critic + repair reserve ($0.50 warning, $2.00 hard task ceiling, $10.00 run ceiling).
-  - Explicit cost states: `measured`, `estimated`, `reserved`, `unknown`, `local_no_api_charge`.
-  - Stagnation and cycle detection (consecutive no-diff, repeated error hashes, edit ping-pong).
-  - Rolling context compaction and memory persistence.
-  - Process supervisor & orphan cleanup on restart.
-- [ ] **Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import**
+  - Complete autonomous loop pipeline: Planner -> Git branch -> Executor -> Verifier -> BrowserVerifier -> Critic -> Acceptance Gate -> Commit checkpoint.
+  - Feasibility gate tests passing (18/18 tests + Playwright E2E).
+- [x] **Milestone 4 — Cost accuracy, reliability, context compaction, and recovery** (COMPLETED)
+  - `StagnationDetector`: identifies consecutive no-diffs (2), repeated failure hashes (3), and edit ping-pong oscillations (4).
+  - `MemoryManager`: maintains `.orchestrator/TASK_HISTORY.json`, `CURRENT_STATE.md`, `REPO_MAP.md`, and rolling context summaries.
+  - `ProcessSupervisor`: child process registration, safe termination, and orphan cleanup.
+  - Cost tracking and multi-call breakdown with repair reserves.
+  - 24/24 tests passing.
+- [ ] **Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import** (IN PROGRESS)
+  - 6-step project wizard UI & API.
+  - 3 autonomy modes (Creative within constraints, Creative exploration, Strict blueprint adherence).
+  - Built-in project profile presets (Frontend, Backend, Fullstack, AI/ML, CLI, Data Science, Embedded, General).
+  - Multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with size limits and provenance tracking.
+  - Requirement extraction with source attribution and candidate approval workflow.
+  - Hard/soft constraint engine with contradiction detection.
 - [ ] **Milestone 6 — Human direction and full browser/visual verification**
 - [ ] **Milestone 7 — Advanced UI, export, and hardening**
 
 ---
 
 ## 2. Completed Work
-- Implemented `GitManager` with attempt branch isolation, diff extraction, and checkpoint commits.
-- Implemented `ContextBuilder` for Planner, fresh Executor attempt packets, and independent Critic review.
-- Implemented `VerificationRunner` for independent command execution with exit code, duration, and log capture.
-- Implemented `BrowserVerifier` for headless Playwright assertions and desktop/mobile screenshot artifacts.
-- Implemented `PlannerService` with roadmap traceability and schema validation.
-- Implemented `CriticService` with independent verdict and hard gate enforcement.
-- Implemented `AcceptanceGate` enforcing deterministic verification before Git commit.
-- Implemented `AutonomousLoop` tying all phases together with bounded repair handling.
-- Verified all 18 unit/integration tests and Playwright E2E.
+- Implemented `StagnationDetector` detecting empty diffs, repeated command failure hashes, and alternating edit oscillation.
+- Implemented `MemoryManager` persisting task history, `CURRENT_STATE.md`, `REPO_MAP.md`, and rolling context summaries.
+- Implemented `ProcessSupervisor` with process tree tracking and clean signal termination.
+- Verified all 24 unit and integration tests and Playwright E2E.
 
 ---
 
 ## 3. Changed Files
-- `apps/server/src/git/git-manager.ts`
-- `apps/server/src/prompts/context-builder.ts`
-- `apps/server/src/verification/runner.ts`
-- `apps/server/src/verification/browser-verifier.ts`
-- `apps/server/src/orchestrator/planner.ts`
-- `apps/server/src/orchestrator/critic.ts`
-- `apps/server/src/orchestrator/acceptance-gate.ts`
-- `apps/server/src/orchestrator/loop.ts`
-- `apps/server/tests/milestone3.test.ts`
+- `apps/server/src/orchestrator/stagnation-detector.ts`
+- `apps/server/src/domain/memory/memory-manager.ts`
+- `apps/server/src/platform/process-supervisor.ts`
+- `apps/server/tests/milestone4.test.ts`
 - `TASK_CHECKLIST.md`
 - `IMPLEMENTATION_STATE.md`
 
@@ -69,15 +59,14 @@
 
 ## 4. Actual Test Results
 - `npm run build`: Exit Code 0.
-- `npm test`: 5 test files, 18 passed, 0 failed (1.54s).
+- `npm test`: 6 test files, 24 passed, 0 failed (1.55s).
 - `npx playwright test`: 1 passed (2.9s).
 
 ---
 
 ## 5. Architectural Decisions
-1. **Feasibility Gate Proven**: A failing test fixture was successfully isolated, failed the independent verifier, was repaired by a mock agent, verified independently, endorsed by the Critic, and committed to Git.
-2. **Deterministic UI Evidence**: The BrowserVerifier captured real screenshot artifacts to disk and verified DOM selectors before approving UI tasks.
-3. **Budget Gate Hard Stop**: The budget service strictly halted autonomous dispatch when limits were reached.
+1. **Deterministic Cycle Detection**: Failure hashes are computed over normalized command and error snippets so identical repeating errors are caught early without burning API tokens.
+2. **Memory Persistence on Disk**: State files (`CURRENT_STATE.md` and `REPO_MAP.md`) are human-readable markdown committed to repository memory, keeping orchestrator state transparent and auditable.
 
 ---
 
@@ -86,16 +75,14 @@
 
 ---
 
-## 7. Exact Next Steps for Milestone 4
-1. Build Stagnation and Cycle Detector (`apps/server/src/orchestrator/stagnation-detector.ts`):
-   - 2 consecutive no-diff attempts.
-   - 3 identical error output hashes.
-   - 3 edit-ping-pong oscillations.
-2. Build Context Compactor & Memory Manager (`apps/server/src/domain/memory/memory-manager.ts`):
-   - Rolling summaries of completed tasks.
-   - Updates `CURRENT_STATE.md` and `.orchestrator/REPO_MAP.md` after accepted tasks.
-3. Build Process Supervisor & Orphan Cleanup (`apps/server/src/platform/process-supervisor.ts`):
-   - Registers active child PIDs.
-   - Cleans up stale child processes on startup or stop.
-4. Enhance Cost Estimator with repair reserve calculations and multi-call breakdowns.
-5. Write unit and integration tests for stagnation detection, memory compaction, and process recovery.
+## 7. Exact Next Steps for Milestone 5
+1. Build Multi-format Blueprint Parser (`apps/server/src/domain/blueprints/importer.ts`):
+   - `.md`, `.txt`, `.json`, `.yaml`/`.yml`, `.pdf` (text extraction), `.docx`.
+   - File size & total import size limits.
+   - Computes SHA-256 hash and records provenance.
+2. Build Requirement Extractor (`apps/server/src/domain/blueprints/requirement-extractor.ts`):
+   - Extracts structured candidate requirements with IDs (`REQ-001`), source provenance (file/page/section), explicit/inferred status, and proposed acceptance tests.
+   - Supports editing, approving, or rejecting requirements before execution.
+3. Build Project Wizard API endpoints in `apps/server/src/api/routes/blueprints.ts` and `requirements.ts`.
+4. Build Project Wizard interactive modal in `apps/web/src/features/wizard/ProjectWizard.tsx`.
+5. Write unit and integration tests for blueprint import, requirement extraction, autonomy mode configuration, and contradiction blocking.

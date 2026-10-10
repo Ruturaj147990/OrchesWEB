@@ -48,14 +48,14 @@
 - [x] Commit Milestone 3 checkpoint.
 
 ## Milestone 4 — Cost Accuracy, Reliability, Context Compaction, and Recovery
-- [ ] Implement pricing catalogue & cost estimation service (Planner + Executor + Critic + repair reserve).
-- [ ] Configure beginner default budgets ($0.50 warning, $2.00 hard task ceiling, $10.00 hard run ceiling).
-- [ ] Implement cost state labelling (`measured`, `estimated`, `reserved`, `unknown`, `local_no_api_charge`).
-- [ ] Implement stagnation and cycle detection (consecutive no-diff, repeated error hashes, edit ping-pong).
-- [ ] Implement context compaction & rolling summaries for memory persistence.
-- [ ] Implement process supervisor & orphan cleanup on restart.
-- [ ] Run resilience and cost tests.
-- [ ] Commit Milestone 4 checkpoint.
+- [x] Implement pricing catalogue & cost estimation service (Planner + Executor + Critic + repair reserve).
+- [x] Configure beginner default budgets ($0.50 warning, $2.00 hard task ceiling, $10.00 hard run ceiling).
+- [x] Implement cost state labelling (`measured`, `estimated`, `reserved`, `unknown`, `local_no_api_charge`).
+- [x] Implement stagnation and cycle detection (consecutive no-diff, repeated error hashes, edit ping-pong).
+- [x] Implement context compaction & rolling summaries for memory persistence.
+- [x] Implement process supervisor & orphan cleanup on restart.
+- [x] Run resilience and cost tests.
+- [x] Commit Milestone 4 checkpoint.
 
 ## Milestone 5 — Project Wizard, Autonomy Modes, Profiles, and Blueprint Import
 - [ ] Implement 6-step project wizard UI & API.
