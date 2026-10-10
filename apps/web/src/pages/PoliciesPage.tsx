@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ProjectData } from "./OverviewPage";
+import { ProjectData } from "../types";
 
 interface PoliciesPageProps {
   project: ProjectData | null;

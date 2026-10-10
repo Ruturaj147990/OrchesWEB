@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ProjectData } from "./OverviewPage";
+import { ProjectData } from "../types";
 
 interface GitStatusData {
   isGitRepo: boolean;

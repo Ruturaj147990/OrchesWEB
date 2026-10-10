@@ -10,7 +10,7 @@ import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { PoliciesPage } from "./pages/PoliciesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
-import { ProjectData } from "./pages/OverviewPage";
+import { ProjectData } from "./types";
 
 export interface RunData {
   id: string;
