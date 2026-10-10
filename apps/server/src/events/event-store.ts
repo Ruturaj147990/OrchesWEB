@@ -72,6 +72,10 @@ export class EventStore {
     return rows.map((r) => this.mapRow(r));
   }
 
+  public getEvents(projectId: string): RunEvent[] {
+    return this.getEventsSince(projectId, 0);
+  }
+
   public subscribe(projectId: string, listener: EventListener): () => void {
     if (!this.listeners.has(projectId)) {
       this.listeners.set(projectId, new Set());

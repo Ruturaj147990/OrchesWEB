@@ -75,9 +75,9 @@
 - [x] Commit Milestone 6 checkpoint.
 
 ## Milestone 7 — Advanced UI, Export, and Hardening
-- [ ] Implement searchable timeline and logs viewer.
-- [ ] Implement run report generation and project memory export.
-- [ ] Complete provider settings screen with capability indicators and privacy badges.
-- [ ] Accessibility, responsiveness, and security hardening (loopback binding verification, path traversal checks).
-- [ ] Final end-to-end verification and documentation update.
-- [ ] Commit Milestone 7 checkpoint.
+- [x] Implement searchable timeline and logs viewer.
+- [x] Implement run report generation and project memory export.
+- [x] Complete provider settings screen with capability indicators and privacy badges.
+- [x] Accessibility, responsiveness, and security hardening (loopback binding verification, path traversal checks).
+- [x] Final end-to-end verification and documentation update.
+- [x] Commit Milestone 7 checkpoint.

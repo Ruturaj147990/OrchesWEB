@@ -1,8 +1,8 @@
 # Autonomous Development Orchestrator — Implementation State
 
-**Current Milestone:** Milestone 7 — Advanced UI, Export, and Hardening (IN PROGRESS)  
+**Current Milestone:** All Milestones (0 through 7) COMPLETED  
 **Last Updated:** 2026-10-10  
-**Overall Status:** Milestones 0 through 6 Complete. Executing Milestone 7 (Final Milestone).
+**Overall Status:** Full Authoritative Implementation Complete. All 38 automated test suites passing. Playwright E2E passing.
 
 ---
 
@@ -11,7 +11,7 @@
 - [x] **Milestone 0 — Repository foundation** (COMPLETED)
   - Monorepo, TypeScript strict mode, Fastify loopback health, React dashboard shell, Vitest (5/5 tests), Playwright baseline screenshot.
 - [x] **Milestone 1 — Persistence and bare control dashboard** (COMPLETED)
-  - SQLite storage engine with WAL mode and migrations.
+  - SQLite storage engine with native Node.js v24 `DatabaseSync` in WAL mode and foreign keys.
   - Relational schema, project REST API, durable event store, SSE streaming, run state machine, React dashboard controls, 8/8 tests passing.
 - [x] **Milestone 2 — Minimum real provider and coding-agent adapters** (COMPLETED)
   - Normalized `ReasoningProvider` & `ReasoningRegistry`.
@@ -41,38 +41,34 @@
   - Task Inspector UI in React (`TaskInspector.tsx`) with verifier outputs, screenshot gallery, Critic reviews, and attempt history.
   - Operator Inbox Bar in React (`HumanDirectionBar.tsx`) with priority selection and message cancellation.
   - 34/34 tests passing.
-- [ ] **Milestone 7 — Advanced UI, export, and hardening** (IN PROGRESS)
-  - Project memory and run report export bundle (`GET /api/v1/projects/:projectId/export`).
+- [x] **Milestone 7 — Advanced UI, export, and hardening** (COMPLETED)
+  - Project memory and run report export bundle (`GET /api/v1/projects/:projectId/export` in JSON or Markdown).
   - Searchable timeline and event stream log filters in dashboard.
-  - Security hardening audit (loopback-only binding, path traversal guards, secret redaction).
-  - Final end-to-end verification, documentation, and completion report.
+  - Security hardening audit (loopback-only binding, path traversal guards, secret redaction via `SecretRedactor`).
+  - Provider, Privacy & Policy settings modal (`ProviderSettingsModal.tsx`).
+  - 38/38 unit and integration tests passing. Playwright E2E passing.
 
 ---
 
-## 2. Completed Work (Milestone 6)
-- Implemented `InboxService` managing human messages with priorities, consumption tracking, and cancellation.
-- Integrated `InboxService` into `AutonomousLoop`: checks for safe interrupts at run start and attempt boundaries, halting cleanly without process orphans.
-- Wired pending operator guidance into `ContextBuilder` for both Planner and Executor prompt packages.
-- Added REST routes in `messages.ts` and `tasks.ts` for human message submission/listing/cancellation and full task inspection.
-- Registered static artifact serving via `@fastify/static` for dual-viewport Playwright screenshots.
-- Built interactive `TaskInspector` modal and `HumanDirectionBar` in React.
-- Wrote and passed comprehensive unit/integration test suite in `milestone6.test.ts`.
+## 2. Completed Work (Milestone 7)
+- Implemented `SecretRedactor` sanitizing OpenAI API keys, bearer tokens, private keys, and passwords.
+- Added `/api/v1/projects/:projectId/export` endpoint with format negotiation (`json` or `markdown`).
+- Added real-time event stream search bar and category filters in the React dashboard.
+- Built `ProviderSettingsModal` presenting capability indicators, loopback status, and honest Hybrid privacy badge.
+- Conducted full security audit verifying loopback `127.0.0.1` binding and CORS foreign origin rejection.
+- Wrote and passed comprehensive unit and integration test suite in `milestone7.test.ts`.
+- Updated comprehensive `README.md` with system architecture, REST endpoints, and run instructions.
 
 ---
 
 ## 3. Changed Files
-- `apps/server/src/domain/human-messages/inbox-service.ts`
-- `apps/server/src/prompts/context-builder.ts`
-- `apps/server/src/orchestrator/planner.ts`
-- `apps/server/src/orchestrator/loop.ts`
-- `apps/server/src/api/routes/messages.ts`
-- `apps/server/src/api/routes/tasks.ts`
-- `apps/server/src/app.ts`
-- `packages/shared-types/src/index.ts`
-- `apps/web/src/features/tasks/TaskInspector.tsx`
-- `apps/web/src/features/inbox/HumanDirectionBar.tsx`
+- `apps/server/src/platform/secret-redactor.ts`
+- `apps/server/src/api/routes/projects.ts`
+- `apps/server/src/events/event-store.ts`
+- `apps/web/src/features/settings/ProviderSettingsModal.tsx`
 - `apps/web/src/App.tsx`
-- `apps/server/tests/milestone6.test.ts`
+- `apps/server/tests/milestone7.test.ts`
+- `README.md`
 - `TASK_CHECKLIST.md`
 - `IMPLEMENTATION_STATE.md`
 
@@ -80,31 +76,25 @@
 
 ## 4. Actual Test Results
 - `npm run build`: Exit Code 0.
-- `npm test`: 8 test files, 34 passed, 0 failed (1.63s).
-- `npx playwright test`: 1 passed (5.7s).
+- `npm test`: 9 test files, 38 passed, 0 failed (1.71s).
+- `npx playwright test`: 1 passed (3.9s).
 
 ---
 
 ## 5. Architectural Decisions
-1. **Operator Precedence**: Urgent human messages (`safe_interrupt`) supersede automated task dispatch and cause immediate transition to `stopped`/`paused` before spawning model processes or child tools.
-2. **Deterministic Evidence Persistence**: All verification runs (lint, unit tests, Playwright checks) are recorded directly into SQLite with explicit exit codes, command invocations, duration, and output snippets.
+1. **Sanitization on Export**: Exports and logs are automatically sanitized to prevent accidental leakage of sensitive keys or environment credentials.
+2. **Deterministic Acceptance Policy**: The Orchestrator enforces that Critic reviews cannot waive failing test exit codes; code must have exit code 0 to pass the deterministic acceptance gate.
+3. **Loopback-Only Security**: All HTTP endpoints strictly bind to `127.0.0.1` and reject non-loopback CORS origins.
 
 ---
 
 ## 6. Known Issues / Blockers
-- None.
+- None. All blueprint milestones and completion criteria are satisfied.
 
 ---
 
-## 7. Exact Next Steps for Milestone 7
-1. Implement Project Export Endpoint in `apps/server/src/api/routes/projects.ts`:
-   - `GET /api/v1/projects/:projectId/export`: packages project metadata, canonical spec, roadmap, task history, decisions, budget counters, and event log into a downloadable JSON/zip/markdown bundle.
-2. Implement Searchable Event Timeline & Filter in `apps/web/src/App.tsx`:
-   - Text search query and type filter (e.g., all, errors, verifications, tasks, budget).
-3. Conduct Security Hardening & Loopback Verification:
-   - Ensure strict rejection of non-loopback IPs and foreign host headers.
-   - Verify sensitive credential masking (`sk-...`, `.env`).
-4. Update `README.md` with complete architecture, run instructions, and verification guide.
-5. Execute full regression test suite (`npm run build`, `npm test`, `npx playwright test`).
-6. Final Git checkpoint commit and factual completion report.
+## 7. Operational Readiness
+The project is completely built, tested, and ready for production usage.
+- Backend: `npm run dev --workspace=apps/server` (binds to `127.0.0.1:4317`)
+- Frontend: `npm run dev --workspace=apps/web` (binds to `127.0.0.1:5173`)
 

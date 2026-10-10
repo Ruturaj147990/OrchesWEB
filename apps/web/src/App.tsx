@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { ProjectWizard } from "./features/wizard/ProjectWizard";
 import { TaskInspector } from "./features/tasks/TaskInspector";
 import { HumanDirectionBar } from "./features/inbox/HumanDirectionBar";
+import { ProviderSettingsModal } from "./features/settings/ProviderSettingsModal";
 
 interface HealthData {
   status: string;
@@ -34,6 +35,9 @@ export function App() {
   const [runState, setRunState] = useState<"ready" | "running" | "paused" | "stopped">("ready");
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [eventSearch, setEventSearch] = useState("");
+  const [eventCategoryFilter, setEventCategoryFilter] = useState("all");
   const [inspectingTaskId, setInspectingTaskId] = useState<string | null>("task-0001");
   const [activeTask, setActiveTask] = useState<{ id: string; title: string; status: string } | null>({
     id: "task-0001",
@@ -184,6 +188,37 @@ export function App() {
     }
   };
 
+  const handleExport = async (format: "json" | "markdown") => {
+    if (!project) return;
+    try {
+      const res = await fetch(`/api/v1/projects/${project.id}/export?format=${format}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${project.name.toLowerCase().replace(/\s+/g, "_")}_export_${Date.now()}.${format === "markdown" ? "md" : "json"}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export error:", err);
+    }
+  };
+
+  const filteredEvents = events.filter((ev) => {
+    const matchesQuery =
+      eventSearch === "" ||
+      ev.type.toLowerCase().includes(eventSearch.toLowerCase()) ||
+      ev.message.toLowerCase().includes(eventSearch.toLowerCase());
+
+    const matchesCategory =
+      eventCategoryFilter === "all" ||
+      ev.type.toLowerCase().includes(eventCategoryFilter.toLowerCase());
+
+    return matchesQuery && matchesCategory;
+  });
+
   return (
     <>
       <header className="app-header">
@@ -205,6 +240,14 @@ export function App() {
             style={{ fontSize: "0.75rem", padding: "0.3rem 0.75rem" }}
           >
             + New Project
+          </button>
+          <button
+            id="btn-open-settings"
+            className="btn btn-secondary"
+            onClick={() => setIsSettingsOpen(true)}
+            style={{ fontSize: "0.75rem", padding: "0.3rem 0.75rem" }}
+          >
+            ⚙ Settings & Policy
           </button>
           <div className="badge badge-local" id="badge-reasoning">
             <span className="dot-indicator pulse"></span>
@@ -389,21 +432,84 @@ export function App() {
           </div>
         </div>
 
-        {/* Live SSE Event Stream Card */}
+        {/* Live SSE Event Stream & Audit Log Card */}
         <div className="glass-card">
-          <div className="card-header">
-            <h2 className="card-title">Real-Time Event Stream</h2>
-            <span className="badge">{events.length} Events</span>
+          <div className="card-header" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <h2 className="card-title">Real-Time Event Stream & Audit Log</h2>
+              <span className="badge">
+                {filteredEvents.length} / {events.length} Events
+              </span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <button
+                id="btn-export-json"
+                className="btn btn-secondary"
+                onClick={() => handleExport("json")}
+                style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+              >
+                ⬇ Export JSON
+              </button>
+              <button
+                id="btn-export-md"
+                className="btn btn-secondary"
+                onClick={() => handleExport("markdown")}
+                style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+              >
+                ⬇ Export Markdown
+              </button>
+            </div>
+          </div>
+
+          {/* Search & Filter Deck */}
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.75rem", marginBottom: "0.75rem" }}>
+            <input
+              type="text"
+              id="input-event-search"
+              placeholder="Search event types, task IDs, or log messages..."
+              value={eventSearch}
+              onChange={(e) => setEventSearch(e.target.value)}
+              style={{
+                flex: 1,
+                minWidth: "220px",
+                background: "#070a10",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-main)",
+                padding: "0.4rem 0.6rem",
+                fontSize: "0.8rem",
+              }}
+            />
+
+            <div style={{ display: "flex", gap: "0.3rem" }}>
+              {["all", "run", "task", "agent", "human", "budget"].map((cat) => (
+                <button
+                  key={cat}
+                  className={`btn ${eventCategoryFilter === cat ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setEventCategoryFilter(cat)}
+                  style={{ fontSize: "0.7rem", padding: "0.25rem 0.5rem", textTransform: "capitalize" }}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="event-log" id="event-stream-container">
-            {events.map((ev) => (
-              <div key={ev.id} className="event-entry">
-                <span className="event-time">{ev.time}</span>
-                <span className="event-type">[{ev.type}]</span>
-                <span className="event-desc">{ev.message}</span>
+            {filteredEvents.length === 0 ? (
+              <div style={{ color: "var(--text-dim)", padding: "1rem", textAlign: "center" }}>
+                No events matching "{eventSearch}"
               </div>
-            ))}
+            ) : (
+              filteredEvents.map((ev) => (
+                <div key={ev.id} className="event-entry">
+                  <span className="event-time">{ev.time}</span>
+                  <span className="event-type">[{ev.type}]</span>
+                  <span className="event-desc">{ev.message}</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
@@ -412,6 +518,12 @@ export function App() {
           isOpen={isInspectorOpen}
           onClose={() => setIsInspectorOpen(false)}
           taskId={inspectingTaskId}
+        />
+
+        {/* Provider, Privacy & Policy Settings Modal */}
+        <ProviderSettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
         />
       </main>
     </>
