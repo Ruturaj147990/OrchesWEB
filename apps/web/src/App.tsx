@@ -3,6 +3,7 @@ import { ProjectWizard } from "./features/wizard/ProjectWizard";
 import { TaskInspector } from "./features/tasks/TaskInspector";
 import { HumanDirectionBar } from "./features/inbox/HumanDirectionBar";
 import { ProviderSettingsModal } from "./features/settings/ProviderSettingsModal";
+import { IdeConnectionDeck } from "./features/ide/IdeConnectionDeck";
 
 interface HealthData {
   status: string;
@@ -16,6 +17,7 @@ interface ProjectData {
   id: string;
   name: string;
   objective: string;
+  rootPath?: string;
   autonomyMode: string;
   status: string;
 }
@@ -296,6 +298,13 @@ export function App() {
       />
 
       <main className="dashboard-container">
+        {/* Visible Antigravity IDE Integration Deck */}
+        <IdeConnectionDeck
+          projectRootPath={project?.rootPath}
+          runState={runState}
+          onPauseResume={runState === "running" ? handlePause : handleStart}
+        />
+
         {/* Control Deck Bar */}
         <div className="glass-card control-deck">
           <div>

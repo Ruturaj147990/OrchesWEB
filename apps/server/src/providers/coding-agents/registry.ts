@@ -1,12 +1,16 @@
 import { CodingAgentAdapter } from "./adapter.js";
 import { AntigravityAdapter } from "./antigravity/antigravity-adapter.js";
+import { VisibleIdeAdapter } from "./antigravity/visible-ide-adapter.js";
 import { MockAgentAdapter } from "./mock/mock-adapter.js";
+import { IdeBridge } from "../../platform/ide/ide-bridge.js";
 
 export class AgentRegistry {
   private adapters: Map<string, CodingAgentAdapter> = new Map();
-  private defaultAdapterId = "antigravity";
+  private defaultAdapterId = "antigravity-visible";
 
-  constructor(includeMock = false) {
+  constructor(ideBridge?: IdeBridge, includeMock = false) {
+    const bridge = ideBridge || new IdeBridge();
+    this.register(new VisibleIdeAdapter(bridge));
     this.register(new AntigravityAdapter());
     if (includeMock || process.env.NODE_ENV === "test") {
       this.register(new MockAgentAdapter());

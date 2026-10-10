@@ -81,3 +81,19 @@
 - [x] Accessibility, responsiveness, and security hardening (loopback binding verification, path traversal checks).
 - [x] Final end-to-end verification and documentation update.
 - [x] Commit Milestone 7 checkpoint.
+
+## Visible Antigravity IDE Integration
+- [x] Implement `IdeDetector`: detect running Antigravity IDE processes, read VS Code storage (`storage.json` & `workspaceStorage`), decode file URIs, resolve canonical paths, validate directories.
+- [x] Implement multi-window and multi-workspace support with directory validation and workspace selection.
+- [x] Implement `IdeBridge` 6-stage visible verification workflow:
+  `IDE Detected ➔ Workspace Identified ➔ Connection Established ➔ Workspace Confirmed ➔ Agent Tested ➔ Ready`.
+- [x] Prohibit task dispatch and explain failures if any connection or workspace check fails.
+- [x] Implement `VisibleIdeAdapter`: execute planner prompts directly targeting verified visible workspace with live editor synchronization.
+- [x] Preserve Headless CLI (`agy`) as an explicit optional alternative.
+- [x] Route tasks to verified workspace and implement Git cleanliness safety guard (`run.dirty_workspace`) to prevent overwriting user edits.
+- [x] Synchronize autonomous development loop: send planner prompts, capture visible edits, run independent tests, invoke Critic, commit checkpoints.
+- [x] Build interactive `IdeConnectionDeck` UI component in dashboard with stage progress, workspace picker, status badges, and controls.
+- [x] Implement REST API routes (`/api/v1/ide/*`).
+- [x] Implement comprehensive unit and integration tests (9/9 passed in `ide-integration.test.ts`).
+- [x] Implement Playwright E2E browser tests (2/2 passed in `e2e/ide-integration.spec.ts` & `e2e/smoke.spec.ts`).
+

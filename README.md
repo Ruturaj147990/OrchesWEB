@@ -102,6 +102,46 @@ npm run dev --workspace=apps/web
 | `POST` | `/api/v1/projects/:projectId/runs` | Start or resume an autonomous run |
 | `POST` | `/api/v1/runs/:runId/pause` | Pause run at the current attempt boundary |
 | `POST` | `/api/v1/runs/:runId/stop` | Halt run dispatch immediately |
+| `GET` | `/api/v1/providers/reasoning` | Active reasoning provider (Ollama / OpenAI Cloud) |
+| `POST` | `/api/v1/providers/reasoning/select` | Toggle active reasoning engine |
+| `GET` | `/api/v1/ide/status` | Current IDE connection status, detected workspaces, and stages |
+| `POST` | `/api/v1/ide/detect` | Rescan running IDE processes and storage workspaces |
+| `POST` | `/api/v1/ide/select-workspace` | Select specific IDE workspace from detected windows |
+| `POST` | `/api/v1/ide/connect` | Run 6-stage visible IDE verification handshake |
+| `POST` | `/api/v1/ide/test-connection` | Run agent readiness and probe response test |
+| `POST` | `/api/v1/ide/disconnect` | Detach active IDE session |
+| `POST` | `/api/v1/ide/mode` | Switch mode between `visible_ide` and `headless_cli` |
+
+---
+
+## Visible Antigravity IDE Integration
+
+The orchestrator integrates directly with your **normal, visible Antigravity IDE** window so you can watch code changes in real time inside the editor while the orchestrator automatically plans tasks, runs independent verification tests, and synchronizes the development loop.
+
+### 6-Stage Verified Connection Pipeline
+Before autonomous task dispatch is permitted, the orchestrator enforces a strict visible verification workflow:
+
+```
+[1] IDE Detected ➔ [2] Workspace Identified ➔ [3] Connection Established ➔ [4] Workspace Confirmed ➔ [5] Agent Tested ➔ [6] Ready
+```
+
+1. **IDE Detected**: Queries running processes (`Antigravity IDE.exe`, `language_server_windows_x64.exe`) and extracts process IDs.
+2. **Workspace Identified**: Parses official VS Code workspace state (`storage.json` and `workspaceStorage`) to discover all open and recent windows.
+3. **Connection Established**: Connects to the native `agentapi` / language server communication channel and confirms responsiveness.
+4. **Workspace Confirmed**: Compares canonical filesystem paths (`fs.realpathSync`) against the active project's root. Mismatches are rejected with an explicit error to prevent accidental execution in the wrong project.
+5. **Agent Tested**: Executes an agent readiness handshake probe and verifies bidirectional communication.
+6. **Ready**: Authorizes the autonomous development loop and begins periodic heartbeat monitoring.
+
+### Execution Modes
+- **Visible Antigravity IDE (Native Editor)**: Changes appear live in the open editor canvas as the agent works.
+- **Headless CLI (`agy`)**: Alternative background mode running via standard CLI execution.
+
+### Git Workspace Safety Guard
+To protect unrelated human work:
+- Before any task dispatch, the orchestrator inspects `git status --porcelain`.
+- If uncommitted or untracked changes exist that were made manually in the IDE, the loop safely pauses with a `run.dirty_workspace` event.
+- It **never** discards, overwrites, or reverts unrelated developer work.
+
 
 ---
 

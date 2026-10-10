@@ -372,3 +372,59 @@ export const RunEventSchema = z.object({
   timestamp: z.string(),
 });
 export type RunEvent = z.infer<typeof RunEventSchema>;
+
+// --- Visible Antigravity IDE Integration ---
+export const IdeConnectionStepSchema = z.enum([
+  "ide_detected",
+  "workspace_identified",
+  "connection_established",
+  "workspace_confirmed",
+  "agent_tested",
+  "ready",
+]);
+export type IdeConnectionStep = z.infer<typeof IdeConnectionStepSchema>;
+
+export const IdeStageStatusSchema = z.enum(["pending", "in_progress", "passed", "failed"]);
+export type IdeStageStatus = z.infer<typeof IdeStageStatusSchema>;
+
+export const IdeStageInfoSchema = z.object({
+  status: IdeStageStatusSchema.default("pending"),
+  message: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type IdeStageInfo = z.infer<typeof IdeStageInfoSchema>;
+
+export const IdeWorkspaceInfoSchema = z.object({
+  id: z.string(),
+  folderUri: z.string(),
+  canonicalPath: z.string(),
+  name: z.string(),
+  isMatchingProject: z.boolean().default(false),
+  isActiveWindow: z.boolean().default(false),
+  processId: z.number().nullable().optional(),
+  lastHeartbeat: z.string().nullable().optional(),
+});
+export type IdeWorkspaceInfo = z.infer<typeof IdeWorkspaceInfoSchema>;
+
+export const IdeExecutionModeSchema = z.enum(["visible_ide", "headless_cli"]);
+export type IdeExecutionMode = z.infer<typeof IdeExecutionModeSchema>;
+
+export const IdeConnectionStateSchema = z.object({
+  status: z.enum(["disconnected", "detecting", "connected", "ready", "error"]).default("disconnected"),
+  stages: z.object({
+    ide_detected: IdeStageInfoSchema,
+    workspace_identified: IdeStageInfoSchema,
+    connection_established: IdeStageInfoSchema,
+    workspace_confirmed: IdeStageInfoSchema,
+    agent_tested: IdeStageInfoSchema,
+    ready: IdeStageInfoSchema,
+  }),
+  detectedWorkspaces: z.array(IdeWorkspaceInfoSchema).default([]),
+  selectedWorkspace: IdeWorkspaceInfoSchema.nullable().default(null),
+  activeMode: IdeExecutionModeSchema.default("visible_ide"),
+  agentBridgeType: z.enum(["agentapi_native", "ide_workspace_bridge", "headless_cli"]).default("agentapi_native"),
+  lastHeartbeat: z.string().nullable().default(null),
+  errorMessage: z.string().nullable().default(null),
+});
+export type IdeConnectionState = z.infer<typeof IdeConnectionStateSchema>;
+

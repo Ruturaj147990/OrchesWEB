@@ -14,6 +14,7 @@ import { blueprintRoutes } from "./api/routes/blueprints.js";
 import { messageRoutes } from "./api/routes/messages.js";
 import { taskRoutes } from "./api/routes/tasks.js";
 import { providerRoutes } from "./api/routes/providers.js";
+import { ideRoutes } from "./api/routes/ide.js";
 
 export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
   // Initialize SQLite database and apply migrations
@@ -63,6 +64,7 @@ export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
   await app.register(messageRoutes, { prefix: "/api/v1" });
   await app.register(taskRoutes, { prefix: "/api/v1" });
   await app.register(providerRoutes, { prefix: "/api/v1" });
+  await app.register(ideRoutes, { prefix: "/api/v1" });
 
   return app;
 }

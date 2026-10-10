@@ -47,27 +47,44 @@
   - Security hardening audit (loopback-only binding, path traversal guards, secret redaction via `SecretRedactor`).
   - Provider, Privacy & Policy settings modal (`ProviderSettingsModal.tsx`).
   - 38/38 unit and integration tests passing. Playwright E2E passing.
+- [x] **Visible Antigravity IDE Integration** (COMPLETED)
+  - Full IDE process and workspace detection (`IdeDetector`), canonical path resolution, multi-window selection.
+  - 6-stage visible connection workflow (`IdeBridge`): `IDE Detected ➔ Workspace Identified ➔ Connection Established ➔ Workspace Confirmed ➔ Agent Tested ➔ Ready`.
+  - Native Visible IDE Coding Agent Adapter (`VisibleIdeAdapter`) executing directly against verified workspace with live on-screen editor reflection.
+  - Headless CLI (`agy`) preserved as explicit optional alternative mode.
+  - Git cleanliness preflight guard (`run.dirty_workspace`) protecting unrelated user edits.
+  - Interactive `IdeConnectionDeck` UI component in dashboard with stage indicators, workspace picker, status badges, and controls.
+  - REST API (`/api/v1/ide/*`).
+  - 48/48 unit and integration tests passing (10/10 test files). 2/2 Playwright E2E browser tests passing.
 
 ---
 
-## 2. Completed Work (Milestone 7)
-- Implemented `SecretRedactor` sanitizing OpenAI API keys, bearer tokens, private keys, and passwords.
-- Added `/api/v1/projects/:projectId/export` endpoint with format negotiation (`json` or `markdown`).
-- Added real-time event stream search bar and category filters in the React dashboard.
-- Built `ProviderSettingsModal` presenting capability indicators, loopback status, and honest Hybrid privacy badge.
-- Conducted full security audit verifying loopback `127.0.0.1` binding and CORS foreign origin rejection.
-- Wrote and passed comprehensive unit and integration test suite in `milestone7.test.ts`.
-- Updated comprehensive `README.md` with system architecture, REST endpoints, and run instructions.
+## 2. Completed Work (Visible Antigravity IDE Integration)
+- Implemented `IdeDetector` reading process lists, `storage.json`, and `workspaceStorage`, resolving canonical paths.
+- Built `IdeBridge` orchestrating the 6-stage verification handshake pipeline with active heartbeat monitoring.
+- Created `VisibleIdeAdapter` submitting planner prompts to the connected visible workspace while changes appear live on-screen.
+- Added Git cleanliness guard pausing task execution if uncommitted/untracked user edits exist.
+- Built interactive `IdeConnectionDeck` React component integrated into `App.tsx`.
+- Implemented Fastify REST API routes in `/api/v1/ide/*`.
+- Added comprehensive unit and integration test suite in `apps/server/tests/ide-integration.test.ts` (9 tests passing).
+- Added Playwright E2E browser test in `e2e/ide-integration.spec.ts` (2 tests passing).
 
 ---
 
 ## 3. Changed Files
-- `apps/server/src/platform/secret-redactor.ts`
-- `apps/server/src/api/routes/projects.ts`
-- `apps/server/src/events/event-store.ts`
-- `apps/web/src/features/settings/ProviderSettingsModal.tsx`
+- `packages/shared-types/src/index.ts`
+- `apps/server/src/platform/ide/ide-detector.ts` (new)
+- `apps/server/src/platform/ide/ide-bridge.ts` (new)
+- `apps/server/src/providers/coding-agents/antigravity/visible-ide-adapter.ts` (new)
+- `apps/server/src/providers/coding-agents/registry.ts`
+- `apps/server/src/orchestrator/loop.ts`
+- `apps/server/src/verification/runner.ts`
+- `apps/server/src/api/routes/ide.ts` (new)
+- `apps/server/src/app.ts`
+- `apps/server/tests/ide-integration.test.ts` (new)
+- `apps/web/src/features/ide/IdeConnectionDeck.tsx` (new)
 - `apps/web/src/App.tsx`
-- `apps/server/tests/milestone7.test.ts`
+- `e2e/ide-integration.spec.ts` (new)
 - `README.md`
 - `TASK_CHECKLIST.md`
 - `IMPLEMENTATION_STATE.md`
@@ -75,16 +92,18 @@
 ---
 
 ## 4. Actual Test Results
-- `npm run build`: Exit Code 0.
-- `npm test`: 9 test files, 38 passed, 0 failed (1.71s).
-- `npx playwright test`: 1 passed (3.9s).
+- `npm run build`: Exit Code 0 across all workspaces.
+- `npm test`: 10 test files, 48 passed, 0 failed (1.98s).
+- `npx playwright test`: 2 passed (8.2s). All browser screenshots captured.
 
 ---
 
 ## 5. Architectural Decisions
-1. **Sanitization on Export**: Exports and logs are automatically sanitized to prevent accidental leakage of sensitive keys or environment credentials.
-2. **Deterministic Acceptance Policy**: The Orchestrator enforces that Critic reviews cannot waive failing test exit codes; code must have exit code 0 to pass the deterministic acceptance gate.
-3. **Loopback-Only Security**: All HTTP endpoints strictly bind to `127.0.0.1` and reject non-loopback CORS origins.
+1. **Canonical Path Identity Verification**: Workspace identity is never determined by window title alone; canonical paths are resolved via `fs.realpathSync` and validated against disk.
+2. **Strict Pre-Execution Gate**: Task dispatch is strictly prohibited unless all 6 stages of the visible handshake pass.
+3. **Non-Destructive User Edit Safety**: When manual uncommitted or untracked edits are detected in the IDE, the orchestrator pauses execution without discarding or reverting user work.
+4. **Honest Session Labeling**: Visible Antigravity IDE and Headless CLI modes are explicitly labeled and toggled with zero false simulation.
+
 
 ---
 

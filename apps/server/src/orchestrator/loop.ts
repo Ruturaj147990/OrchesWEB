@@ -14,6 +14,7 @@ import { EventStore } from "../events/event-store.js";
 import { RunRepository } from "../storage/repositories/run-repository.js";
 import { RunStateMachine } from "./state-machine.js";
 import { InboxService } from "../domain/human-messages/inbox-service.js";
+import { IdeBridge } from "../platform/ide/ide-bridge.js";
 
 export interface LoopExecutionOptions {
   projectId: string;
@@ -23,6 +24,8 @@ export interface LoopExecutionOptions {
   approvedRoadmapIds: string[];
   isUiTask?: boolean;
   uiTestUrl?: string;
+  ideBridge?: IdeBridge;
+  allowDirtyWorkspace?: boolean;
 }
 
 export interface LoopIterationResult {
@@ -148,9 +151,56 @@ export class AutonomousLoop {
 
     this.eventStore.record(projectId, "task.created", { taskId: task.id, title: task.title }, runId, task.id);
 
-    // 5. Git preflight baseline
+    // 5. Git preflight baseline & safety guard
     const gitStatus = await this.gitManager.getStatus();
     const baselineCommit = gitStatus.baselineCommit || "HEAD";
+
+    if (gitStatus.isDirty && !options.allowDirtyWorkspace) {
+      this.stateMachine.transition(
+        runId,
+        "paused",
+        `Uncommitted changes detected in ${gitStatus.modifiedFiles.length} file(s). Safe execution paused.`
+      );
+      this.eventStore.record(
+        projectId,
+        "run.dirty_workspace",
+        {
+          message: "Uncommitted user changes detected. Pausing to avoid overwriting unrelated work.",
+          modifiedFiles: gitStatus.modifiedFiles,
+        },
+        runId
+      );
+      return {
+        taskId: task.id,
+        status: "stopped",
+        attempts: 0,
+        error: `Dirty workspace: ${gitStatus.modifiedFiles.length} uncommitted file(s) found. Paused for safe operator resolution.`,
+      };
+    }
+
+    // Visible IDE connection check
+    if (agentAdapter.id === "antigravity-visible" && options.ideBridge) {
+      const ideState = options.ideBridge.getState();
+      if (ideState.status !== "ready") {
+        this.stateMachine.transition(runId, "blocked", `Visible Antigravity IDE is not ready (Status: ${ideState.status}).`);
+        this.eventStore.record(
+          projectId,
+          "ide.not_ready",
+          {
+            status: ideState.status,
+            stages: ideState.stages,
+            errorMessage: ideState.errorMessage,
+          },
+          runId
+        );
+        return {
+          taskId: task.id,
+          status: "failed",
+          attempts: 0,
+          error: `Visible Antigravity IDE connection is not ready (Status: ${ideState.status}). Complete connection verification handshake first.`,
+        };
+      }
+    }
 
     // 6. Execution & Repair Loop
     let attemptNumber = 0;

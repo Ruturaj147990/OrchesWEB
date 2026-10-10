@@ -51,14 +51,35 @@ export class VerificationRunner {
       let stderr = "";
       let timedOut = false;
 
-      const child = spawn(exe, args, {
-        cwd: this.workspacePath,
-        shell: false,
-        env: {
-          ...process.env,
-          CI: "true",
-        },
-      });
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(exe, args, {
+          cwd: this.workspacePath,
+          shell: false,
+          env: {
+            ...process.env,
+            CI: "true",
+          },
+        });
+      } catch (err: unknown) {
+        return resolve({
+          id: `vr-${crypto.randomUUID()}`,
+          taskId,
+          attemptId,
+          checkType: check.type,
+          command: check.command,
+          argv: parts,
+          cwd: this.workspacePath,
+          status: "failed",
+          exitCode: 1,
+          durationMs: Date.now() - start,
+          outputArtifactId: null,
+          stdoutSnippet: "",
+          stderrSnippet: (err as Error).message || "Spawn failed",
+          truncated: false,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       const timer = setTimeout(() => {
         timedOut = true;
