@@ -34,18 +34,18 @@
 - [x] Commit Milestone 2 checkpoint.
 
 ## Milestone 3 — Early Autonomous Vertical Slice (Mandatory Proof Point)
-- [ ] Implement compact Planner context builder (`SPEC.md`, `DECISIONS.md`, `ROADMAP.md`, `REPO_MAP.md`, current state, budget).
-- [ ] Implement Planner invocation emitting roadmap-linked task contract with acceptance criteria.
-- [ ] Implement Git task branch/worktree isolation manager (`orchestrator/<project-id>/<task-id>/attempt-<n>`).
-- [ ] Implement execution dispatch to coding agent (fresh session per attempt).
-- [ ] Implement independent orchestrator verification runner (lint, typecheck, test, build with actual argv, exit code, duration, log truncation).
-- [ ] Implement Playwright BrowserVerifier for web/UI tasks (supervised server start, headless browser assertions, console/network capture, screenshots).
-- [ ] Implement independent Critic review invocation (diff + verification evidence -> verdict: accept / repair / reject).
-- [ ] Implement deterministic acceptance gate (mandatory checks + criteria evidence + Critic accept + safe Git checkpoint commit & integration).
-- [ ] Implement bounded repair loop on verifier/Critic failure with fresh context.
-- [ ] Implement hard budget stop before model/agent dispatch.
-- [ ] Verify vertical slice with comprehensive test suite: failure -> repair -> success -> commit; UI screenshot capture; budget cut-off; crash restart resumption.
-- [ ] Commit Milestone 3 checkpoint.
+- [x] Implement compact Planner context builder (`SPEC.md`, `DECISIONS.md`, `ROADMAP.md`, `REPO_MAP.md`, current state, budget).
+- [x] Implement Planner invocation emitting roadmap-linked task contract with acceptance criteria.
+- [x] Implement Git task branch/worktree isolation manager (`orchestrator/<project-id>/<task-id>/attempt-<n>`).
+- [x] Implement execution dispatch to coding agent (fresh session per attempt).
+- [x] Implement independent orchestrator verification runner (lint, typecheck, test, build with actual argv, exit code, duration, log truncation).
+- [x] Implement Playwright BrowserVerifier for web/UI tasks (supervised server start, headless browser assertions, console/network capture, screenshots).
+- [x] Implement independent Critic review invocation (diff + verification evidence -> verdict: accept / repair / reject).
+- [x] Implement deterministic acceptance gate (mandatory checks + criteria evidence + Critic accept + safe Git checkpoint commit & integration).
+- [x] Implement bounded repair loop on verifier/Critic failure with fresh context.
+- [x] Implement hard budget stop before model/agent dispatch.
+- [x] Verify vertical slice with comprehensive test suite: failure -> repair -> success -> commit; UI screenshot capture; budget cut-off; crash restart resumption.
+- [x] Commit Milestone 3 checkpoint.
 
 ## Milestone 4 — Cost Accuracy, Reliability, Context Compaction, and Recovery
 - [ ] Implement pricing catalogue & cost estimation service (Planner + Executor + Critic + repair reserve).
