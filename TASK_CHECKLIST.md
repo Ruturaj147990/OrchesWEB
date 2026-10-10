@@ -2,15 +2,15 @@
 
 ## Milestone 0 — Repository Foundation
 - [x] Inspect environment, OS, node, npm, git status.
-- [ ] Create root `package.json` with npm workspaces (`apps/*`, `packages/*`).
-- [ ] Create `tsconfig.base.json` with TypeScript `strict: true`.
-- [ ] Create `packages/shared-types` with initial domain interfaces.
-- [ ] Create `apps/server` (Fastify, loopback 127.0.0.1:4317, `/api/v1/health` endpoint, origin/CSRF protection foundation).
-- [ ] Create `apps/web` (React + Vite + TypeScript, custom design system, dashboard shell).
-- [ ] Create `.env.example`, `README.md`, `SECURITY.md`.
-- [ ] Add Vitest test runner for server and shared packages; verify unit tests pass.
-- [ ] Add Playwright browser test harness for web dashboard smoke test; verify test runs and captures baseline screenshot.
-- [ ] Commit Milestone 0 checkpoint.
+- [x] Create root `package.json` with npm workspaces (`apps/*`, `packages/*`).
+- [x] Create `tsconfig.base.json` with TypeScript `strict: true`.
+- [x] Create `packages/shared-types` with initial domain interfaces.
+- [x] Create `apps/server` (Fastify, loopback 127.0.0.1:4317, `/api/v1/health` endpoint, origin/CSRF protection foundation).
+- [x] Create `apps/web` (React + Vite + TypeScript, custom design system, dashboard shell).
+- [x] Create `.env.example`, `README.md`, `SECURITY.md`.
+- [x] Add Vitest test runner for server and shared packages; verify unit tests pass.
+- [x] Add Playwright browser test harness for web dashboard smoke test; verify test runs and captures baseline screenshot.
+- [x] Commit Milestone 0 checkpoint.
 
 ## Milestone 1 — Persistence and Bare Control Dashboard
 - [ ] Create SQLite storage engine with WAL mode and database migration runner.
