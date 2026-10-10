@@ -1,0 +1,83 @@
+# Master Task Checklist
+
+## Milestone 0 — Repository Foundation
+- [x] Inspect environment, OS, node, npm, git status.
+- [ ] Create root `package.json` with npm workspaces (`apps/*`, `packages/*`).
+- [ ] Create `tsconfig.base.json` with TypeScript `strict: true`.
+- [ ] Create `packages/shared-types` with initial domain interfaces.
+- [ ] Create `apps/server` (Fastify, loopback 127.0.0.1:4317, `/api/v1/health` endpoint, origin/CSRF protection foundation).
+- [ ] Create `apps/web` (React + Vite + TypeScript, custom design system, dashboard shell).
+- [ ] Create `.env.example`, `README.md`, `SECURITY.md`.
+- [ ] Add Vitest test runner for server and shared packages; verify unit tests pass.
+- [ ] Add Playwright browser test harness for web dashboard smoke test; verify test runs and captures baseline screenshot.
+- [ ] Commit Milestone 0 checkpoint.
+
+## Milestone 1 — Persistence and Bare Control Dashboard
+- [ ] Create SQLite storage engine with WAL mode and database migration runner.
+- [ ] Implement initial migration: `projects`, `runs`, `tasks`, `events`, `artifacts`, `approvals`, `budgets`, `provider_profiles`.
+- [ ] Implement Project Service & minimal project creation API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/:id`).
+- [ ] Implement durable event store and Server-Sent Events (SSE) streaming endpoint (`GET /api/v1/projects/:id/events`) with cursor replay.
+- [ ] Implement Run state machine and lifecycle controls (`POST /api/v1/projects/:id/runs`, `pause`, `stop`, `resume`) with idempotency.
+- [ ] Build bare control dashboard in `apps/web` showing run state, current task, provider badges, budget usage, and working Start/Pause/Stop controls.
+- [ ] Run automated tests for persistence, state transitions, event replay, and browser control.
+- [ ] Commit Milestone 1 checkpoint.
+
+## Milestone 2 — Minimum Real Provider and Coding-Agent Adapters
+- [ ] Create normalized `ReasoningProvider` interface and provider registry.
+- [ ] Implement OpenAI API provider adapter.
+- [ ] Implement OpenAI-compatible local endpoint adapter (Ollama/llama.cpp/vLLM) with Local-only enforcement (no silent fallback).
+- [ ] Implement official Antigravity CLI adapter (`agy` capability probe, headless invocation, event parsing, safe timeout/cancellation).
+- [ ] Implement deterministic `MockAgentAdapter` for reliable automated testing.
+- [ ] Define and implement strict Zod schemas for Planner output, Executor task context & response, and Critic review.
+- [ ] Implement preliminary token/usage tracker and budget enforcement hooks.
+- [ ] Run provider and adapter test suite.
+- [ ] Commit Milestone 2 checkpoint.
+
+## Milestone 3 — Early Autonomous Vertical Slice (Mandatory Proof Point)
+- [ ] Implement compact Planner context builder (`SPEC.md`, `DECISIONS.md`, `ROADMAP.md`, `REPO_MAP.md`, current state, budget).
+- [ ] Implement Planner invocation emitting roadmap-linked task contract with acceptance criteria.
+- [ ] Implement Git task branch/worktree isolation manager (`orchestrator/<project-id>/<task-id>/attempt-<n>`).
+- [ ] Implement execution dispatch to coding agent (fresh session per attempt).
+- [ ] Implement independent orchestrator verification runner (lint, typecheck, test, build with actual argv, exit code, duration, log truncation).
+- [ ] Implement Playwright BrowserVerifier for web/UI tasks (supervised server start, headless browser assertions, console/network capture, screenshots).
+- [ ] Implement independent Critic review invocation (diff + verification evidence -> verdict: accept / repair / reject).
+- [ ] Implement deterministic acceptance gate (mandatory checks + criteria evidence + Critic accept + safe Git checkpoint commit & integration).
+- [ ] Implement bounded repair loop on verifier/Critic failure with fresh context.
+- [ ] Implement hard budget stop before model/agent dispatch.
+- [ ] Verify vertical slice with comprehensive test suite: failure -> repair -> success -> commit; UI screenshot capture; budget cut-off; crash restart resumption.
+- [ ] Commit Milestone 3 checkpoint.
+
+## Milestone 4 — Cost Accuracy, Reliability, Context Compaction, and Recovery
+- [ ] Implement pricing catalogue & cost estimation service (Planner + Executor + Critic + repair reserve).
+- [ ] Configure beginner default budgets ($0.50 warning, $2.00 hard task ceiling, $10.00 hard run ceiling).
+- [ ] Implement cost state labelling (`measured`, `estimated`, `reserved`, `unknown`, `local_no_api_charge`).
+- [ ] Implement stagnation and cycle detection (consecutive no-diff, repeated error hashes, edit ping-pong).
+- [ ] Implement context compaction & rolling summaries for memory persistence.
+- [ ] Implement process supervisor & orphan cleanup on restart.
+- [ ] Run resilience and cost tests.
+- [ ] Commit Milestone 4 checkpoint.
+
+## Milestone 5 — Project Wizard, Autonomy Modes, Profiles, and Blueprint Import
+- [ ] Implement 6-step project wizard UI & API.
+- [ ] Implement 3 autonomy modes (Creative within constraints, Creative exploration, Strict blueprint adherence).
+- [ ] Implement built-in project profile presets (Frontend, Backend, Fullstack, AI/ML, CLI, Data Science, Embedded, General).
+- [ ] Implement multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with size limits and provenance tracking.
+- [ ] Implement requirement extraction with source attribution and candidate approval workflow.
+- [ ] Implement hard/soft constraint engine with contradiction detection.
+- [ ] Commit Milestone 5 checkpoint.
+
+## Milestone 6 — Human Direction and Full Browser/Visual Verification
+- [ ] Implement human direction inbox (`next_task`, `replan`, `safe_interrupt`, approvals/rejections).
+- [ ] Wire safe-boundary interrupts into the execution loop.
+- [ ] Expand BrowserVerifier: desktop/mobile viewports, visual baseline comparison, accessibility smoke checks.
+- [ ] Implement visual evidence review in Critic.
+- [ ] Build task inspector in web UI showing screenshots, code diffs, logs, verifier evidence, and Critic findings.
+- [ ] Commit Milestone 6 checkpoint.
+
+## Milestone 7 — Advanced UI, Export, and Hardening
+- [ ] Implement searchable timeline and logs viewer.
+- [ ] Implement run report generation and project memory export.
+- [ ] Complete provider settings screen with capability indicators and privacy badges.
+- [ ] Accessibility, responsiveness, and security hardening (loopback binding verification, path traversal checks).
+- [ ] Final end-to-end verification and documentation update.
+- [ ] Commit Milestone 7 checkpoint.
