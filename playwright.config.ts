@@ -1,4 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
+
+const testDataDir = path.join(os.tmpdir(), "orchestrator-e2e-data");
+if (fs.existsSync(testDataDir)) {
+  try {
+    fs.rmSync(testDataDir, { recursive: true, force: true });
+  } catch {}
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -22,13 +32,17 @@ export default defineConfig({
     {
       command: "npm run dev:server",
       url: "http://127.0.0.1:4317/api/v1/health",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 15000,
+      env: {
+        ORCHESTRATOR_DATA_DIR: path.join(os.tmpdir(), "orchestrator-e2e-data"),
+        NODE_ENV: "test",
+      },
     },
     {
       command: "npm run dev:web",
       url: "http://127.0.0.1:5173",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 15000,
     },
   ],
