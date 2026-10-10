@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 interface HealthData {
   status: string;
@@ -8,12 +8,30 @@ interface HealthData {
   nodeVersion: string;
 }
 
+interface ProjectData {
+  id: string;
+  name: string;
+  objective: string;
+  autonomyMode: string;
+  status: string;
+}
+
+interface RunData {
+  id: string;
+  projectId: string;
+  status: "draft" | "ready" | "running" | "pausing" | "paused" | "stopped" | "completed" | "failed";
+  currentTaskId: string | null;
+  iterationCount: number;
+}
+
 export function App() {
   const [health, setHealth] = useState<HealthData | null>(null);
+  const [project, setProject] = useState<ProjectData | null>(null);
+  const [activeRun, setActiveRun] = useState<RunData | null>(null);
   const [runState, setRunState] = useState<"ready" | "running" | "paused" | "stopped">("ready");
   const [activeTask, setActiveTask] = useState<{ id: string; title: string; status: string } | null>({
     id: "task-0001",
-    title: "Project Initialization & Baseline Verification",
+    title: "Project Initialization & Verification Gates",
     status: "ready",
   });
   const [budgetUsage, setBudgetUsage] = useState({
@@ -28,54 +46,136 @@ export function App() {
       id: "ev-0",
       time: new Date().toLocaleTimeString(),
       type: "system.init",
-      message: "Autonomous Development Orchestrator initialized on loopback (127.0.0.1)",
+      message: "Autonomous Development Orchestrator running on 127.0.0.1:4317",
     },
   ]);
 
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  // 1. Fetch Health and Ensure Active Project Exists
   useEffect(() => {
     fetch("/api/v1/health")
       .then((res) => res.json())
       .then((data: HealthData) => setHealth(data))
       .catch((err) => console.error("Health fetch error:", err));
+
+    fetch("/api/v1/projects")
+      .then((res) => res.json())
+      .then(async (projects: ProjectData[]) => {
+        if (projects.length > 0) {
+          setProject(projects[0]);
+        } else {
+          // Create default starter project
+          const res = await fetch("/api/v1/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: "Autonomous MVP Core",
+              objective: "Verify end-to-end loop with deterministic verifier and independent critic",
+              autonomyMode: "creative_within_constraints",
+            }),
+          });
+          const newProj = await res.json();
+          setProject(newProj);
+        }
+      })
+      .catch((err) => console.error("Projects fetch error:", err));
   }, []);
 
+  // 2. Connect to SSE stream once project is resolved
+  useEffect(() => {
+    if (!project) return;
+
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const sse = new EventSource(`/api/v1/projects/${project.id}/events`);
+    eventSourceRef.current = sse;
+
+    sse.onmessage = (e) => {
+      try {
+        const parsed = JSON.parse(e.data);
+        setEvents((prev) => [
+          {
+            id: parsed.id || `ev-${Date.now()}`,
+            time: new Date(parsed.timestamp || Date.now()).toLocaleTimeString(),
+            type: parsed.type || "event",
+            message: JSON.stringify(parsed.payload),
+          },
+          ...prev,
+        ]);
+      } catch (err) {
+        console.error("SSE parse error:", err);
+      }
+    };
+
+    return () => {
+      sse.close();
+    };
+  }, [project]);
+
   const handleStart = async () => {
-    setRunState("running");
-    setEvents((prev) => [
-      {
-        id: `ev-${Date.now()}`,
-        time: new Date().toLocaleTimeString(),
-        type: "run.started",
-        message: "Autonomous execution loop started.",
-      },
-      ...prev,
-    ]);
+    if (!project) return;
+    try {
+      const res = await fetch(`/api/v1/projects/${project.id}/runs`, { method: "POST" });
+      const run: RunData = await res.json();
+      setActiveRun(run);
+      setRunState(run.status === "paused" ? "paused" : "running");
+      setEvents((prev) => [
+        {
+          id: `ev-${Date.now()}`,
+          time: new Date().toLocaleTimeString(),
+          type: "run.started",
+          message: `Run ${run.id} active. Iteration: ${run.iterationCount}`,
+        },
+        ...prev,
+      ]);
+    } catch (err) {
+      console.error("Error starting run:", err);
+    }
   };
 
   const handlePause = async () => {
-    setRunState("paused");
-    setEvents((prev) => [
-      {
-        id: `ev-${Date.now()}`,
-        time: new Date().toLocaleTimeString(),
-        type: "run.paused",
-        message: "Execution paused at safe checkpoint boundary.",
-      },
-      ...prev,
-    ]);
+    if (!activeRun) return;
+    try {
+      const res = await fetch(`/api/v1/runs/${activeRun.id}/pause`, { method: "POST" });
+      const run: RunData = await res.json();
+      setActiveRun(run);
+      setRunState("paused");
+      setEvents((prev) => [
+        {
+          id: `ev-${Date.now()}`,
+          time: new Date().toLocaleTimeString(),
+          type: "run.paused",
+          message: `Run ${run.id} paused at safe boundary.`,
+        },
+        ...prev,
+      ]);
+    } catch (err) {
+      console.error("Error pausing run:", err);
+    }
   };
 
   const handleStop = async () => {
-    setRunState("stopped");
-    setEvents((prev) => [
-      {
-        id: `ev-${Date.now()}`,
-        time: new Date().toLocaleTimeString(),
-        type: "run.stopped",
-        message: "Run stopped by user. Dispatch prevented.",
-      },
-      ...prev,
-    ]);
+    if (!activeRun) return;
+    try {
+      const res = await fetch(`/api/v1/runs/${activeRun.id}/stop`, { method: "POST" });
+      const run: RunData = await res.json();
+      setActiveRun(run);
+      setRunState("stopped");
+      setEvents((prev) => [
+        {
+          id: `ev-${Date.now()}`,
+          time: new Date().toLocaleTimeString(),
+          type: "run.stopped",
+          message: `Run ${run.id} stopped. Dispatch halted.`,
+        },
+        ...prev,
+      ]);
+    } catch (err) {
+      console.error("Error stopping run:", err);
+    }
   };
 
   return (
@@ -85,6 +185,9 @@ export function App() {
           <div className="brand-logo">A</div>
           <div>
             <h1 className="brand-title">Autonomous Development Orchestrator</h1>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
+              Project: {project?.name || "Initializing..."} ({project?.autonomyMode || "creative_within_constraints"})
+            </div>
           </div>
         </div>
 
@@ -184,7 +287,7 @@ export function App() {
               <div className="metric-box">
                 <div className="metric-label">Iterations</div>
                 <div className="metric-value">
-                  {budgetUsage.iterations} / {budgetUsage.maxIterations}
+                  {activeRun?.iterationCount || budgetUsage.iterations} / {budgetUsage.maxIterations}
                 </div>
                 <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", marginTop: "0.25rem" }}>
                   Finite limit enforced

@@ -152,7 +152,59 @@ CREATE TABLE IF NOT EXISTS approvals (
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT,
+  task_id TEXT,
+  attempt_id TEXT,
+  kind TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS provider_profiles (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  provider_type TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  privacy_class TEXT NOT NULL,
+  is_reasoning_provider INTEGER NOT NULL DEFAULT 1,
+  is_coding_agent INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_health_status TEXT NOT NULL DEFAULT 'unknown',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS roadmap_items (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  priority TEXT NOT NULL DEFAULT 'medium',
+  status TEXT NOT NULL DEFAULT 'planned',
+  dependencies_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS project_config_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  config_json TEXT NOT NULL,
+  change_summary TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_project_id ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_run_events_project_id_seq ON run_events(project_id, event_seq);
+CREATE INDEX IF NOT EXISTS idx_artifacts_project_id ON artifacts(project_id);
 `;

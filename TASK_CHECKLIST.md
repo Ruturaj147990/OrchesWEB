@@ -13,14 +13,14 @@
 - [x] Commit Milestone 0 checkpoint.
 
 ## Milestone 1 — Persistence and Bare Control Dashboard
-- [ ] Create SQLite storage engine with WAL mode and database migration runner.
-- [ ] Implement initial migration: `projects`, `runs`, `tasks`, `events`, `artifacts`, `approvals`, `budgets`, `provider_profiles`.
-- [ ] Implement Project Service & minimal project creation API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/:id`).
-- [ ] Implement durable event store and Server-Sent Events (SSE) streaming endpoint (`GET /api/v1/projects/:id/events`) with cursor replay.
-- [ ] Implement Run state machine and lifecycle controls (`POST /api/v1/projects/:id/runs`, `pause`, `stop`, `resume`) with idempotency.
-- [ ] Build bare control dashboard in `apps/web` showing run state, current task, provider badges, budget usage, and working Start/Pause/Stop controls.
-- [ ] Run automated tests for persistence, state transitions, event replay, and browser control.
-- [ ] Commit Milestone 1 checkpoint.
+- [x] Create SQLite storage engine with WAL mode and database migration runner.
+- [x] Implement initial migration: `projects`, `runs`, `tasks`, `events`, `artifacts`, `approvals`, `budgets`, `provider_profiles`.
+- [x] Implement Project Service & minimal project creation API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/:id`).
+- [x] Implement durable event store and Server-Sent Events (SSE) streaming endpoint (`GET /api/v1/projects/:id/events`) with cursor replay.
+- [x] Implement Run state machine and lifecycle controls (`POST /api/v1/projects/:id/runs`, `pause`, `stop`, `resume`) with idempotency.
+- [x] Build bare control dashboard in `apps/web` showing run state, current task, provider badges, budget usage, and working Start/Pause/Stop controls.
+- [x] Run automated tests for persistence, state transitions, event replay, and browser control.
+- [x] Commit Milestone 1 checkpoint.
 
 ## Milestone 2 — Minimum Real Provider and Coding-Agent Adapters
 - [ ] Create normalized `ReasoningProvider` interface and provider registry.
