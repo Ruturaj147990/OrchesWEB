@@ -35,10 +35,20 @@ export interface IdeConnectionState {
   errorMessage: string | null;
 }
 
+interface ProjectData {
+  id: string;
+  name: string;
+  objective: string;
+  rootPath?: string;
+  autonomyMode: string;
+  status: string;
+}
+
 interface IdeConnectionDeckProps {
   projectRootPath?: string;
   runState?: "ready" | "running" | "paused" | "stopped";
   onPauseResume?: () => void;
+  onProjectUpdated?: (project: ProjectData) => void;
 }
 
 const STAGES_CONFIG = [
@@ -50,10 +60,23 @@ const STAGES_CONFIG = [
   { key: "ready", label: "Ready", number: "6" },
 ] as const;
 
-export function IdeConnectionDeck({ projectRootPath, runState, onPauseResume }: IdeConnectionDeckProps) {
+export function IdeConnectionDeck({
+  projectRootPath,
+  runState,
+  onPauseResume,
+  onProjectUpdated,
+}: IdeConnectionDeckProps) {
   const [ideState, setIdeState] = useState<IdeConnectionState | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [isEditingPath, setIsEditingPath] = useState(false);
+  const [customPathInput, setCustomPathInput] = useState(projectRootPath || "");
+
+  useEffect(() => {
+    if (projectRootPath) {
+      setCustomPathInput(projectRootPath);
+    }
+  }, [projectRootPath]);
 
   // Poll IDE status every 3.5 seconds
   const fetchStatus = async () => {
@@ -190,9 +213,42 @@ export function IdeConnectionDeck({ projectRootPath, runState, onPauseResume }: 
     }
   };
 
+  // Set Project Working Directory directly from IDE or custom path
+  const handleSetWorkingDirectory = async (options: {
+    useSelectedWorkspace?: boolean;
+    autoDetect?: boolean;
+    directoryPath?: string;
+  }) => {
+    setIsLoading(true);
+    setActionMessage(null);
+    try {
+      const res = await fetch("/api/v1/ide/set-working-directory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(options),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update project working directory");
+      }
+
+      setIdeState(data.state);
+      setIsEditingPath(false);
+      if (data.project && onProjectUpdated) {
+        onProjectUpdated(data.project);
+      }
+      setActionMessage(`✓ Working directory updated to ${data.directoryPath}. Connection verified & ready!`);
+    } catch (err: unknown) {
+      setActionMessage(`Error changing working directory: ${(err as Error).message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const activeMode = ideState?.activeMode || "visible_ide";
   const status = ideState?.status || "disconnected";
   const selectedWs = ideState?.selectedWorkspace;
+  const isMismatch = ideState?.stages?.workspace_confirmed?.status === "failed";
 
   return (
     <div
@@ -420,68 +476,163 @@ export function IdeConnectionDeck({ projectRootPath, runState, onPauseResume }: 
           display: "flex",
           flexWrap: "wrap",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: "flex-start",
           gap: "1rem",
-          padding: "0.75rem 1rem",
+          padding: "0.85rem 1rem",
           backgroundColor: "rgba(14, 19, 31, 0.6)",
           borderRadius: "var(--radius-md)",
           border: "1px solid var(--border-subtle)",
           marginBottom: "1rem",
         }}
       >
-        <div style={{ flex: "1 1 300px" }}>
-          <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginBottom: "0.25rem" }}>
-            Active Visible Workspace
+        <div style={{ flex: "1 1 340px" }}>
+          {/* Active Visible Workspace Picker */}
+          <div style={{ marginBottom: "0.6rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
+              <span style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Active Visible Workspace (IDE)
+              </span>
+              <button
+                type="button"
+                onClick={() => handleSetWorkingDirectory({ autoDetect: true })}
+                disabled={isLoading}
+                title="Automatically detect active window from IDE and sync"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--accent-cyan)",
+                  fontSize: "0.75rem",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  textDecoration: "underline",
+                }}
+              >
+                Auto-detect from Window
+              </button>
+            </div>
+
+            {ideState && ideState.detectedWorkspaces.length > 1 ? (
+              <select
+                value={selectedWs?.id || ""}
+                onChange={(e) => handleSelectWorkspace(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.45rem 0.6rem",
+                  borderRadius: "var(--radius-sm)",
+                  backgroundColor: "var(--bg-base)",
+                  color: "var(--text-main)",
+                  border: "1px solid var(--border-subtle)",
+                  fontSize: "0.85rem",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                {ideState.detectedWorkspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name} {ws.isMatchingProject ? "★ (Matches Project)" : ""} — {ws.canonicalPath}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--text-main)",
+                  wordBreak: "break-all",
+                }}
+              >
+                {selectedWs ? selectedWs.canonicalPath : "No workspace selected"}
+                {selectedWs?.isMatchingProject && (
+                  <span
+                    style={{
+                      marginLeft: "0.5rem",
+                      fontSize: "0.7rem",
+                      padding: "0.1rem 0.4rem",
+                      borderRadius: "4px",
+                      backgroundColor: "rgba(16, 185, 129, 0.15)",
+                      color: "var(--accent-emerald)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Matches Project Root
+                  </span>
+                )}
+              </div>
+            )}
           </div>
-          {ideState && ideState.detectedWorkspaces.length > 1 ? (
-            <select
-              value={selectedWs?.id || ""}
-              onChange={(e) => handleSelectWorkspace(e.target.value)}
-              style={{
-                width: "100%",
-                maxWidth: "400px",
-                padding: "0.4rem 0.6rem",
-                borderRadius: "var(--radius-sm)",
-                backgroundColor: "var(--bg-base)",
-                color: "var(--text-main)",
-                border: "1px solid var(--border-subtle)",
-                fontSize: "0.85rem",
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              {ideState.detectedWorkspaces.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.name} {ws.isMatchingProject ? "★ (Matches Project)" : ""} — {ws.canonicalPath}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <div
-              style={{
-                fontSize: "0.85rem",
-                fontFamily: "var(--font-mono)",
-                color: "var(--text-main)",
-                wordBreak: "break-all",
-              }}
-            >
-              {selectedWs ? selectedWs.canonicalPath : "No workspace selected"}
-              {selectedWs?.isMatchingProject && (
-                <span
+
+          {/* Target Project Working Directory Display & Edit Options */}
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
+              <span style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Target Project Directory (Orchestrator)
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsEditingPath(!isEditingPath)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--accent-primary)",
+                  fontSize: "0.75rem",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                {isEditingPath ? "Cancel" : "Change Directory"}
+              </button>
+            </div>
+
+            {isEditingPath ? (
+              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+                <input
+                  type="text"
+                  value={customPathInput}
+                  onChange={(e) => setCustomPathInput(e.target.value)}
+                  placeholder="C:\path\to\your\project"
                   style={{
-                    marginLeft: "0.5rem",
-                    fontSize: "0.7rem",
-                    padding: "0.1rem 0.4rem",
-                    borderRadius: "4px",
-                    backgroundColor: "rgba(16, 185, 129, 0.15)",
-                    color: "var(--accent-emerald)",
+                    flex: 1,
+                    padding: "0.4rem 0.6rem",
+                    borderRadius: "var(--radius-sm)",
+                    backgroundColor: "var(--bg-base)",
+                    color: "var(--text-main)",
+                    border: "1px solid var(--border-subtle)",
+                    fontSize: "0.85rem",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSetWorkingDirectory({ directoryPath: customPathInput })}
+                  disabled={isLoading}
+                  style={{
+                    padding: "0.4rem 0.8rem",
+                    fontSize: "0.8rem",
                     fontWeight: 600,
+                    borderRadius: "var(--radius-sm)",
+                    backgroundColor: "var(--accent-primary)",
+                    color: "#ffffff",
+                    border: "none",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  Matches Project Root
-                </span>
-              )}
-            </div>
-          )}
+                  Save & Connect
+                </button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  fontSize: "0.82rem",
+                  fontFamily: "var(--font-mono)",
+                  color: isMismatch ? "var(--accent-rose)" : "var(--text-muted)",
+                  wordBreak: "break-all",
+                }}
+              >
+                {projectRootPath || "None"}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Live Process & Heartbeat info */}
@@ -511,30 +662,109 @@ export function IdeConnectionDeck({ projectRootPath, runState, onPauseResume }: 
         </div>
       </div>
 
-      {/* Error or Warning Alert */}
-      {(ideState?.errorMessage || actionMessage) && (
+      {/* Workspace Mismatch / Error Banner with Direct Resolution Controls */}
+      {ideState?.errorMessage && (
+        <div
+          style={{
+            padding: "0.85rem 1rem",
+            borderRadius: "var(--radius-md)",
+            fontSize: "0.85rem",
+            marginBottom: "1rem",
+            backgroundColor: "rgba(244, 63, 94, 0.12)",
+            border: "1px solid rgba(244, 63, 94, 0.35)",
+            color: "var(--text-main)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.75rem",
+          }}
+        >
+          <div>
+            <strong style={{ color: "var(--accent-rose)" }}>Connection Alert: </strong>
+            {ideState.errorMessage}
+          </div>
+
+          {/* Quick 1-Click Fix Options for Workspace Mismatch */}
+          {isMismatch && (
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", marginRight: "0.25rem" }}>
+                Resolve by:
+              </span>
+              {selectedWs && (
+                <button
+                  type="button"
+                  onClick={() => handleSetWorkingDirectory({ useSelectedWorkspace: true })}
+                  disabled={isLoading}
+                  style={{
+                    padding: "0.4rem 0.85rem",
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    borderRadius: "var(--radius-sm)",
+                    backgroundColor: "var(--accent-emerald)",
+                    color: "#ffffff",
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(16, 185, 129, 0.35)",
+                  }}
+                >
+                  👉 Set Target to Selected Workspace ({selectedWs.name})
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleSetWorkingDirectory({ autoDetect: true })}
+                disabled={isLoading}
+                style={{
+                  padding: "0.4rem 0.85rem",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  borderRadius: "var(--radius-sm)",
+                  backgroundColor: "rgba(6, 182, 212, 0.2)",
+                  color: "var(--accent-cyan)",
+                  border: "1px solid rgba(6, 182, 212, 0.4)",
+                  cursor: "pointer",
+                }}
+              >
+                🔍 Auto-Detect from Active Window
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingPath(true)}
+                style={{
+                  padding: "0.4rem 0.85rem",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  borderRadius: "var(--radius-sm)",
+                  backgroundColor: "rgba(255, 255, 255, 0.1)",
+                  color: "var(--text-main)",
+                  border: "1px solid var(--border-subtle)",
+                  cursor: "pointer",
+                }}
+              >
+                ✏️ Edit Path Manually
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Action / Success Message */}
+      {actionMessage && !ideState?.errorMessage && (
         <div
           style={{
             padding: "0.75rem 1rem",
             borderRadius: "var(--radius-md)",
             fontSize: "0.85rem",
             marginBottom: "1rem",
-            backgroundColor: ideState?.errorMessage
-              ? "rgba(244, 63, 94, 0.12)"
+            backgroundColor: actionMessage.startsWith("✓")
+              ? "rgba(16, 185, 129, 0.12)"
               : "rgba(99, 102, 241, 0.12)",
             border: `1px solid ${
-              ideState?.errorMessage ? "rgba(244, 63, 94, 0.3)" : "rgba(99, 102, 241, 0.3)"
+              actionMessage.startsWith("✓") ? "rgba(16, 185, 129, 0.3)" : "rgba(99, 102, 241, 0.3)"
             }`,
-            color: ideState?.errorMessage ? "var(--accent-rose)" : "var(--text-main)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
+            color: actionMessage.startsWith("✓") ? "var(--accent-emerald)" : "var(--text-main)",
           }}
         >
-          <div>
-            <strong>{ideState?.errorMessage ? "Connection Alert: " : "Notice: "}</strong>
-            {ideState?.errorMessage || actionMessage}
-          </div>
+          {actionMessage}
         </div>
       )}
 

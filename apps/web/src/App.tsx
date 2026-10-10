@@ -303,6 +303,7 @@ export function App() {
           projectRootPath={project?.rootPath}
           runState={runState}
           onPauseResume={runState === "running" ? handlePause : handleStart}
+          onProjectUpdated={(p) => setProject(p)}
         />
 
         {/* Control Deck Bar */}

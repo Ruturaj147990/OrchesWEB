@@ -43,6 +43,13 @@ export class ProjectRepository {
     stmt.run(status, new Date().toISOString(), id);
   }
 
+  public updateRootPath(id: string, rootPath: string): void {
+    const stmt = this.db.prepare(`
+      UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?
+    `);
+    stmt.run(rootPath, new Date().toISOString(), id);
+  }
+
   private mapRow(row: Record<string, unknown>): Project {
     return {
       id: row.id as string,

@@ -56,6 +56,37 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.status(201).send(created);
   });
 
+  // Update project properties (rootPath, name, objective)
+  fastify.patch<{
+    Params: { projectId: string };
+    Body: { rootPath?: string; name?: string; objective?: string; status?: Project["status"] };
+  }>("/projects/:projectId", async (request, reply) => {
+    const { projectId } = request.params;
+    const project = projectRepo.findById(projectId);
+    if (!project) {
+      return reply.status(404).send({ error: "Project not found" });
+    }
+
+    const body = request.body || {};
+    if (body.rootPath && body.rootPath.trim()) {
+      const canonical = path.normalize(path.resolve(body.rootPath.trim()));
+      projectRepo.updateRootPath(projectId, canonical);
+      project.rootPath = canonical;
+    }
+    if (body.status) {
+      projectRepo.updateStatus(projectId, body.status);
+      project.status = body.status;
+    }
+
+    eventStore.record(projectId, "project.updated", {
+      projectId,
+      rootPath: project.rootPath,
+      status: project.status,
+    });
+
+    return reply.status(200).send(project);
+  });
+
   // Export complete project memory, tasks, verification evidence, and audit events
   fastify.get<{
     Params: { projectId: string };

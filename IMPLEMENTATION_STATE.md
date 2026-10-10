@@ -56,6 +56,12 @@
   - Interactive `IdeConnectionDeck` UI component in dashboard with stage indicators, workspace picker, status badges, and controls.
   - REST API (`/api/v1/ide/*`).
   - 48/48 unit and integration tests passing (10/10 test files). 2/2 Playwright E2E browser tests passing.
+- [x] **OpenAI Key Fast Verification & Persistence + Direct Workspace Directory Sync** (COMPLETED)
+  - Fast probe (<4.5s) to `https://api.openai.com/v1/models` in `SettingsManager.verifyOpenAiKey()`.
+  - Persistent settings storage in `%APPDATA%/AutonomousDevOrchestrator/settings.json` and sync with `.env`.
+  - Pre-populated, editable API key in `ProviderSettingsModal` with dedicated "Quick Verify Key" button and status indicators.
+  - Direct 1-click workspace mismatch resolution controls in `IdeConnectionDeck`: "Set Target to Selected Workspace", "Auto-Detect from Active Window", and in-place manual path editing.
+  - `POST /api/v1/ide/set-working-directory` and `PATCH /api/v1/projects/:projectId` endpoints for live working directory updates.
 
 ---
 

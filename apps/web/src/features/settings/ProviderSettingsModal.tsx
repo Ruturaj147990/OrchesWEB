@@ -13,19 +13,28 @@ export function ProviderSettingsModal({ isOpen, onClose, onProviderChanged }: Pr
   const [model, setModel] = useState<string>("gpt-4o-mini");
   const [hasEnvKey, setHasEnvKey] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
+  const [verifying, setVerifying] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
+  const [verificationStatus, setVerificationStatus] = useState<{ valid: boolean; message: string } | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
     setLoading(true);
     setFeedback(null);
+    setVerificationStatus(null);
     fetch("/api/v1/providers/reasoning")
       .then((res) => res.json())
       .then((data) => {
         setActiveProviderId(data.activeProviderId);
         setSelectedProvider(data.activeProviderId);
         setHasEnvKey(data.hasOpenAiKey);
+        if (data.savedApiKey) {
+          setApiKey(data.savedApiKey);
+        }
+        if (data.savedModel) {
+          setModel(data.savedModel);
+        }
         setLoading(false);
       })
       .catch((err) => {
@@ -33,6 +42,33 @@ export function ProviderSettingsModal({ isOpen, onClose, onProviderChanged }: Pr
         setLoading(false);
       });
   }, [isOpen]);
+
+  const handleQuickVerify = async () => {
+    if (!apiKey.trim()) {
+      setVerificationStatus({ valid: false, message: "Please enter an API key to verify." });
+      return;
+    }
+
+    setVerifying(true);
+    setVerificationStatus(null);
+    try {
+      const res = await fetch("/api/v1/providers/reasoning/verify-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: apiKey.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.valid) {
+        setVerificationStatus({ valid: true, message: "✓ API Key verified successfully! Connected to OpenAI API." });
+      } else {
+        setVerificationStatus({ valid: false, message: `✕ ${data.error || "Verification failed."}` });
+      }
+    } catch (err: unknown) {
+      setVerificationStatus({ valid: false, message: `✕ Network error: ${(err as Error).message}` });
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,9 +93,12 @@ export function ProviderSettingsModal({ isOpen, onClose, onProviderChanged }: Pr
 
       setActiveProviderId(data.activeProviderId);
       setHasEnvKey(data.hasOpenAiKey);
+      if (data.savedApiKey) {
+        setApiKey(data.savedApiKey);
+      }
       setFeedback({
         type: "success",
-        text: `Switched reasoning engine to ${data.activeProvider.displayName} (${data.activeProvider.id === "openai" ? model : "llama3.1:8b"}).`,
+        text: `Switched reasoning engine to ${data.activeProvider.displayName} (${data.activeProvider.id === "openai" ? model : "llama3.1:8b"}). Key saved permanently.`,
       });
 
       if (onProviderChanged) {
@@ -206,25 +245,66 @@ export function ProviderSettingsModal({ isOpen, onClose, onProviderChanged }: Pr
               }}
             >
               <div>
-                <label style={{ display: "block", fontSize: "0.75rem", color: "var(--text-dim)", marginBottom: "0.3rem" }}>
-                  OpenAI API Key {hasEnvKey && <span style={{ color: "var(--accent-emerald)" }}>(Already set in .env)</span>}
-                </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={hasEnvKey ? "•••••••••••••••••••••••••• (Configured via env - enter new key to override)" : "sk-proj-..."}
-                  style={{
-                    width: "100%",
-                    background: "#070a10",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "var(--radius-sm)",
-                    color: "var(--text-main)",
-                    padding: "0.5rem 0.75rem",
-                    fontSize: "0.85rem",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                  <label style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
+                    OpenAI API Key {apiKey && <span style={{ color: "var(--accent-emerald)" }}>(Saved & Persistent)</span>}
+                  </label>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
+                    Editable anytime • Remembered permanently
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      setVerificationStatus(null);
+                    }}
+                    placeholder="sk-proj-..."
+                    style={{
+                      flex: 1,
+                      background: "#070a10",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "var(--radius-sm)",
+                      color: "var(--text-main)",
+                      padding: "0.5rem 0.75rem",
+                      fontSize: "0.85rem",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleQuickVerify}
+                    disabled={verifying || !apiKey.trim()}
+                    style={{
+                      padding: "0.5rem 0.9rem",
+                      fontSize: "0.8rem",
+                      fontWeight: 600,
+                      borderRadius: "var(--radius-sm)",
+                      backgroundColor: "rgba(6, 182, 212, 0.15)",
+                      color: "var(--accent-cyan)",
+                      border: "1px solid rgba(6, 182, 212, 0.3)",
+                      cursor: verifying || !apiKey.trim() ? "not-allowed" : "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {verifying ? "Checking..." : "Quick Verify Key"}
+                  </button>
+                </div>
+
+                {verificationStatus && (
+                  <div
+                    style={{
+                      marginTop: "0.4rem",
+                      fontSize: "0.78rem",
+                      fontWeight: 500,
+                      color: verificationStatus.valid ? "var(--accent-emerald)" : "var(--accent-rose)",
+                    }}
+                  >
+                    {verificationStatus.message}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -267,7 +347,7 @@ export function ProviderSettingsModal({ isOpen, onClose, onProviderChanged }: Pr
               disabled={saving}
               style={{ fontSize: "0.85rem", padding: "0.5rem 1.25rem" }}
             >
-              {saving ? "Switching..." : `Apply & Switch to ${selectedProvider === "openai" ? "OpenAI Cloud" : "Local Ollama"}`}
+              {saving ? "Verifying & Saving..." : `Apply & Switch to ${selectedProvider === "openai" ? "OpenAI Cloud" : "Local Ollama"}`}
             </button>
           </div>
         </form>

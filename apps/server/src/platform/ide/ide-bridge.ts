@@ -51,6 +51,10 @@ export class IdeBridge {
     return { ...this.state };
   }
 
+  public getDetector(): IdeDetector {
+    return this.detector;
+  }
+
   public setMode(mode: IdeExecutionMode): IdeConnectionState {
     this.state.activeMode = mode;
     return this.getState();
