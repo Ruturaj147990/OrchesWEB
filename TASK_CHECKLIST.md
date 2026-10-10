@@ -5,7 +5,7 @@
 - [x] Create root `package.json` with npm workspaces (`apps/*`, `packages/*`).
 - [x] Create `tsconfig.base.json` with TypeScript `strict: true`.
 - [x] Create `packages/shared-types` with initial domain interfaces.
-- [x] Create `apps/server` (Fastify, loopback 127.0.0.1:4317, `/api/v1/health` endpoint, origin/CSRF protection foundation).
+- [x] Create `apps/server` (Fastify/Express, loopback 127.0.0.1:4317, `/api/v1/health` endpoint, origin/CSRF protection foundation).
 - [x] Create `apps/web` (React + Vite + TypeScript, custom design system, dashboard shell).
 - [x] Create `.env.example`, `README.md`, `SECURITY.md`.
 - [x] Add Vitest test runner for server and shared packages; verify unit tests pass.
@@ -18,7 +18,7 @@
 - [x] Implement Project Service & minimal project creation API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/:id`).
 - [x] Implement durable event store and Server-Sent Events (SSE) streaming endpoint (`GET /api/v1/projects/:id/events`) with cursor replay.
 - [x] Implement Run state machine and lifecycle controls (`POST /api/v1/projects/:id/runs`, `pause`, `stop`, `resume`) with idempotency.
-- [x] Build bare control dashboard in `apps/web` showing run state, current task, provider badges, budget usage, and working Start/Pause/Stop controls.
+- [x] Build control dashboard in `apps/web` showing run state, current task, provider badges, budget usage, and working Start/Pause/Stop controls.
 - [x] Run automated tests for persistence, state transitions, event replay, and browser control.
 - [x] Commit Milestone 1 checkpoint.
 
@@ -97,22 +97,16 @@
 - [x] Implement comprehensive unit and integration tests (9/9 passed in `ide-integration.test.ts`).
 - [x] Implement Playwright E2E browser tests (2/2 passed in `e2e/ide-integration.spec.ts` & `e2e/smoke.spec.ts`).
 
-## Master Implementation, Professional Frontend, and End-to-End Validation (Sections 1-22)
-- [x] Full Frontend Redesign: 10 dedicated functional pages (`Overview`, `Projects & Workspaces`, `Runs & Tasks`, `Antigravity IDE`, `Providers & Models`, `Policies & Profiles`, `Git & Recovery`, `Event Timeline`, `Diagnostics & Logs`, `Settings`).
-- [x] Top application bar with breadcrumbs, project selector, workspace status, Antigravity badge, Backend status, active run indicator, light/dark theme toggle.
-- [x] Left navigation sidebar with exact 10 routes, brand identity, project workspace display, active counts, and collapsible drawer.
-- [x] Full Backend Integration: `/api/v1/projects/:projectId/git/*` (status, diff, checkpoint, rollback), `/api/v1/diagnostics`, `RunExecutionService` background loop orchestration.
-- [x] Section 18 Mandatory Real-World Autonomous Coding Test executed in disposable workspace `C:\orchestrator-e2e-test`:
-  - 18 native Antigravity IDE processes detected.
-  - Workspace match confirmed; deliberate mismatch blocked.
-  - Task "Create hello.txt containing Hello World" dispatched via `VisibleIdeAdapter`.
-  - File created on disk and verified with exact content "Hello World".
-  - Independent verification executed via `node verify-hello.js`.
-  - Critic reviewed; deterministic Acceptance Gate approved.
-  - Git checkpoint committed to repository history.
-  - Failure path validated: failing test check rejected, repair attempts exhausted (3 attempts), task stalled safely.
-- [x] Section 19 Release Gate Evaluated: 11 Vitest test suites (50 tests) passing 100%, 2 Playwright E2E suites passing 100%, monorepo build passing 100%.
-- [x] Section 20 Safe Codebase Consolidation: verified zero dead imports, removed redundant duplication, preserved all security barriers and test suites.
-- [x] Section 21 Post-Consolidation Regression Verification: full automated suite executed and confirmed passing.
-
-
+## Single-Destination Dashboard & Unattended Goal Completion (Sections 1-10)
+- [x] Absolute navigation requirement: Zero permanent sidebar. Unified single dashboard at `/`.
+- [x] Compact top header with brand title, project selector (+ Add wizard), live badges (reasoning, agent, workspace match, backend online), dark/light theme toggle, and settings button.
+- [x] Project summary strip: project name, objective, canonical workspace path with copy action, autonomy mode badge.
+- [x] System readiness and run status strip: run status badge, 5-phase lifecycle stepper (Planning -> Execution -> Verification -> Review -> Acceptance), attempts counter, cost ceiling ($0.00 / $10.00), and verifier summary.
+- [x] Two-column main layout: searchable/filterable live activity timeline on the left; active task card, live execution logs, and embedded `IdeConnectionDeck` on the right.
+- [x] Persistent human-direction composer mounted below main grid.
+- [x] Bottom contextual action strip: run controls (Start, Pause, Resume, Stop) and contextual drawer triggers (History, Git & Diff, Diagnostics, Policies, Export).
+- [x] Reusable slideout `Drawer` component with frosted glass backdrop blur and keyboard `Escape` dismiss.
+- [x] Multi-viewport responsive audit across 4 viewports (Desktop 1440×900, Laptop 1280×720, Tablet 1024×768, Mobile 390×844) verified with visual artifacts in `artifacts/ui-audit/iteration-1/`.
+- [x] Deployment Readiness Gate: 12 release criteria evaluated and confirmed in `DEPLOYMENT_READINESS_REPORT.md`.
+- [x] Post-Readiness Codebase Cleanup: safe removal of 8 legacy multi-page sidebar views (1,870 lines of dead code pruned), extraction of centralized web types into `apps/web/src/types.ts`, verified with `CLEANUP_REPORT.md`.
+- [x] Post-cleanup regression verification: 100% passing tests (50/50 Vitest, 4/4 Playwright, monorepo build exits 0).
