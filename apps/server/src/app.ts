@@ -1,5 +1,8 @@
 import fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
+import path from "node:path";
+import fs from "node:fs";
 import { config } from "./config/env.js";
 import { initDb } from "./storage/db.js";
 import { runMigrations } from "./storage/migrations.js";
@@ -8,6 +11,8 @@ import { projectRoutes } from "./api/routes/projects.js";
 import { runRoutes } from "./api/routes/runs.js";
 import { eventRoutes } from "./api/routes/events.js";
 import { blueprintRoutes } from "./api/routes/blueprints.js";
+import { messageRoutes } from "./api/routes/messages.js";
+import { taskRoutes } from "./api/routes/tasks.js";
 
 export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
   // Initialize SQLite database and apply migrations
@@ -37,12 +42,25 @@ export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   });
 
+  // Static artifact serving
+  const artifactsDir = path.join(config.dataDir, "artifacts");
+  if (!fs.existsSync(artifactsDir)) {
+    fs.mkdirSync(artifactsDir, { recursive: true });
+  }
+  await app.register(fastifyStatic, {
+    root: artifactsDir,
+    prefix: "/api/v1/artifacts/",
+    decorateReply: false,
+  });
+
   // Register API routes
   await app.register(healthRoutes, { prefix: "/api/v1" });
   await app.register(projectRoutes, { prefix: "/api/v1" });
   await app.register(runRoutes, { prefix: "/api/v1" });
   await app.register(eventRoutes, { prefix: "/api/v1" });
   await app.register(blueprintRoutes, { prefix: "/api/v1" });
+  await app.register(messageRoutes, { prefix: "/api/v1" });
+  await app.register(taskRoutes, { prefix: "/api/v1" });
 
   return app;
 }

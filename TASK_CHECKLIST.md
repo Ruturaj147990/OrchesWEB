@@ -67,12 +67,12 @@
 - [x] Commit Milestone 5 checkpoint.
 
 ## Milestone 6 — Human Direction and Full Browser/Visual Verification
-- [ ] Implement human direction inbox (`next_task`, `replan`, `safe_interrupt`, approvals/rejections).
-- [ ] Wire safe-boundary interrupts into the execution loop.
-- [ ] Expand BrowserVerifier: desktop/mobile viewports, visual baseline comparison, accessibility smoke checks.
-- [ ] Implement visual evidence review in Critic.
-- [ ] Build task inspector in web UI showing screenshots, code diffs, logs, verifier evidence, and Critic findings.
-- [ ] Commit Milestone 6 checkpoint.
+- [x] Implement human direction inbox (`next_task`, `replan`, `safe_interrupt`, approvals/rejections).
+- [x] Wire safe-boundary interrupts into the execution loop.
+- [x] Expand BrowserVerifier: desktop/mobile viewports, visual baseline comparison, accessibility smoke checks.
+- [x] Implement visual evidence review in Critic.
+- [x] Build task inspector in web UI showing screenshots, code diffs, logs, verifier evidence, and Critic findings.
+- [x] Commit Milestone 6 checkpoint.
 
 ## Milestone 7 — Advanced UI, Export, and Hardening
 - [ ] Implement searchable timeline and logs viewer.

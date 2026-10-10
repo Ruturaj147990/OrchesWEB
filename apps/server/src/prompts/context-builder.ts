@@ -35,15 +35,23 @@ export class ContextBuilder {
     };
   }
 
-  public buildPlannerContext(projectObjective: string, budgetSummary: string): string {
+  public buildPlannerContext(
+    projectObjective: string,
+    budgetSummary: string,
+    humanDirections?: string[]
+  ): string {
     const memory = this.loadProjectMemory();
+    const humanSection = humanDirections && humanDirections.length > 0
+      ? `\n\n=== HUMAN OPERATOR GUIDANCE / DIRECTIONS ===\n${humanDirections.map((d) => `- ${d}`).join("\n")}`
+      : "";
+
     return `
 === PROJECT OBJECTIVE ===
 ${projectObjective}
 
 === BUDGET & CONSTRAINTS ===
 ${budgetSummary}
-
+${humanSection}
 === APPROVED ROADMAP (.orchestrator/ROADMAP.md) ===
 ${memory.roadmap}
 
@@ -58,7 +66,16 @@ ${memory.currentState}
 `.trim();
   }
 
-  public buildExecutorContext(task: Task, attemptNumber: number, priorFailureEvidence?: string): string {
+  public buildExecutorContext(
+    task: Task,
+    attemptNumber: number,
+    priorFailureEvidence?: string,
+    humanDirections?: string[]
+  ): string {
+    const humanSection = humanDirections && humanDirections.length > 0
+      ? `\n\n=== HUMAN OPERATOR GUIDANCE / DIRECTIONS ===\n${humanDirections.map((d) => `- ${d}`).join("\n")}`
+      : "";
+
     return `
 === TASK CONTRACT [Attempt ${attemptNumber}] ===
 Task ID: ${task.id}
@@ -76,8 +93,8 @@ ${task.acceptanceCriteria.map((c) => `- [${c.id}] (${c.verification}) ${c.descri
 
 === MANDATORY VERIFICATION PLAN ===
 ${task.verificationPlan.join("\n")}
-
-${priorFailureEvidence ? `=== PRIOR ATTEMPT FAILURE EVIDENCE ===\n${priorFailureEvidence}` : ""}
+${humanSection}
+${priorFailureEvidence ? `\n=== PRIOR ATTEMPT FAILURE EVIDENCE ===\n${priorFailureEvidence}` : ""}
 `.trim();
   }
 

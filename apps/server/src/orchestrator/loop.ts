@@ -13,6 +13,7 @@ import { BudgetService } from "../domain/budgets/budget-service.js";
 import { EventStore } from "../events/event-store.js";
 import { RunRepository } from "../storage/repositories/run-repository.js";
 import { RunStateMachine } from "./state-machine.js";
+import { InboxService } from "../domain/human-messages/inbox-service.js";
 
 export interface LoopExecutionOptions {
   projectId: string;
@@ -41,6 +42,7 @@ export class AutonomousLoop {
   private eventStore: EventStore;
   private runRepo: RunRepository;
   private stateMachine: RunStateMachine;
+  private inboxService: InboxService;
 
   constructor(
     private db: DatabaseSync,
@@ -57,6 +59,7 @@ export class AutonomousLoop {
     this.eventStore = new EventStore(db);
     this.runRepo = new RunRepository(db);
     this.stateMachine = new RunStateMachine(this.runRepo, this.eventStore);
+    this.inboxService = new InboxService(db, this.eventStore);
   }
 
   public async runSingleTask(options: LoopExecutionOptions): Promise<LoopIterationResult> {
@@ -68,7 +71,22 @@ export class AutonomousLoop {
       return { taskId: "none", status: "stopped", attempts: 0 };
     }
 
-    // 2. Pre-dispatch budget check
+    // 2. Check for pending human messages & safe interrupt
+    const pendingMsgs = this.inboxService.getPendingMessages(projectId);
+    const safeInterrupt = pendingMsgs.find((m) => m.kind === "safe_interrupt");
+    if (safeInterrupt) {
+      this.inboxService.consumePendingMessages(projectId);
+      this.stateMachine.transition(runId, "stopped", `Safe interrupt requested: ${safeInterrupt.content}`);
+      this.eventStore.record(projectId, "run.interrupted", { message: safeInterrupt.content }, runId);
+      return { taskId: "none", status: "stopped", attempts: 0, error: `Safe interrupt: ${safeInterrupt.content}` };
+    }
+
+    const humanDirections = pendingMsgs.map((m) => `[${m.kind.toUpperCase()}] ${m.content}`);
+    if (pendingMsgs.length > 0) {
+      this.inboxService.consumePendingMessages(projectId);
+    }
+
+    // 3. Pre-dispatch budget check
     try {
       this.budgetService.reserveAndCheckPreflight("llama3.1:8b", 4000);
     } catch (err: unknown) {
@@ -77,12 +95,13 @@ export class AutonomousLoop {
       return { taskId: "none", status: "budget_exhausted", attempts: 0, error: (err as Error).message };
     }
 
-    // 3. Planner plans next task linked to approved roadmap
+    // 4. Planner plans next task linked to approved roadmap
     const planOutput = await this.planner.planNextTask(
       projectId,
       "Core feature implementation",
       "Per-task ceiling: $2.00, Run ceiling: $10.00",
-      approvedRoadmapIds
+      approvedRoadmapIds,
+      humanDirections.length > 0 ? humanDirections : undefined
     );
 
     if (planOutput.decision !== "dispatch_task" || !planOutput.next_task) {
@@ -129,11 +148,11 @@ export class AutonomousLoop {
 
     this.eventStore.record(projectId, "task.created", { taskId: task.id, title: task.title }, runId, task.id);
 
-    // 4. Git preflight baseline
+    // 5. Git preflight baseline
     const gitStatus = await this.gitManager.getStatus();
     const baselineCommit = gitStatus.baselineCommit || "HEAD";
 
-    // 5. Execution & Repair Loop
+    // 6. Execution & Repair Loop
     let attemptNumber = 0;
     let priorFailureEvidence: string | undefined = undefined;
 
@@ -142,10 +161,26 @@ export class AutonomousLoop {
       task.attemptCount = attemptNumber;
       task.currentAttemptId = `att-${task.id}-${attemptNumber}`;
 
-      // Check for user stop/pause between attempts
+      // Check for user stop/pause or safe interrupt between attempts
       const currentRun = this.runRepo.findById(runId);
       if (currentRun?.status === "stopped" || currentRun?.status === "paused") {
         return { taskId: task.id, status: "stopped", attempts: attemptNumber };
+      }
+
+      const attemptPending = this.inboxService.getPendingMessages(projectId);
+      const attemptInterrupt = attemptPending.find((m) => m.kind === "safe_interrupt");
+      if (attemptInterrupt) {
+        this.inboxService.consumePendingMessages(projectId);
+        this.stateMachine.transition(runId, "stopped", `Safe interrupt requested: ${attemptInterrupt.content}`);
+        return { taskId: task.id, status: "stopped", attempts: attemptNumber, error: `Safe interrupt: ${attemptInterrupt.content}` };
+      }
+
+      const attemptDirections = [
+        ...humanDirections,
+        ...attemptPending.map((m) => `[${m.kind.toUpperCase()}] ${m.content}`),
+      ];
+      if (attemptPending.length > 0) {
+        this.inboxService.consumePendingMessages(projectId);
       }
 
       this.eventStore.record(projectId, "task.attempt_started", {
@@ -160,8 +195,29 @@ export class AutonomousLoop {
         attemptBranch = await this.gitManager.createAttemptBranch(projectId, task.id, attemptNumber);
       }
 
+      // Persist attempt start
+      this.db.prepare(`
+        INSERT INTO task_attempts (id, task_id, attempt_number, adapter_id, provider_id, model_id, base_commit, task_branch, status, started_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+      `).run(
+        task.currentAttemptId,
+        task.id,
+        attemptNumber,
+        agentAdapter.id,
+        "reasoning-engine",
+        "default-model",
+        baselineCommit,
+        attemptBranch,
+        new Date().toISOString()
+      );
+
       // Build fresh context packet for executor
-      const executorContext = this.contextBuilder.buildExecutorContext(task, attemptNumber, priorFailureEvidence);
+      const executorContext = this.contextBuilder.buildExecutorContext(
+        task,
+        attemptNumber,
+        priorFailureEvidence,
+        attemptDirections.length > 0 ? attemptDirections : undefined
+      );
 
       // Dispatch to coding agent adapter
       const agentReport = await agentAdapter.executeTask(
@@ -177,6 +233,7 @@ export class AutonomousLoop {
       // Handle agent permission denial
       if (agentReport.status === "awaiting_permission") {
         this.db.prepare("UPDATE tasks SET status = 'awaiting_agent_permission' WHERE id = ?").run(task.id);
+        this.db.prepare("UPDATE task_attempts SET status = 'awaiting_permission', ended_at = ? WHERE id = ?").run(new Date().toISOString(), task.currentAttemptId);
         this.eventStore.record(projectId, "approval.required", { taskId: task.id, blockers: agentReport.blockers }, runId, task.id);
         return { taskId: task.id, status: "stalled", attempts: attemptNumber, error: "Awaiting agent permission" };
       }
@@ -219,8 +276,49 @@ export class AutonomousLoop {
         }
       }
 
+      // Persist verification runs
+      const insertVerif = this.db.prepare(`
+        INSERT INTO verification_runs (id, task_id, attempt_id, check_type, command, argv_json, cwd, status, exit_code, duration_ms, output_artifact_id, stdout_snippet, stderr_snippet, truncated, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const vr of verificationResults) {
+        insertVerif.run(
+          vr.id,
+          vr.taskId,
+          vr.attemptId,
+          vr.checkType,
+          vr.command,
+          JSON.stringify(vr.argv),
+          vr.cwd,
+          vr.status,
+          vr.exitCode ?? null,
+          vr.durationMs,
+          vr.outputArtifactId ?? null,
+          vr.stdoutSnippet,
+          vr.stderrSnippet,
+          vr.truncated ? 1 : 0,
+          vr.timestamp
+        );
+      }
+
       // 7. Independent Critic Review
       const criticReview = await this.critic.reviewAttempt(task, diffSummary.diff, verificationResults, agentReport);
+
+      // Persist critic review
+      this.db.prepare(`
+        INSERT INTO critic_reviews (id, task_id, attempt_id, verdict, per_criterion_json, findings_json, repair_instructions_json, rationale, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        `crit-${crypto.randomUUID()}`,
+        task.id,
+        task.currentAttemptId,
+        criticReview.verdict,
+        JSON.stringify(criticReview.criteria),
+        JSON.stringify(criticReview.quality_findings),
+        JSON.stringify(criticReview.repair_instructions),
+        criticReview.rationale,
+        new Date().toISOString()
+      );
 
       // 8. Deterministic Acceptance Gate
       const gateDecision = this.acceptanceGate.evaluate(
@@ -238,6 +336,7 @@ export class AutonomousLoop {
         }
 
         this.db.prepare("UPDATE tasks SET status = 'succeeded', updated_at = ? WHERE id = ?").run(new Date().toISOString(), task.id);
+        this.db.prepare("UPDATE task_attempts SET status = 'succeeded', ended_at = ?, process_exit_code = 0 WHERE id = ?").run(new Date().toISOString(), task.currentAttemptId);
         this.runRepo.incrementIteration(runId);
 
         this.eventStore.record(projectId, "task.completed", {
@@ -255,6 +354,7 @@ export class AutonomousLoop {
       }
 
       // Gate Failed: Prepare for repair or stall
+      this.db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, process_exit_code = 1 WHERE id = ?").run(new Date().toISOString(), task.currentAttemptId);
       priorFailureEvidence = gateDecision.blockers.join("\n");
       this.eventStore.record(projectId, "task.attempt_rejected", {
         taskId: task.id,

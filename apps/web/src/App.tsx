@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ProjectWizard } from "./features/wizard/ProjectWizard";
+import { TaskInspector } from "./features/tasks/TaskInspector";
+import { HumanDirectionBar } from "./features/inbox/HumanDirectionBar";
 
 interface HealthData {
   status: string;
@@ -31,6 +33,8 @@ export function App() {
   const [activeRun, setActiveRun] = useState<RunData | null>(null);
   const [runState, setRunState] = useState<"ready" | "running" | "paused" | "stopped">("ready");
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [inspectingTaskId, setInspectingTaskId] = useState<string | null>("task-0001");
   const [activeTask, setActiveTask] = useState<{ id: string; title: string; status: string } | null>({
     id: "task-0001",
     title: "Project Initialization & Verification Gates",
@@ -278,12 +282,33 @@ export function App() {
           </div>
         </div>
 
+        {/* Human Direction & Operator Inbox Bar */}
+        <HumanDirectionBar
+          projectId={project?.id || null}
+          onSafeInterruptTriggered={handlePause}
+        />
+
         {/* Dashboard Grid */}
         <div className="dashboard-grid">
           {/* Active Task & Verification Summary */}
           <div className="glass-card">
             <div className="card-header">
-              <h2 className="card-title">Active Task & Verification</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 className="card-title">Active Task & Verification</h2>
+                <button
+                  id="btn-inspect-task"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    if (activeTask) {
+                      setInspectingTaskId(activeTask.id);
+                      setIsInspectorOpen(true);
+                    }
+                  }}
+                  style={{ fontSize: "0.75rem", padding: "0.2rem 0.5rem" }}
+                >
+                  🔍 Inspect Evidence
+                </button>
+              </div>
               <span className="badge">{activeTask ? activeTask.status : "Idle"}</span>
             </div>
 
@@ -381,6 +406,13 @@ export function App() {
             ))}
           </div>
         </div>
+
+        {/* Task Evidence & Verification Inspector Modal */}
+        <TaskInspector
+          isOpen={isInspectorOpen}
+          onClose={() => setIsInspectorOpen(false)}
+          taskId={inspectingTaskId}
+        />
       </main>
     </>
   );

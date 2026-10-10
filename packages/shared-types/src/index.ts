@@ -358,7 +358,7 @@ export const HumanMessageSchema = z.object({
   createdAt: z.string(),
   consumedAt: z.string().nullable().default(null),
 });
-export type HumanMessage = z.infer<typeof HumanMessageKindSchema>;
+export type HumanMessage = z.infer<typeof HumanMessageSchema>;
 
 // --- Events (Durable SSE Event Log) ---
 export const RunEventSchema = z.object({

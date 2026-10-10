@@ -23,9 +23,10 @@ export class PlannerService {
     projectId: string,
     objective: string,
     budgetSummary: string,
-    approvedRoadmapIds: string[]
+    approvedRoadmapIds: string[],
+    humanDirections?: string[]
   ): Promise<PlannerOutput> {
-    const context = this.contextBuilder.buildPlannerContext(objective, budgetSummary);
+    const context = this.contextBuilder.buildPlannerContext(objective, budgetSummary, humanDirections);
 
     const prompt = `
 Please propose the next task for project ${projectId}.

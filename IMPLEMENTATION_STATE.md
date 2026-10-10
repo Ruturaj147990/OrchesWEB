@@ -1,8 +1,8 @@
 # Autonomous Development Orchestrator — Implementation State
 
-**Current Milestone:** Milestone 6 — Human direction and full browser/visual verification (IN PROGRESS)  
+**Current Milestone:** Milestone 7 — Advanced UI, Export, and Hardening (IN PROGRESS)  
 **Last Updated:** 2026-10-10  
-**Overall Status:** Milestones 0, 1, 2, 3, 4, and 5 Complete. Executing Milestone 6.
+**Overall Status:** Milestones 0 through 6 Complete. Executing Milestone 7 (Final Milestone).
 
 ---
 
@@ -32,32 +32,47 @@
   - `RequirementExtractor` with provenance tagging (explicit vs inferred) and approval workflow.
   - Contradiction detection engine in `PolicyEngine`.
   - 29/29 tests passing.
-- [ ] **Milestone 6 — Human direction and full browser/visual verification** (IN PROGRESS)
-  - Direction inbox with `next_task`, `replan`, `safe_interrupt`, approval/rejection, pause, and stop semantics.
+- [x] **Milestone 6 — Human direction and full browser/visual verification** (COMPLETED)
+  - Direction inbox with `guidance`, `replan`, `safe_interrupt`, and `priority_override` kinds.
   - Safe-boundary interrupt integration into execution loop.
-  - BrowserVerifier multi-viewport evidence (desktop `1440x900` & mobile `390x844`), console/network failure capture, screenshot linking.
-  - Task inspector in web UI showing screenshots, code diffs, logs, verifier evidence, and Critic findings.
-- [ ] **Milestone 7 — Advanced UI, export, and hardening**
+  - Dynamic injection of human operator steering into Planner and Executor prompts via `ContextBuilder`.
+  - Verifier check persistence, exit codes, output snippets, and Critic review records.
+  - Playwright visual artifacts served via `/api/v1/artifacts/`.
+  - Task Inspector UI in React (`TaskInspector.tsx`) with verifier outputs, screenshot gallery, Critic reviews, and attempt history.
+  - Operator Inbox Bar in React (`HumanDirectionBar.tsx`) with priority selection and message cancellation.
+  - 34/34 tests passing.
+- [ ] **Milestone 7 — Advanced UI, export, and hardening** (IN PROGRESS)
+  - Project memory and run report export bundle (`GET /api/v1/projects/:projectId/export`).
+  - Searchable timeline and event stream log filters in dashboard.
+  - Security hardening audit (loopback-only binding, path traversal guards, secret redaction).
+  - Final end-to-end verification, documentation, and completion report.
 
 ---
 
-## 2. Completed Work
-- Implemented `BlueprintImporter` supporting `.md`, `.txt`, `.json`, `.yaml`, `.pdf`, `.docx` with 10MB limit and SHA-256 tracking.
-- Implemented `RequirementExtractor` parsing candidate requirements with provenance and explicit/inferred categorization.
-- Implemented blueprint import and requirement approval REST endpoints (`/api/v1/projects/:projectId/blueprints`, `/requirements`).
-- Built 6-step interactive `ProjectWizard` modal in React.
-- Verified all 29 unit and integration tests and Playwright E2E.
+## 2. Completed Work (Milestone 6)
+- Implemented `InboxService` managing human messages with priorities, consumption tracking, and cancellation.
+- Integrated `InboxService` into `AutonomousLoop`: checks for safe interrupts at run start and attempt boundaries, halting cleanly without process orphans.
+- Wired pending operator guidance into `ContextBuilder` for both Planner and Executor prompt packages.
+- Added REST routes in `messages.ts` and `tasks.ts` for human message submission/listing/cancellation and full task inspection.
+- Registered static artifact serving via `@fastify/static` for dual-viewport Playwright screenshots.
+- Built interactive `TaskInspector` modal and `HumanDirectionBar` in React.
+- Wrote and passed comprehensive unit/integration test suite in `milestone6.test.ts`.
 
 ---
 
 ## 3. Changed Files
-- `apps/server/src/domain/blueprints/importer.ts`
-- `apps/server/src/domain/blueprints/requirement-extractor.ts`
-- `apps/server/src/api/routes/blueprints.ts`
+- `apps/server/src/domain/human-messages/inbox-service.ts`
+- `apps/server/src/prompts/context-builder.ts`
+- `apps/server/src/orchestrator/planner.ts`
+- `apps/server/src/orchestrator/loop.ts`
+- `apps/server/src/api/routes/messages.ts`
+- `apps/server/src/api/routes/tasks.ts`
 - `apps/server/src/app.ts`
-- `apps/server/tests/milestone5.test.ts`
-- `apps/web/src/features/wizard/ProjectWizard.tsx`
+- `packages/shared-types/src/index.ts`
+- `apps/web/src/features/tasks/TaskInspector.tsx`
+- `apps/web/src/features/inbox/HumanDirectionBar.tsx`
 - `apps/web/src/App.tsx`
+- `apps/server/tests/milestone6.test.ts`
 - `TASK_CHECKLIST.md`
 - `IMPLEMENTATION_STATE.md`
 
@@ -65,14 +80,14 @@
 
 ## 4. Actual Test Results
 - `npm run build`: Exit Code 0.
-- `npm test`: 7 test files, 29 passed, 0 failed (1.62s).
-- `npx playwright test`: 1 passed (2.8s).
+- `npm test`: 8 test files, 34 passed, 0 failed (1.63s).
+- `npx playwright test`: 1 passed (5.7s).
 
 ---
 
 ## 5. Architectural Decisions
-1. **Untrusted Input Boundary**: Blueprint content is treated purely as untrusted project data and cannot modify platform safety rules, spend limits, or privacy classifications.
-2. **Provenance Traceability**: Extracted requirements explicitly cite their source file and line number.
+1. **Operator Precedence**: Urgent human messages (`safe_interrupt`) supersede automated task dispatch and cause immediate transition to `stopped`/`paused` before spawning model processes or child tools.
+2. **Deterministic Evidence Persistence**: All verification runs (lint, unit tests, Playwright checks) are recorded directly into SQLite with explicit exit codes, command invocations, duration, and output snippets.
 
 ---
 
@@ -81,16 +96,15 @@
 
 ---
 
-## 7. Exact Next Steps for Milestone 6
-1. Build Human Direction Inbox Service in `apps/server/src/domain/human-messages/inbox-service.ts`:
-   - Enqueues directions with kinds: `guidance`, `replan`, `safe_interrupt`, `priority_override`.
-   - Incorporates unconsumed directions into the next safe task context.
-   - Immediate safe interruption when marked `urgent` / `safe_interrupt`.
-2. Connect Inbox API routes: `POST /api/v1/projects/:projectId/messages`, `GET /api/v1/projects/:projectId/messages`.
-3. Build Task Inspector in `apps/web/src/features/tasks/TaskInspector.tsx`:
-   - Diffs viewer.
-   - Verification evidence table with exit codes and execution times.
-   - Screenshot gallery with desktop and mobile viewport tabs.
-   - Independent Critic review findings and rationale.
-4. Add Human Direction Inbox input bar on dashboard UI.
-5. Write unit and integration tests for human direction consumption, safe interrupts, and UI evidence linking.
+## 7. Exact Next Steps for Milestone 7
+1. Implement Project Export Endpoint in `apps/server/src/api/routes/projects.ts`:
+   - `GET /api/v1/projects/:projectId/export`: packages project metadata, canonical spec, roadmap, task history, decisions, budget counters, and event log into a downloadable JSON/zip/markdown bundle.
+2. Implement Searchable Event Timeline & Filter in `apps/web/src/App.tsx`:
+   - Text search query and type filter (e.g., all, errors, verifications, tasks, budget).
+3. Conduct Security Hardening & Loopback Verification:
+   - Ensure strict rejection of non-loopback IPs and foreign host headers.
+   - Verify sensitive credential masking (`sk-...`, `.env`).
+4. Update `README.md` with complete architecture, run instructions, and verification guide.
+5. Execute full regression test suite (`npm run build`, `npm test`, `npx playwright test`).
+6. Final Git checkpoint commit and factual completion report.
+
