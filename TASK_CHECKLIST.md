@@ -23,15 +23,15 @@
 - [x] Commit Milestone 1 checkpoint.
 
 ## Milestone 2 — Minimum Real Provider and Coding-Agent Adapters
-- [ ] Create normalized `ReasoningProvider` interface and provider registry.
-- [ ] Implement OpenAI API provider adapter.
-- [ ] Implement OpenAI-compatible local endpoint adapter (Ollama/llama.cpp/vLLM) with Local-only enforcement (no silent fallback).
-- [ ] Implement official Antigravity CLI adapter (`agy` capability probe, headless invocation, event parsing, safe timeout/cancellation).
-- [ ] Implement deterministic `MockAgentAdapter` for reliable automated testing.
-- [ ] Define and implement strict Zod schemas for Planner output, Executor task context & response, and Critic review.
-- [ ] Implement preliminary token/usage tracker and budget enforcement hooks.
-- [ ] Run provider and adapter test suite.
-- [ ] Commit Milestone 2 checkpoint.
+- [x] Create normalized `ReasoningProvider` interface and provider registry.
+- [x] Implement OpenAI API provider adapter.
+- [x] Implement OpenAI-compatible local endpoint adapter (Ollama/llama.cpp/vLLM) with Local-only enforcement (no silent fallback).
+- [x] Implement official Antigravity CLI adapter (`agy` capability probe, headless invocation, event parsing, safe timeout/cancellation).
+- [x] Implement deterministic `MockAgentAdapter` for reliable automated testing.
+- [x] Define and implement strict Zod schemas for Planner output, Executor task context & response, and Critic review.
+- [x] Implement preliminary token/usage tracker and budget enforcement hooks.
+- [x] Run provider and adapter test suite.
+- [x] Commit Milestone 2 checkpoint.
 
 ## Milestone 3 — Early Autonomous Vertical Slice (Mandatory Proof Point)
 - [ ] Implement compact Planner context builder (`SPEC.md`, `DECISIONS.md`, `ROADMAP.md`, `REPO_MAP.md`, current state, budget).
