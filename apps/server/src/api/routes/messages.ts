@@ -5,9 +5,11 @@ import { InboxService } from "../../domain/human-messages/inbox-service.js";
 import { EventStore } from "../../events/event-store.js";
 import { getDb } from "../../storage/db.js";
 
+// Guidance is the only message kind the pipeline acts on (it is added to the next attempt's
+// prompt). Stopping a run is done with POST /runs/:id/stop, which actually cancels work.
 const CreateMessageSchema = z.object({
-  kind: HumanMessageKindSchema,
-  content: z.string().min(1),
+  kind: HumanMessageKindSchema.extract(["guidance"]).optional().default("guidance"),
+  content: z.string().trim().min(1).max(4000),
   priority: z.enum(["low", "normal", "high", "urgent"]).optional().default("normal"),
 });
 

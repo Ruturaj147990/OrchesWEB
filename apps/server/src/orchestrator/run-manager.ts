@@ -13,6 +13,7 @@ import { CodingAgentAdapter } from "../providers/coding-agents/adapter.js";
 import { getActiveProvider } from "../providers/reasoning/registry.js";
 import { resolveCodingAgent } from "../providers/coding-agents/registry.js";
 import { SettingsManager } from "../platform/settings-manager.js";
+import { validateWorkspaceRoot, forbiddenWorkspaceRoots } from "../workspace/path-safety.js";
 
 export interface RunManagerOverrides {
   /** Tests inject deterministic providers/agents; production resolves them from settings. */
@@ -54,6 +55,9 @@ export class RunManager {
     if (text.length < 3) throw new RunStartError("Describe the task to run.");
     if (text.length > 20_000) throw new RunStartError("Task description is too long (20,000 characters max).");
     if (!fs.existsSync(project.rootPath)) throw new RunStartError(`Workspace folder not found: ${project.rootPath}`);
+    // Re-validated at every start: projects saved by older versions may point at unsafe folders.
+    const rootCheck = validateWorkspaceRoot(project.rootPath, forbiddenWorkspaceRoots());
+    if (!rootCheck.ok) throw new RunStartError(`This project's folder cannot be used: ${rootCheck.reason} Edit the project to choose another folder.`);
 
     const existing = this.runs.findActiveByProjectId(projectId);
     if (existing) throw new RunStartError("A run is already in progress for this project. Stop it before starting another.", 409);

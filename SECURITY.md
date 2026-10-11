@@ -1,25 +1,41 @@
-# Security & Privacy Policy
+# Security model
 
-## 1. Loopback-Only By Default
-The Autonomous Development Orchestrator is designed as a local-first application. By default, the Fastify HTTP server binds exclusively to `127.0.0.1` (loopback). It does not listen on public interfaces (`0.0.0.0`) and rejects external connections.
+Orches changes files on your machine based on language-model output, so it treats that output as untrusted
+and keeps the blast radius to one folder you chose. This document describes what is actually enforced.
 
-## 2. Cross-Origin Mutation & CSRF Protection
-- Origin headers are strictly checked against configured loopback origins.
-- State-mutating requests (POST, PATCH, DELETE) require a valid local session token.
-- Web browser access is restricted to localhost/127.0.0.1.
+## Network exposure
+- The server binds to `127.0.0.1` by default.
+- Requests whose `Host` header is not `127.0.0.1`/`localhost`/`[::1]` are refused (DNS-rebinding protection).
+- Browser requests from non-loopback origins are rejected by CORS.
+- There is no login: anything that can reach the loopback port can use the API. Do not expose the port
+  (for example via `ORCHESTRATOR_HOST=0.0.0.0` or a tunnel) on shared machines.
 
-## 3. Provider Privacy Boundaries
-- **Cloud Reasoning:** When enabled, prompts are transmitted to the OpenAI API over HTTPS. Never place secrets, private keys, or passwords in prompts.
-- **Local-Only Reasoning:** Project Brain operations call only the locally configured HTTP endpoint (Ollama, llama.cpp, vLLM). No silent cloud fallback is permitted.
-- **Privacy Labeling:** The application independently labels the privacy status of the reasoning provider and coding agent. Using Antigravity with a remote service while using local reasoning is marked as **Hybrid/Remote**, never falsely advertised as "End-to-End Offline".
+## Workspace confinement
+- A project's folder must be an absolute path to an existing (or explicitly created) directory. Drive roots,
+  your home folder itself, system folders, and the orchestrator's own install and data folders are refused.
+- Every path proposed by a model is resolved by `workspace/path-safety.ts`: absolute paths are accepted only
+  when they point inside the workspace, `..` traversal is rejected, Windows device names and invalid
+  characters are rejected, and writes through symlinks/junctions that leave the workspace are refused.
+- `.git`, `.orchestrator`, `.env*` (except `.env.example`-style templates) and key files (`.pem`, `.key`, …)
+  can never be written by the built-in coder, and any change to them fails the acceptance gate.
 
-## 4. Child Process & Execution Isolation
-- Child processes are invoked using `child_process.spawn` with `shell: false` and explicit argument arrays.
-- Model prose is untrusted and never directly evaluated in shell contexts.
-- Pre-approved command allowlists govern verification commands.
-- Verification outputs and logs are bounded to prevent denial-of-service via unbounded log creation.
+## Changes are reversible
+- Before a run touches anything, a snapshot of the workspace is stored **outside** the workspace (in the
+  data directory). A rejected, cancelled or crashed run restores exactly the files it changed; the discarded
+  versions are kept in a backup folder rather than deleted.
+- The orchestrator never switches, creates, resets or deletes Git branches. In a clean repository it commits
+  only the accepted files on the current branch; in a repository with uncommitted work it commits nothing.
 
-## 5. Secret Handling & Redaction
-- API keys are stored in backend environment configuration or secure OS-level data files.
-- Keys are never echoed back in API responses or SSE streams (only masked suffixes are displayed).
-- Automated regex and entropy scanners redact credentials and tokens prior to persisting run artifacts.
+## Command execution
+- Verification commands come from the project (npm scripts, pytest/unittest, `go test`, `cargo test`) or from
+  commands **you** typed into the project settings. Model output is never executed.
+- Commands run with argument vectors; `cmd.exe` is used only for `.cmd` shims, with metacharacters rejected.
+- Every process has a timeout and is killed with its whole process tree on timeout or Stop.
+
+## Secrets
+- The OpenAI key is read from `OPENAI_API_KEY` or stored in `settings.json` inside the data directory
+  (plain text, protected only by your user account's file permissions). It is never returned by the API
+  (only a masked form) and is not passed to verification processes.
+- Event payloads (logs shown in the dashboard and stored in the database) pass through a secret redactor.
+- Local providers never fall back to a cloud provider. When OpenAI is selected, task text, project file
+  excerpts and diffs are sent to OpenAI.

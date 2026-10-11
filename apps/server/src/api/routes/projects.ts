@@ -8,11 +8,9 @@ import { ProjectRepository } from "../../storage/repositories/project-repository
 import { RunRepository } from "../../storage/repositories/run-repository.js";
 import { EventStore } from "../../events/event-store.js";
 import { getDb } from "../../storage/db.js";
-import { validateWorkspaceRoot } from "../../workspace/path-safety.js";
+import { validateWorkspaceRoot, forbiddenWorkspaceRoots } from "../../workspace/path-safety.js";
 import { inspectProject } from "../../workspace/project-inspector.js";
 import { GitManager } from "../../git/git-manager.js";
-import { SettingsManager } from "../../platform/settings-manager.js";
-import { ORCHESTRATOR_ROOT } from "../../config/env.js";
 
 const CreateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -28,10 +26,6 @@ const UpdateProjectSchema = z.object({
   verificationCommands: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
   autoCommit: z.boolean().optional(),
 });
-
-export function forbiddenWorkspaceRoots(): string[] {
-  return [ORCHESTRATOR_ROOT, SettingsManager.getDataDir()];
-}
 
 export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   const db = getDb();

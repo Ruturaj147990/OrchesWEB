@@ -2,7 +2,7 @@
   "name": "autonomous-development-orchestrator",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first autonomous development orchestrator coordinating project reasoning brain and coding agent",
+  "description": "Local-first development orchestrator: plans a task with a reasoning model, applies code changes inside one workspace folder, verifies them with the project's own checks, and keeps them only if they hold up.",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -15,9 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "dev:server": "npm run dev --workspace=apps/server",
+    "dev": "npm run build:packages && npm run build --workspace=apps/web && tsx apps/server/src/server.ts",
     "dev:web": "npm run dev --workspace=apps/web",
-    "dev": "npm run build:packages && tsx apps/server/src/server.ts",
     "start": "npm run build && node apps/server/dist/server.js"
   },
   "devDependencies": {

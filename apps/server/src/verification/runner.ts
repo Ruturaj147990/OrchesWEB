@@ -20,6 +20,15 @@ export interface CheckResult {
 
 const OUTPUT_TAIL = 6000;
 
+/** The orchestrator's own credentials must not leak into project code run as a check. */
+export function scrubbedEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^(OPENAI_API_KEY|ANTHROPIC_API_KEY|ORCHESTRATOR_.*)$/i.test(key)) delete env[key];
+  }
+  return env;
+}
+
 function tail(text: string): string {
   return text.length > OUTPUT_TAIL ? text.slice(text.length - OUTPUT_TAIL) : text;
 }
@@ -29,7 +38,7 @@ export async function runCheck(
   check: PlannedCheck,
   opts: { signal?: AbortSignal; onLog?: (line: string) => void } = {}
 ): Promise<CheckResult> {
-  const env = { ...process.env, CI: "true", PYTHONDONTWRITEBYTECODE: "1", FORCE_COLOR: "0", NO_COLOR: "1" };
+  const env = { ...scrubbedEnv(), CI: "true", PYTHONDONTWRITEBYTECODE: "1", FORCE_COLOR: "0", NO_COLOR: "1" };
   const runOpts = { cwd: rootPath, timeoutMs: check.timeoutMs, signal: opts.signal, env };
   const res = check.shellCommand
     ? await runShellCommand(check.shellCommand, runOpts)

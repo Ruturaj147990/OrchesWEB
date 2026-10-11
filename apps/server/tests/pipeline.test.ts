@@ -273,6 +273,16 @@ describe("projects API safety", () => {
     removeDir(parent);
   });
 
+  it("refuses to run a legacy project whose folder is the orchestrator itself", async () => {
+    const now = new Date().toISOString();
+    getDb()
+      .prepare("INSERT INTO projects (id, name, objective, root_path, status, created_at, updated_at) VALUES (?, ?, '', ?, 'ready', ?, ?)")
+      .run("proj-legacy", "Legacy self", ORCHESTRATOR_ROOT, now, now);
+    const res = await app.inject({ method: "POST", url: "/api/v1/projects/proj-legacy/runs", payload: { task: "do something" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/cannot be used/);
+  });
+
   it("allows only one active run per project and validates the task text", async () => {
     const provider = new ScriptedProvider().enqueue("task_planning", hangUntilAborted);
     const local = await makeApp({ provider, agent: (p) => new BuiltinCoderAdapter(p) });

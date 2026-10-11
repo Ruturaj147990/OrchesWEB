@@ -192,3 +192,23 @@ describe("process runner", () => {
     expect(res.stdout.trim()).toBe("42");
   });
 });
+
+describe("verification environment", () => {
+  it("does not pass the orchestrator's API keys to project checks", async () => {
+    const { runCheck } = await import("../src/verification/runner.js");
+    process.env.OPENAI_API_KEY = "sk-should-not-leak-0123456789";
+    try {
+      const res = await runCheck(process.cwd(), {
+        id: "env",
+        kind: "test",
+        label: "print env",
+        argv: [process.execPath, "-e", "console.log(process.env.OPENAI_API_KEY ? 'LEAKED' : 'clean')"],
+        source: "test",
+        timeoutMs: 20_000,
+      });
+      expect(res.output.trim()).toBe("clean");
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+    }
+  });
+});

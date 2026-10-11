@@ -1,5 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ORCHESTRATOR_ROOT } from "../config/env.js";
+import { SettingsManager } from "../platform/settings-manager.js";
+
+/** Folders a project may never point at (or contain): this installation and its data directory. */
+export function forbiddenWorkspaceRoots(): string[] {
+  return [ORCHESTRATOR_ROOT, SettingsManager.getDataDir()];
+}
 
 export type PathResolution =
   | { ok: true; relPath: string; absPath: string }
