@@ -37,6 +37,7 @@ export async function planTask(
     projectId: string;
     runId: string;
     taskText: string;
+    projectObjective?: string;
     workspacePath: string;
     profile: ProjectProfile;
     profileDefinition?: ProjectProfileDefinition;
@@ -46,6 +47,10 @@ export async function planTask(
   }
 ): Promise<TaskPlan> {
   const files = projectFileList(input.workspacePath, 200);
+
+  const objectiveNote = input.projectObjective?.trim()
+    ? `\nPROJECT SPECIFICATION & INSTRUCTIONS (Universal Guidelines):\n${input.projectObjective.trim()}`
+    : "";
 
   const profileNote = input.profileDefinition
     ? `\nPROJECT PROFILE: ${input.profileDefinition.name} (${input.profileDefinition.description})\nFocus areas: ${input.profileDefinition.focusAreas.join(", ")}`
@@ -60,6 +65,7 @@ export async function planTask(
 
   const prompt = `TASK FROM THE USER:
 ${input.taskText.trim()}
+${objectiveNote}
 ${profileNote}
 ${blueprintNote}
 

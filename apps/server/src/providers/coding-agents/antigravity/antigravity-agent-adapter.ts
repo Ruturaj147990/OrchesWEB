@@ -14,7 +14,7 @@ function summarizeCall(tool: string, args: Record<string, unknown>): string {
   return [tool, target ?? cmd ?? "", desc ? `— ${desc}` : ""].filter(Boolean).join(" ").slice(0, 300);
 }
 
-export function transcriptFrom(t: AgentTrajectory | null, state: AgentTranscript["state"], workspaceRoot: string): AgentTranscript {
+export function transcriptFrom(t: AgentTrajectory | null, state: AgentTranscript["state"], workspaceRoot: string, submittedPrompt?: string): AgentTranscript {
   const writesOutside: string[] = [];
   for (const c of t?.toolCalls ?? []) {
     if (!WRITE_TOOLS.test(c.tool)) continue;
@@ -29,7 +29,7 @@ export function transcriptFrom(t: AgentTrajectory | null, state: AgentTranscript
     finalReply: t?.finalReply ?? "",
     toolCalls: (t?.toolCalls ?? []).map((c) => ({ tool: c.tool, summary: summarizeCall(c.tool, c.args) })),
     writesOutsideWorkspace: [...new Set(writesOutside)],
-    prompt: t?.prompt ?? "",
+    prompt: t?.prompt || submittedPrompt || "",
   };
 }
 
@@ -117,7 +117,7 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
         trajectory = settle.trajectory ?? trajectory;
         if (settle.state !== "finished") result.warnings.push("The Antigravity Agent may still be running; it could change files after Orches rolled them back.");
       }
-      result.transcript = transcriptFrom(trajectory, state, input.workspacePath);
+      result.transcript = transcriptFrom(trajectory, state, input.workspacePath, prompt);
       for (const w of result.transcript.writesOutsideWorkspace) result.warnings.push(`Antigravity Agent wrote outside the workspace: ${w}`);
       result.filesWritten = (trajectory?.toolCalls ?? [])
         .filter((c) => WRITE_TOOLS.test(c.tool))

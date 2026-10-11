@@ -43,12 +43,12 @@ export function formatEvent(ev: RunEvent): Line | null {
         text: `[iteration ${p.attempt}] Antigravity Agent ${p.state} (${(p.toolCalls ?? []).length} actions): ${String(p.finalReply ?? "").replace(/\s+/g, " ").slice(0, 400) || "(no reply)"}`,
       };
     case "attempt.started":
-      return { ...base, level: "info", text: `Attempt ${p.attempt} of ${p.maxAttempts} started` };
+      return { ...base, level: "info", text: `Iteration ${p.attempt} of ${p.maxAttempts} started` };
     case "attempt.evaluated":
       return {
         ...base,
         level: p.accepted ? "success" : "warn",
-        text: p.accepted ? `Attempt ${p.attempt} accepted (${p.outcome})` : `Attempt ${p.attempt} rejected: ${(p.blockers ?? []).join(" · ")}`,
+        text: p.accepted ? `Iteration ${p.attempt} accepted (${p.outcome})` : `Iteration ${p.attempt} rejected: ${(p.blockers ?? []).join(" · ")}`,
       };
     case "attempt.rolled_back": {
       const n = (p.restored?.length ?? 0) + (p.removed?.length ?? 0);

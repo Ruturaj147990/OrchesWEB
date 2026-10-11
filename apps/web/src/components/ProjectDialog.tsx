@@ -26,6 +26,7 @@ const DEFAULT_PROFILES: Array<{ id: string; name: string; description: string }>
 export function ProjectDialog({ project, onClose, onSaved, onRemoved }: Props) {
   const editing = Boolean(project);
   const [name, setName] = useState(project?.name ?? "");
+  const [objective, setObjective] = useState(project?.objective ?? "");
   const [rootPath, setRootPath] = useState(project?.rootPath ?? "");
   const [profileId, setProfileId] = useState(project?.profileId ?? "general");
   const [autonomyMode, setAutonomyMode] = useState<AutonomyMode>(project?.autonomyMode ?? "creative_within_constraints");
@@ -60,6 +61,7 @@ export function ProjectDialog({ project, onClose, onSaved, onRemoved }: Props) {
       const saved = editing
         ? await api.updateProject(project!.id, {
             name: derivedName,
+            objective,
             ...(rootPath.trim() !== project!.rootPath ? { rootPath: rootPath.trim() } : {}),
             profileId,
             autonomyMode,
@@ -68,6 +70,7 @@ export function ProjectDialog({ project, onClose, onSaved, onRemoved }: Props) {
           })
         : await api.createProject({
             name: derivedName,
+            objective,
             rootPath: rootPath.trim(),
             createFolder,
             profileId,
@@ -136,6 +139,26 @@ export function ProjectDialog({ project, onClose, onSaved, onRemoved }: Props) {
         <label className="field">
           <span>Name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Defaults to the folder name" />
+        </label>
+
+        <label className="field">
+          <span>Project Specification & Instructions</span>
+          <textarea
+            value={objective}
+            onChange={(e) => setObjective(e.target.value)}
+            rows={7}
+            spellCheck={false}
+            placeholder={`Enter any combination of:
+• High-level ideas or comprehensive project specifications
+• Mandatory tech stack, required libraries, exact versions, and forbidden frameworks
+• Architecture patterns, API endpoints, contracts, schemas, and data models
+• UI/UX expectations, design system rules, accessibility, responsive behavior
+• Coding standards, test runner commands, and strict acceptance criteria
+• Large AI prompts from ChatGPT or other models`}
+          />
+          <small>
+            Universal specification and instructions. Preserves formatting, Markdown, code blocks, and strict rules across all tasks and repair iterations.
+          </small>
         </label>
 
         <label className="field">

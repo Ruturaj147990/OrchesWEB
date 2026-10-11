@@ -69,7 +69,7 @@ export class SettingsManager {
         if (typeof raw.localTimeoutMs === "number" && raw.localTimeoutMs > 0) settings.localTimeoutMs = raw.localTimeoutMs;
         if (typeof raw.localContextTokens === "number" && raw.localContextTokens > 0) settings.localContextTokens = raw.localContextTokens;
         if (typeof raw.codingAgentId === "string" && raw.codingAgentId) settings.codingAgentId = raw.codingAgentId;
-        if (typeof raw.maxAttempts === "number" && raw.maxAttempts >= 1 && raw.maxAttempts <= 8) settings.maxAttempts = Math.round(raw.maxAttempts);
+        if (typeof raw.maxAttempts === "number" && raw.maxAttempts >= 1 && raw.maxAttempts <= 30) settings.maxAttempts = Math.round(raw.maxAttempts);
       } catch (err) {
         console.error(`[settings] Ignoring unreadable ${file}: ${(err as Error).message}`);
       }

@@ -296,3 +296,243 @@ describe("Blueprint Integration and Iteration Preservation", () => {
     expect(prompts[1]).toContain("Iteration 1");
   });
 });
+
+describe("Semantic Quality Gate: Rejection of Shallow Meta-Prompts & Substantive Synthesis", () => {
+  it("rejects a shallow meta-prompt and synthesizes a full substantive engineering brief for Library Management System", async () => {
+    const provider = new ScriptedProvider();
+    provider.enqueue("repair_diagnosis", () => {
+      // Return the exact shallow meta-instruction that previously affected the application
+      return JSON.stringify({
+        action: "instruct",
+        instruction: "Construct a comprehensive Markdown Engineering Brief for the Antigravity Agent to implement the Library Management System, adhering to project guidelines and constraints.",
+        rationale: "Delegated brief creation to agent",
+      });
+    });
+
+    const brief = await composeInstruction(provider, {
+      projectId: "proj-lib-1",
+      runId: "run-lib-1",
+      taskText: "Library Management System",
+      criteria: ["Book checkout and return functional", "Overdue calculations correct"],
+      profile: dummyWorkspace,
+      files: ["app.py", "models.py"],
+      iteration: 1,
+      maxIterations: 4,
+      history: [],
+    });
+
+    expect(brief.action).toBe("instruct");
+    // Crucial: The shallow meta-instruction must be rejected
+    expect(brief.source).toBe("fallback");
+    expect(brief.warning).toContain("The reasoning model returned a meta-instruction");
+
+    // Crucial: The synthesized brief must contain actual domain substance, not a meta-sentence
+    expect(brief.instruction).toContain("# Library Management System — Implementation Engineering Brief");
+    expect(brief.instruction).toContain("## 1. Executive Objective & Scope");
+    expect(brief.instruction).toContain("## 2. Working Instructions for Antigravity Agent");
+    expect(brief.instruction).toContain("## 5. Functional Specifications & Domain Workflows");
+
+    // Must include domain entities
+    expect(brief.instruction).toContain("**Book**");
+    expect(brief.instruction).toContain("**Member**");
+    expect(brief.instruction).toContain("**Loan / Checkout**");
+
+    // Must include operational workflows
+    expect(brief.instruction).toContain("Catalog Management");
+    expect(brief.instruction).toContain("Circulation (Checkout)");
+    expect(brief.instruction).toContain("Circulation (Return)");
+
+    // Must include business rules
+    expect(brief.instruction).toContain("Zero-Copy Rejection");
+    expect(brief.instruction).toContain("Loan Limit");
+
+    // Must include verification strategy & acceptance criteria
+    expect(brief.instruction).toContain("## 8. Verification Strategy & Acceptance Criteria");
+    expect(brief.instruction).toContain("Book checkout and return functional");
+    expect(brief.instruction).toContain("Overdue calculations correct");
+  });
+
+  it("preserves explicit user technology stacks, constraints, and custom contracts in full fidelity", async () => {
+    const provider = new ScriptedProvider();
+    let promptSent = "";
+    provider.enqueue("repair_diagnosis", (req) => {
+      promptSent = req.messages[0].content;
+      return JSON.stringify({
+        action: "instruct",
+        instruction: `# Custom Microservice Implementation Prompt
+## 1. Architecture & Required Stack
+- Framework: Fastify v4.26 with Node.js
+- Persistence: SQLite with Better-SQLite3 (Strictly NO ORMs: No TypeORM, No Prisma)
+- Validation: Zod schemas
+- Endpoints: POST /api/v1/tokens, GET /api/v1/status
+## 2. Acceptance Criteria
+- All endpoints respond with JSON
+- Rate limiter blocks requests exceeding 100 req/min`,
+        rationale: "Preserved explicit stack",
+      });
+    });
+
+    const detailedTask = `Build Token Service with strict requirements:
+- Mandatory Stack: Fastify v4.26, SQLite via Better-SQLite3
+- FORBIDDEN: Do not use TypeORM, Prisma, or Express.
+- Endpoints: POST /api/v1/tokens, GET /api/v1/status
+- Rule: Issue JWTs signed with RS256.`;
+
+    const brief = await composeInstruction(provider, {
+      projectId: "proj-strict",
+      runId: "run-strict",
+      taskText: detailedTask,
+      criteria: ["POST /api/v1/tokens issues RS256 signed JWT", "Better-SQLite3 used directly without ORM"],
+      profile: dummyWorkspace,
+      files: ["package.json", "src/server.ts"],
+      iteration: 1,
+      maxIterations: 3,
+      history: [],
+    });
+
+    // The user's explicit task must be conveyed to the model
+    expect(promptSent).toContain("Mandatory Stack: Fastify v4.26");
+    expect(promptSent).toContain("FORBIDDEN: Do not use TypeORM, Prisma, or Express");
+
+    // The substantive brief from the model is accepted and preserved
+    expect(brief.action).toBe("instruct");
+    expect(brief.source).toBe("model");
+    expect(brief.instruction).toContain("Fastify v4.26");
+    expect(brief.instruction).toContain("Strictly NO ORMs: No TypeORM, No Prisma");
+  });
+});
+
+describe("Universal Project Specification & Instructions Ingestion", () => {
+  it("incorporates persistent project objective into task planning and prompt generation", async () => {
+    const provider = new ScriptedProvider();
+    let planningPrompt = "";
+    let instructionPrompt = "";
+
+    provider.enqueue("task_planning", (req) => {
+      planningPrompt = req.messages[0].content;
+      return JSON.stringify({
+        title: "Implement Library Catalog",
+        acceptance_criteria: ["Search books by title or author", "Display available copies count"],
+        files_to_read: ["catalog.ts"],
+      });
+    });
+    provider.enqueue("repair_diagnosis", (req) => {
+      instructionPrompt = req.messages[0].content;
+      return JSON.stringify({
+        action: "instruct",
+        instruction: `# Implementation Prompt
+## 1. Scope
+Follow Universal Project Specifications.`,
+        rationale: "Incorporate universal spec",
+      });
+    });
+
+    const universalSpec = `GLOBAL ARCHITECTURE RULES:
+- Use TypeScript strict mode everywhere
+- All dates must be stored in ISO 8601 UTC
+- Enforce repository pattern with dependency injection`;
+
+    // 1. Task Planning
+    const plan = await planTask(provider, {
+      projectId: "proj-spec-1",
+      runId: "run-spec-1",
+      taskText: "Implement Book Catalog",
+      projectObjective: universalSpec,
+      workspacePath: "C:\\mock\\project",
+      profile: dummyWorkspace,
+    });
+
+    expect(plan.title).toBe("Implement Library Catalog");
+    expect(planningPrompt).toContain("PROJECT SPECIFICATION & INSTRUCTIONS (Universal Guidelines):");
+    expect(planningPrompt).toContain("GLOBAL ARCHITECTURE RULES:");
+    expect(planningPrompt).toContain("All dates must be stored in ISO 8601 UTC");
+
+    // 2. Compose Instruction
+    await composeInstruction(provider, {
+      projectId: "proj-spec-1",
+      runId: "run-spec-1",
+      taskText: "Implement Book Catalog",
+      projectObjective: universalSpec,
+      criteria: plan.acceptanceCriteria,
+      profile: dummyWorkspace,
+      files: ["catalog.ts"],
+      iteration: 1,
+      maxIterations: 3,
+      history: [],
+    });
+
+    expect(instructionPrompt).toContain("UNIVERSAL PROJECT SPECIFICATION & INSTRUCTIONS (Authoritative Source of Truth):");
+    expect(instructionPrompt).toContain("GLOBAL ARCHITECTURE RULES:");
+    expect(instructionPrompt).toContain("Enforce repository pattern with dependency injection");
+  });
+});
+
+describe("User-Configurable Maximum Agent Iterations & Validation", () => {
+  it("allows setting custom iterations up to 30 and enforces schema bounds", async () => {
+    const { SettingsManager } = await import("../src/platform/settings-manager.js");
+    const { tempDir, removeDir } = await import("./helpers.js");
+
+    const td = tempDir("settings-test");
+    try {
+      SettingsManager.setDataDir(td);
+
+      // 1. Valid custom iteration value: 10
+      const s1 = SettingsManager.saveSettings({ maxAttempts: 10 });
+      expect(s1.maxAttempts).toBe(10);
+      expect(SettingsManager.loadSettings().maxAttempts).toBe(10);
+
+      // 2. Valid custom iteration value: 30 (safety ceiling)
+      const s2 = SettingsManager.saveSettings({ maxAttempts: 30 });
+      expect(s2.maxAttempts).toBe(30);
+      expect(SettingsManager.loadSettings().maxAttempts).toBe(30);
+
+      // 3. Round-trip verification from disk
+      const loaded = SettingsManager.loadSettings();
+      expect(loaded.maxAttempts).toBe(30);
+    } finally {
+      SettingsManager.reset();
+      removeDir(td);
+    }
+  });
+
+  it("validates API schema bounds for maxAttempts between 1 and 30", async () => {
+    const { makeApp } = await import("./helpers.js");
+    const { app, dataDir } = await makeApp();
+    const { removeDir } = await import("./helpers.js");
+
+    try {
+      // Valid custom limit: 12
+      const res1 = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { maxAttempts: 12 } });
+      expect(res1.statusCode).toBe(200);
+      expect(JSON.parse(res1.body).maxAttempts).toBe(12);
+
+      // Invalid: 0 (less than 1)
+      const res2 = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { maxAttempts: 0 } });
+      expect(res2.statusCode).toBe(400);
+
+      // Invalid: 35 (exceeds safety ceiling 30)
+      const res3 = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { maxAttempts: 35 } });
+      expect(res3.statusCode).toBe(400);
+
+      // Invalid: fractional float
+      const res4 = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { maxAttempts: 4.5 } });
+      expect(res4.statusCode).toBe(400);
+    } finally {
+      await app.close();
+      removeDir(dataDir);
+    }
+  });
+});
+
+describe("Prompt Fidelity: Display Matches Submitted Bridge Prompt", () => {
+  it("ensures transcript from Antigravity agent preserves exact delivered prompt", async () => {
+    const { transcriptFrom } = await import("../src/providers/coding-agents/antigravity/antigravity-agent-adapter.js");
+
+    const submitted = "[orches abc12345#1] Engineering Brief from Orches Orchestrator (iteration 1).\n### Implementation Spec\nBuild Library System";
+    const transcript = transcriptFrom(null, "finished", "C:\\mock\\project", submitted);
+
+    expect(transcript.prompt).toBe(submitted);
+  });
+});
+
+

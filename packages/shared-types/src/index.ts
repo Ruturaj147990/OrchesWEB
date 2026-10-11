@@ -21,7 +21,7 @@ export type ProjectStatus = z.infer<typeof ProjectStatusSchema>;
 export const ProjectSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
-  objective: z.string(),
+  objective: z.string().default(""),
   rootPath: z.string(),
   profileId: z.string().default("general"),
   autonomyMode: AutonomyModeSchema.default("creative_within_constraints"),

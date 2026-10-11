@@ -120,6 +120,26 @@ export function WorkspacePanel({ project, workspace, ide, runActive, onEdit, onR
             </dd>
           </div>
           <div>
+            <dt>Specification</dt>
+            <dd>
+              {project.objective?.trim() ? (
+                <>
+                  <span>{project.objective.trim().length} chars</span>{" "}
+                  <button className="link" onClick={onEdit}>
+                    view / edit
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="muted">None configured</span>{" "}
+                  <button className="link" onClick={onEdit}>
+                    + add instructions
+                  </button>
+                </>
+              )}
+            </dd>
+          </div>
+          <div>
             <dt>Project</dt>
             <dd>{profile ? (profile.isEmpty ? "Empty folder" : `${profile.fileCount} files · ${profile.languages.join(", ") || "unknown type"}`) : "…"}</dd>
           </div>

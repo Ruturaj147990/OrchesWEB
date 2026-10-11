@@ -49,6 +49,10 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
   const save = async (e?: FormEvent) => {
     e?.preventDefault();
     setError(null);
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 30) {
+      setError("Maximum Agent Iterations must be a whole number between 1 and 30.");
+      return null;
+    }
     setBusy(true);
     try {
       const saved = await api.saveSettings(payload());
@@ -219,14 +223,22 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
             </p>
           )}
           <label className="field narrow">
-            <span>{agentId === "antigravity" ? "Iterations per task" : "Attempts per task"}</span>
-            <select value={maxAttempts} onChange={(e) => setMaxAttempts(Number(e.target.value))}>
-              {[1, 2, 3, 4, 5, 6, 8].map((n) => (
-                <option key={n} value={n}>
-                  {n} {n === 1 ? "(no repair)" : `(1 + ${n - 1} repair${n > 2 ? "s" : ""})`}
-                </option>
-              ))}
-            </select>
+            <span>Maximum Agent Iterations</span>
+            <input
+              type="number"
+              min={1}
+              max={30}
+              step={1}
+              value={maxAttempts}
+              onChange={(e) => {
+                const parsed = parseInt(e.target.value, 10);
+                setMaxAttempts(isNaN(parsed) ? 1 : parsed);
+              }}
+              required
+            />
+            <small>
+              Initial execution is iteration 1. Each subsequent repair/follow-up execution is another iteration (e.g. 4 allows 1 initial + up to 3 repairs; 10 allows 1 initial + up to 9 repairs). Reasoning model calls are counted separately from agent coding iterations. (Safety ceiling: 30)
+            </small>
           </label>
         </section>
         {error && (

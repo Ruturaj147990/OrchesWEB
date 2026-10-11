@@ -16,7 +16,7 @@ const UpdateSettingsSchema = z.object({
   clearOpenaiKey: z.boolean().optional(),
   openaiModel: z.string().trim().min(1).max(100).optional(),
   codingAgentId: z.string().trim().min(1).optional(),
-  maxAttempts: z.number().int().min(1).max(8).optional(),
+  maxAttempts: z.number().int().min(1).max(30).optional(),
 });
 
 async function settingsView() {

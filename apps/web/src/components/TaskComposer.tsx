@@ -43,15 +43,27 @@ export function TaskComposer({ project, settings, providerReady, runActive, disa
   return (
     <section className="card composer" aria-label="Task">
       <form onSubmit={submit}>
-        <label htmlFor="task-input" className="card-title">
-          Task
-        </label>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <label htmlFor="task-input" className="card-title">
+            Task
+          </label>
+          {project?.objective?.trim() && !task.trim() && (
+            <button
+              type="button"
+              className="link small"
+              onClick={() => setTask(project.objective)}
+              title="Fill composer with the saved project specification"
+            >
+              Use Project Specification
+            </button>
+          )}
+        </div>
         <textarea
           id="task-input"
           value={task}
           onChange={(e) => setTask(e.target.value)}
           onKeyDown={onKey}
-          placeholder="Describe the change you want, e.g. “Add a --verbose flag to the CLI and cover it with a test.”"
+          placeholder="Describe the change you want, e.g. “Implement Library Management System” or paste a full project specification with strict rules."
           rows={4}
           disabled={runActive}
         />
@@ -68,7 +80,7 @@ export function TaskComposer({ project, settings, providerReady, runActive, disa
               </>
             )}
             <span className="sep">·</span>
-            up to {settings?.maxAttempts ?? 3} attempts
+            up to {settings?.maxAttempts ?? 3} iterations
           </button>
           <button type="submit" className="btn btn-primary" disabled={!canRun} title={disabledReason ?? (runActive ? "A run is in progress" : "Ctrl+Enter")}>
             {submitting ? "Starting…" : "Run task"}

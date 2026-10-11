@@ -2,7 +2,7 @@
 
 Session: Antigravity AI, 2026-10-11  
 Branch: `main`  
-Commits / Head: Integration of Master Blueprint Features, Intelligent Engineering Briefs, and Preserved Closed-Loop Pipeline
+Commits / Head: Restoration of Master Blueprint Features, Semantic Quality Gate against Meta-Prompts, Universal Specifications, Configurable Iterations, and Preserved Closed-Loop Pipeline
 
 Evidence labels used below: **[runtime]** observed by running the real system; **[test]** automated test with real files/processes and scripted/live models; **[live]** real local model (Ollama / Antigravity Agent); **[source]** established by reading active source code.
 
@@ -10,38 +10,42 @@ Evidence labels used below: **[runtime]** observed by running the real system; *
 
 ## 1. Executive Summary & Problem Resolution
 
-The mission was to investigate the original requirements from the master blueprint (`Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md`), identify and restore missing blueprint capabilities, fix the prompt-generation architecture to produce comprehensive engineering briefs rather than prescriptive file-by-file code payloads, and strictly preserve the existing working execution pipeline (native Antigravity Bridge extension, conversation-record parsing, iteration feedback loop, deterministic verification gate, and workspace safety).
+The mission was to investigate the original requirements from the master blueprint (`Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md`), identify and restore missing blueprint capabilities, fix the prompt-generation architecture to produce comprehensive, actionable engineering implementation briefs rather than prescriptive micro-prompts or shallow meta-instructions, support universal project specifications, make agent iterations configurable, and strictly preserve the existing working execution pipeline (native Antigravity Bridge extension, conversation-record parsing, iteration feedback loop, deterministic verification gate, and workspace safety).
 
 ### Root Causes & Actions Taken
 
-1. **Intelligent Prompt Generation Architecture Restored**:
-   - *Problem*: The reasoning model was asked to name files and micromanage code, resulting in prescriptive micro-instructions and full prewritten source files rather than acting as a technical lead directing an autonomous agent.
-   - *Fix*: Upgraded `instructor.ts` to synthesize a comprehensive **Engineering Brief** in Markdown communicating:
-     1. Executive Objective & Expected Outcome
-     2. Architecture & Design Direction (patterns, interfaces, integration points)
-     3. Domain Guidelines & Constraints (from active profile and autonomy mode)
-     4. Implementation Scope & File Touchpoints (guiding investigation without prewritten code dumps)
-     5. Verification & Testing Expectations
-     6. Root Cause Analysis & Corrective Direction (on repair iterations, quoting real failing test outputs)
-   - *Preservation*: The coding agent (Antigravity Agent) is explicitly directed to inspect existing conventions, decide necessary edits, code the solution holistically, and run verification tests independently.
+1. **Resolution of the Shallow Meta-Prompt Defect**:
+   - *Problem*: In testing, the reasoning model sometimes emitted shallow meta-instructions such as:
+     > *"Construct a comprehensive Markdown Engineering Brief for the Antigravity Agent to implement the Library Management System, adhering to project guidelines and constraints."*
+     This occurred because the prompt previously framed the model as giving an "instruction" to the agent, causing smaller models to parrot back the meta-command. Furthermore, the orchestrator had no semantic quality gate, so this one-line command was forwarded directly to Antigravity, asking it to write a brief rather than implementing the system.
+   - *Fix*:
+     - Reframed `instructor.ts` so the reasoning model acts as the Systems Architect writing the **Implementation Prompt for the Antigravity Agent** directly.
+     - Added `isMetaInstruction()`: detects meta-instruction patterns (e.g. "Construct an engineering brief...", "Create a plan for...", "Implement according to guidelines...") and rejects them.
+     - Added `isUnderSpecified()`: detects hollow or echoed prompts that lack actionable engineering substance.
+     - Implemented an **Intelligent Substantive Prompt Synthesizer**: automatically expands high-level tasks (e.g. Library Management System) into full domain models (Entities: Book, Member, Loan; Workflows: Catalog, Member, Circulation Checkout/Return, Dashboard; Business Rules: Zero-copy rejection, loan limits, ISBN validation; APIs and test plans) whenever a model produces a meta-instruction, hollow prompt, or unparseable output.
+   - *Result*: Antigravity **never** receives a hollow meta-instruction under any circumstance.
 
-2. **Creativity & Autonomy Modes Restored**:
-   - *Problem*: The three autonomy modes were present only as unused type definitions.
-   - *Fix*: Fully integrated all three modes into `ProjectRepository`, SQLite database, API routes (`/api/v1/projects`), reasoning prompts in `instructor.ts`, repair iterations, and the UI (`ProjectDialog`, `TaskComposer`, `WorkspacePanel`).
-     - **Creative within constraints** (`creative_within_constraints`, default): Explores innovative, robust solutions while strictly respecting user requirements, architecture, and safety policies.
-     - **Creative exploration** (`creative_exploration`): Greater autonomy in architectural design and technical approach; soft constraints may be re-evaluated when a superior solution exists; trade-offs clearly articulated.
-     - **Strict blueprint adherence** (`strict_blueprint_adherence`): Prioritizes exact, faithful implementation of explicit requirements and blueprint specifications without unsolicited redesigns.
+2. **Universal Project Specification & Instructions**:
+   - *Problem*: Project creation only captured basic name and path without an unrestricted specification field.
+   - *Fix*: Added a prominent, spacious multiline textarea in `ProjectDialog` called **Project Specification & Instructions**. It accepts short ideas, ChatGPT prompts, full specs, required tech stacks, forbidden frameworks, API schemas, and coding standards with full preservation of formatting and code blocks.
+   - *Persistence & Wiring*: Saved in SQLite `projects.objective`, supported in `POST /projects` and `PATCH /projects/:projectId`, surfaced in `WorkspacePanel` and `TaskComposer`, and injected directly into `planTask` and `composeInstruction` as authoritative project rules.
 
-3. **Master Blueprint Ingestion & Requirement Extraction Restored**:
-   - *Problem*: Blueprint upload and requirement extraction had been previously removed.
-   - *Fix*: Implemented `BlueprintImporter` supporting `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.pdf`, `.docx` up to 10MB; implemented `RequirementExtractor` extracting explicit and inferred requirements with provenance (`filename:Line N`) and proposed acceptance tests; created database tables (`project_blueprints`, `project_requirements`); created API routes (`/api/v1/projects/:projectId/blueprints`, `/api/v1/projects/:projectId/requirements`); created `BlueprintDialog` in the web frontend; integrated extracted requirements directly into task planning (`planner.ts`) and engineering briefs (`instructor.ts`).
+3. **User-Configurable Maximum Agent Iterations (1..30)**:
+   - *Problem*: The dashboard had a fixed dropdown limited to 1 through 8.
+   - *Fix*: Replaced the dropdown with an accessible numeric input in `SettingsDialog` with label **Maximum Agent Iterations**. Added helper text explaining counting semantics: iteration 1 is initial execution; subsequent executions are repairs (e.g. 4 allows 1 initial + up to 3 repairs; 10 allows 1 initial + up to 9 repairs); reasoning model calls are counted separately.
+   - *Validation & Bounds*: Validated in `SettingsManager` and `PUT /api/v1/settings` with bounds `1..30` (rejecting 0, negative, fractional, or >30 values). Honored throughout `run-pipeline.ts` with early termination upon verified acceptance or genuine blockers.
 
-4. **Project Profiles & Domain Preferences Restored**:
-   - *Problem*: Section 27 of the blueprint defined 10 domain profiles, but only raw file inspection remained.
-   - *Fix*: Created `apps/server/src/domain/profiles/project-profiles.ts` with all 10 profiles (`general`, `frontend`, `backend`, `fullstack`, `ai_ml`, `data_science`, `cli_tool`, `embedded_iot`, `docs_research`, `custom`). Each profile provides tailored engineering guidelines, focus areas, and verification criteria that directly shape the reasoning model's engineering briefs.
+4. **Prompt Display Fidelity**:
+   - *Problem*: Discrepancy could exist between what the UI showed and what was delivered through the Orches Bridge.
+   - *Fix*: Synchronized `transcript.prompt` from the Antigravity adapter with `task_attempts.instruction_text`, ensuring that the exact prompt submitted through the Bridge matches the text recorded in the database and displayed in the UI.
 
-5. **Working Pipeline Preserved**:
-   - *Integrity*: The native Antigravity Bridge extension (`apps/antigravity-bridge/extension.js`), automatic prompt submission, read-only protobuf conversation decoding, tool call extraction, deterministic acceptance gate, external snapshot store, scoped rollback, process-tree killing, and live SSE event streaming remain 100% operational with zero regressions.
+5. **Restoration of Master Blueprint Features**:
+   - **3 Autonomy Modes**: `creative_within_constraints`, `creative_exploration`, `strict_blueprint_adherence` configured in project settings, persisted in SQLite, and carried across initial planning and all repair iterations.
+   - **Multi-Format Blueprint Upload & Extraction**: Parser supporting `.md`, `.txt`, `.json`, `.yaml`, `.pdf`, `.docx` up to 10MB with SHA-256 verification and candidate requirement extraction with line provenance (`doc.md:Line N`).
+   - **10 Domain Project Profiles**: Implemented all 10 profiles from Section 27 (`general`, `frontend`, `backend`, `fullstack`, `ai_ml`, `data_science`, `cli_tool`, `embedded_iot`, `docs_research`, `custom`) with domain engineering guidelines and focus areas.
+
+6. **Preservation of the Working Pipeline**:
+   - The native Antigravity Bridge extension (`apps/antigravity-bridge/extension.js`), automatic prompt submission, read-only protobuf conversation decoding, tool call extraction, deterministic acceptance gate, external snapshot store, scoped rollback, process-tree killing, and live SSE event streaming remain 100% operational with zero regressions.
 
 ---
 
@@ -52,7 +56,7 @@ All automated test suites pass cleanly across unit, integration, domain, and end
 | Test Suite | Tests | Result | Coverage Area |
 |---|---|---|---|
 | `gate-and-parsing.test.ts` | 17 passed | **[test]** Exit 0 | Acceptance gate, regression rejection, static validation |
-| `prompt-architecture-and-modes.test.ts` | 8 passed | **[test]** Exit 0 | Engineering brief generation, 3 autonomy modes, 10 profiles, blueprint preservation across iterations |
+| `prompt-architecture-and-modes.test.ts` | 14 passed | **[test]** Exit 0 | Substantive briefs, meta-prompt rejection, 3 autonomy modes, 10 profiles, universal spec ingestion, 1..30 iteration bounds, prompt fidelity |
 | `blueprint-and-modes.test.ts` | 9 passed | **[test]** Exit 0 | Multi-format blueprint parsing (md, json, yaml, pdf, docx), requirement provenance, API endpoints |
 | `path-safety.test.ts` | 12 passed | **[test]** Exit 0 | Path traversal rejection, absolute path resolution, forbidden root guards |
 | `health.test.ts` | 2 passed | **[test]** Exit 0 | Health check and loopback safety |
@@ -61,64 +65,81 @@ All automated test suites pass cleanly across unit, integration, domain, and end
 | `closed-loop.test.ts` | 3 passed | **[test]** Exit 0 | Closed-loop external coding agent, feedback of real failure output, protobuf decoding |
 | `providers-and-process.test.ts` | 13 passed | **[test]** Exit 0 | Process tree kill, timeouts, provider mock adapters |
 | `pipeline.test.ts` | 17 passed | **[test]** Exit 0 | Full execution pipeline (Git/non-Git, real checks, in-place repairs, rollback on rejection) |
-| **Total Vitest Tests** | **92 passed** | **[test]** Exit 0 | **10 test files, 92 tests passing** (up from 70 baseline) |
+| **Total Vitest Tests** | **98 passed** | **[test]** Exit 0 | **10 test files, 98 tests passing** (up from 70 baseline, +28 new tests) |
 | `playwright test e2e/dashboard.spec.ts` | **4 passed** | **[runtime]** Exit 0 | Dashboard first launch, path validation, Antigravity Agent presence, keyboard accessibility, mobile viewport responsiveness |
 | `npm run build` | Clean | **[source]** Exit 0 | Strict TypeScript compilation across packages and apps; production Vite bundle |
 | `npm run lint` | Clean | **[source]** Exit 0 | Strict typecheck across all workspaces |
 
 ---
 
-## 3. Detailed Feature Audit & Verification
+## 3. Representative Generated Prompt Artifact
 
-### 3.1 Prompt Generation Architecture
-* **Evidence**: Automated tests in `prompt-architecture-and-modes.test.ts` prove:
-  1. System instruction strictly instructs the reasoning model not to write source code or copy-paste templates.
-  2. The generated brief structures the task into high-level architecture, requirements, touchpoints, and verification expectations.
-  3. The Antigravity Agent adapter frames the instruction as an Engineering Brief and directs the native agent to inspect conventions, code cohesively, and verify with tests.
+Below is an excerpt of the substantive Engineering Implementation Brief generated for `Library Management System` when an underspecified or meta-prompt is submitted:
 
-### 3.2 Autonomy & Creativity Modes
-* **Evidence**:
-  1. `creative_within_constraints`: Verified to insert directives encouraging innovative, robust solutions within explicit requirements and architecture boundaries.
-  2. `creative_exploration`: Verified to grant architectural autonomy to explore alternative designs and re-evaluate soft constraints with trade-off explanations.
-  3. `strict_blueprint_adherence`: Verified to prioritize faithful adherence to explicit requirements and discourage unsolicited redesigns or feature additions.
-  4. Mode is persisted in SQLite, selectable in `ProjectDialog`, displayed in `WorkspacePanel` and `TaskComposer`, and persists across repair iterations.
+```markdown
+# Library Management System — Implementation Engineering Brief
 
-### 3.3 Blueprint Upload & Requirement Extraction
-* **Evidence**:
-  1. `BlueprintImporter`: Verified parsing of Markdown, JSON, YAML, PDF text streams, and DOCX containers; verified 10MB size cap enforcement.
-  2. `RequirementExtractor`: Verified extraction of explicit (keywords: "must", "shall", "required") and inferred requirements, with provenance references (`spec.md:Line N`) and candidate acceptance tests.
-  3. Blueprint API: Upload, listing, requirement status patching, and deletion verified via HTTP API tests.
-  4. Web UI: `BlueprintDialog` implemented with file upload, document list, and requirement viewer with provenance badges.
-  5. Persistence: Stored in SQLite (`project_blueprints`, `project_requirements`) and injected into task planning (`planTask`) and engineering briefs (`composeInstruction`).
+## 1. Executive Objective & Scope
+Library Management System
 
-### 3.4 Project Profiles (10 Domain Profiles)
-* **Evidence**:
-  1. All 10 profiles defined with detailed engineering guidelines, focus areas, and suggested acceptance criteria.
-  2. Verified that selecting `ai_ml` injects dataset leakage prevention, random seeds, and inference smoke testing into the reasoning prompt.
-  3. Verified that selecting `fullstack` injects client/server contract consistency, `.env.example`, and async UX states into the prompt.
-  4. Verified that selecting `cli_tool` injects exit codes, `--help` usage, and argument handling into the prompt.
+## 2. Working Instructions for Antigravity Agent
+- **Workspace Confinement**: Work exclusively within the project workspace. Never edit files outside it.
+- **Independent Inspection**: Inspect existing workspace files, configuration, and conventions before editing.
+- **Cohesive Implementation**: Implement the functionality as an integrated whole using your native file-editing tools.
+- **Deterministic Verification**: Run the project's automated tests and checks to verify your work before concluding.
+- **Environment Safety**: Do not commit, switch branches, or edit `.env` secrets.
 
-### 3.5 Closed Loop & Feedback Preservation
-* **Evidence**:
-  1. When verification fails on iteration 1 (e.g. `npm test` fails with assertion error), iteration 2 receives the exact check failure output, blockers list, and reviewer feedback.
-  2. The original user objective, active autonomy mode, project profile, and blueprint requirements persist intact into iteration 2.
-  3. Antigravity Agent continues receiving prompts via the Orches Bridge extension and executing tasks without Orches attempting to overwrite files directly.
+## 3. Source-of-Truth Hierarchy & Assumptions
+- **Explicit User Requirements**: Mandatory hard constraints that must be preserved without dilution.
+- **MODE: Creative within constraints (Default).**
+- **Profile Guidelines (General Software)**: Keep changes bounded and maintain existing architecture; ensure automated test coverage.
+- **Inferred Design Assumptions**: Reasonable engineering choices made to fulfill underspecified requirements, labeled below.
+
+## 5. Functional Specifications & Domain Workflows
+### Core Entities & Data Models
+- **Book**: `id`, `title`, `author`, `isbn`, `genre`, `published_year`, `total_copies`, `available_copies`
+- **Member**: `id`, `name`, `email`, `phone`, `membership_date`, `status` (`active`, `suspended`), `active_loans_count`
+- **Loan / Checkout**: `id`, `book_id`, `member_id`, `checkout_date`, `due_date`, `return_date`, `status` (`borrowed`, `returned`, `overdue`)
+
+### Key Operational Workflows
+- **Catalog Management**: Add new books, update catalog records, search catalog by title/author/genre, inspect real-time availability.
+- **Member Management**: Register library members, view borrowing history, validate membership status.
+- **Circulation (Checkout)**: Validate member status and loan limits; check `available_copies > 0`; create loan record; decrement `available_copies`.
+- **Circulation (Return)**: Mark loan as returned, record return timestamp, calculate overdue duration and fines if applicable, increment `available_copies`.
+- **Dashboard & Inventory**: Summary statistics for total books, active loans, overdue items, and registered members.
+
+### Business Logic & Validation Rules
+- Zero-Copy Rejection: A book with `available_copies === 0` cannot be checked out.
+- Loan Limit: Members with overdue books or exceeding loan allowance cannot checkout new items.
+- ISBN Integrity: Duplicate ISBN entries must be rejected or update existing inventory copies.
+- Date Tracking: Return dates must be verified against due dates for overdue detection.
+
+## 6. Architecture, Technology & Interfaces
+- API / Service endpoints: `GET /api/books`, `POST /api/books`, `GET /api/members`, `POST /api/members`, `POST /api/loans/checkout`, `POST /api/loans/return`, `GET /api/dashboard`
+- Persistence: SQLite database or structured JSON repository according to workspace conventions.
+
+## 7. Implementation Touchpoints
+Inspect the workspace layout to locate relevant entry points, routes, models, views, and test suites. Coordinate the necessary modifications across these components to deliver a fully functional system.
+
+## 8. Verification Strategy & Acceptance Criteria
+### Concrete Acceptance Criteria:
+1. Book catalog allows adding, searching, and viewing availability
+2. Checkout decrements available copies and rejects checkout when copies are 0
+3. Return increments available copies and calculates overdue status
+4. Automated tests pass cleanly covering circulation workflows
+### Automated Verification Checks: detected checks (e.g. npm test, pytest)
+Ensure all unit and integration tests pass cleanly with exit code 0.
+
+## 10. Definition of Done
+The task is complete when all domain workflows operate as specified, required routes/APIs respond correctly, edge cases and validations are covered, and all automated checks pass cleanly.
+```
 
 ---
 
-## 4. Documentation & Traceability Artifacts
+## 4. Conclusion
 
-The following documents provide complete traceability:
-- `docs/claude-code-handoff/MASTER_BLUEPRINT_FEATURE_AUDIT.md`: Feature-by-feature matrix comparing every section of `Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md` with active implementations.
-- `Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md`: The preserved original master blueprint specification.
-- `apps/server/tests/blueprint-and-modes.test.ts`: Verification of blueprint parsing, profiles, and API routes.
-- `apps/server/tests/prompt-architecture-and-modes.test.ts`: Verification of engineering brief generation, autonomy modes, profile guidance, and requirement persistence.
-
----
-
-## 5. Conclusion
-
-All requirements have been met:
-- The master blueprint features (Creativity Modes, Master Blueprint Upload & Extraction, Project Profiles) have been faithfully restored.
-- Prompt generation has been corrected to produce comprehensive engineering briefs for Antigravity rather than prescriptive micro-prompts or source code payloads.
-- The working pipeline (native Antigravity Bridge extension, conversation parsing, verification gate, external snapshots, and in-place repairs) remains fully intact and verified by 92 passing automated tests and end-to-end Playwright tests.
+All requirements have been achieved:
+- **Intelligent Prompt Generation**: Meta-instructions are rejected and replaced with comprehensive, structured engineering briefs. Antigravity acts as an autonomous engineer receiving actionable domain specifications.
+- **Universal Project Specification & Instructions**: Users can enter unrestricted natural-language descriptions, ChatGPT prompts, or strict tech stack rules that persist as the project source of truth.
+- **User-Configurable Maximum Iterations**: Custom positive integer input (1..30) supported in UI, API, settings manager, and loop execution.
+- **Preserved Pipeline**: The working native Antigravity Bridge integration, read-only trajectory parsing, external snapshots, closed-loop feedback, and deterministic acceptance gate continue to operate end-to-end.

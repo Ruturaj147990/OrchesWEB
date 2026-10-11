@@ -37,6 +37,7 @@ export interface CandidateRequirement {
 export interface Project {
   id: string;
   name: string;
+  objective: string;
   rootPath: string;
   status: string;
   profileId: string;
@@ -208,9 +209,9 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 export const api = {
   health: () => request<{ status: string }>("GET", "/health"),
   projects: () => request<Project[]>("GET", "/projects"),
-  createProject: (body: { name: string; rootPath: string; createFolder?: boolean; profileId?: string; autonomyMode?: AutonomyMode; verificationCommands?: string[]; autoCommit?: boolean }) =>
+  createProject: (body: { name: string; objective?: string; rootPath: string; createFolder?: boolean; profileId?: string; autonomyMode?: AutonomyMode; verificationCommands?: string[]; autoCommit?: boolean }) =>
     request<Project>("POST", "/projects", body),
-  updateProject: (id: string, body: Partial<Pick<Project, "name" | "rootPath" | "profileId" | "autonomyMode" | "verificationCommands" | "autoCommit">>) => request<Project>("PATCH", `/projects/${id}`, body),
+  updateProject: (id: string, body: Partial<Pick<Project, "name" | "objective" | "rootPath" | "profileId" | "autonomyMode" | "verificationCommands" | "autoCommit">>) => request<Project>("PATCH", `/projects/${id}`, body),
   removeProject: (id: string) => request<{ success: boolean }>("DELETE", `/projects/${id}`),
   workspace: (id: string) => request<WorkspaceInfo>("GET", `/projects/${id}/workspace`),
   initGit: (id: string) => request<{ message: string }>("POST", `/projects/${id}/git/init`),

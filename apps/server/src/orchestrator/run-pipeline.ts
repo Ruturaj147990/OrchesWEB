@@ -157,6 +157,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         projectId: project.id,
         runId: run.id,
         taskText: ctx.taskText,
+        projectObjective: project.objective,
         workspacePath: root,
         profile: baselineProfile,
         profileDefinition: profileDef,
@@ -234,6 +235,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           projectId: project.id,
           runId: run.id,
           taskText: ctx.taskText,
+          projectObjective: project.objective,
           criteria: plan.acceptanceCriteria,
           profile: baselineProfile,
           profileDefinition: profileDef,
@@ -284,7 +286,12 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       });
       for (const w of agentResult.warnings) log(w, "warn");
       if (agentResult.transcript) {
-        db.prepare("UPDATE task_attempts SET agent_transcript_json = ? WHERE id = ?").run(JSON.stringify(agentResult.transcript), attemptId);
+        const promptToSave = agentResult.transcript.prompt || instructionText;
+        if (promptToSave) {
+          db.prepare("UPDATE task_attempts SET agent_transcript_json = ?, instruction_text = ? WHERE id = ?").run(JSON.stringify(agentResult.transcript), promptToSave, attemptId);
+        } else {
+          db.prepare("UPDATE task_attempts SET agent_transcript_json = ? WHERE id = ?").run(JSON.stringify(agentResult.transcript), attemptId);
+        }
         events.record(project.id, "agent.result", { attempt, agent: agent.displayName, ...agentResult.transcript, toolCalls: agentResult.transcript.toolCalls.slice(0, 50) }, run.id, taskId);
       }
       ensureNotCancelled();

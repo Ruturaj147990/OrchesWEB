@@ -14,6 +14,7 @@ import { GitManager } from "../../git/git-manager.js";
 
 const CreateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
+  objective: z.string().trim().max(100_000).optional().default(""),
   rootPath: z.string().trim().min(1),
   createFolder: z.boolean().optional().default(false),
   profileId: z.string().optional().default("general"),
@@ -24,6 +25,7 @@ const CreateProjectSchema = z.object({
 
 const UpdateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  objective: z.string().trim().max(100_000).optional(),
   rootPath: z.string().trim().min(1).optional(),
   profileId: z.string().optional(),
   autonomyMode: z.enum(["creative_within_constraints", "creative_exploration", "strict_blueprint_adherence"]).optional(),
@@ -59,7 +61,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     const project = ProjectSchema.parse({
       id: `proj-${crypto.randomUUID()}`,
       name: body.name,
-      objective: "",
+      objective: body.objective ?? "",
       rootPath: check.canonicalPath,
       profileId: body.profileId,
       autonomyMode: body.autonomyMode,
