@@ -66,6 +66,8 @@ export interface ReasoningProvider {
   privacyClass: PrivacyClass;
   /** Model identifier that `generate` will use. */
   getModel(): string;
+  /** Maximum context window in tokens (model-aware or configured). */
+  getContextWindow?(): number;
   healthCheck(): Promise<ProviderHealth>;
   listModels?(): Promise<string[]>;
   generate(request: ReasoningRequest, signal?: AbortSignal): Promise<ReasoningResult>;

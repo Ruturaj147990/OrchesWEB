@@ -23,6 +23,8 @@ import { ReasoningUsageLedger } from "../domain/budgets/usage-ledger.js";
 import { SettingsManager } from "../platform/settings-manager.js";
 import { BlueprintRepository } from "../storage/repositories/blueprint-repository.js";
 import { getProjectProfile } from "../domain/profiles/project-profiles.js";
+import { buildRequirementInventory, updateRequirementStatuses, RequirementInventory } from "../domain/requirements/requirement-inventory.js";
+import { ConversationMemoryService } from "../domain/memory/conversation-memory-service.js";
 
 export const CLOUD_RUN_COST_CEILING_USD = 2.0;
 
@@ -52,6 +54,23 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
   const root = project.rootPath;
   const inbox = new InboxService(db, events);
   const store = snapshotStoreFor(root);
+  const memoryService = new ConversationMemoryService(db);
+  const conversation = memoryService.getOrCreateConversation({
+    conversationId: run.conversationId,
+    projectId: project.id,
+    initialInstruction: ctx.taskText,
+    runId: run.id,
+  });
+  if (run.conversationId !== conversation.id) {
+    runs.updateFields(run.id, { conversationId: conversation.id });
+    run.conversationId = conversation.id;
+  }
+  const recentMsgs = memoryService.getRepository().getMessages(conversation.id, 5);
+  const lastMsg = recentMsgs[recentMsgs.length - 1];
+  if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== ctx.taskText) {
+    memoryService.recordUserMessage(conversation.id, ctx.taskText, { runId: run.id });
+  }
+
   let taskId: string | null = null;
   let activeSnapshot: WorkspaceSnapshot | null = null;
   let activeAttemptId: string | null = null;
@@ -79,6 +98,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?").run(taskStatus, new Date().toISOString(), taskId);
     }
     events.record(project.id, "run.finished", { status, outcome, summary }, run.id, taskId);
+    memoryService.maybeCompact(conversation.id, provider, { force: false, signal }).catch(() => {});
   };
 
   const rollbackActive = (label: string): RestoreResult | null => {
@@ -116,6 +136,23 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     const requirements = blueprintRepo.listRequirements(project.id);
     const profileDef = getProjectProfile(project.profileId);
     const autonomyMode = project.autonomyMode || "creative_within_constraints";
+    const inventory = buildRequirementInventory({
+      taskText: ctx.taskText,
+      projectObjective: project.objective,
+      blueprintDocuments: blueprints,
+      candidateRequirements: requirements,
+    });
+    log(`Requirement Inventory: ${inventory.requirements.length} item(s) mapped (${inventory.summary.mandatory} mandatory, ${inventory.summary.constraints} constraints, ${inventory.summary.acceptanceCriteria} acceptance, ${inventory.summary.inferences} inferences, ${inventory.summary.contradictions} contradictions).`);
+    events.record(project.id, "requirements.inventoried", {
+      summary: inventory.summary,
+      requirements: inventory.requirements.map((r) => ({
+        id: r.id,
+        classification: r.classification,
+        title: r.title,
+        importance: r.importance,
+        sourceReference: r.sourceReference,
+      })),
+    }, run.id, taskId);
     log(`Profile: ${profileDef.name} · Mode: ${autonomyMode}${blueprints.length ? ` · Master blueprints: ${blueprints.length} (${requirements.length} requirement(s))` : ""}`);
 
     const git = new GitManager(root);
@@ -229,6 +266,16 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       const changedSoFar = store.diff(activeSnapshot).changes.filter((c) => c.kind !== "deleted").map((c) => c.path);
       let instructionText: string | undefined;
       if (external) {
+        // Context budgeting & automatic compaction before reasoning model call
+        await memoryService.maybeCompact(conversation.id, provider, { inventory, signal });
+        const memoryContext = memoryService.reconstructContext({
+          conversationId: conversation.id,
+          projectId: project.id,
+          currentTaskText: ctx.taskText,
+          requirementInventory: inventory,
+          provider,
+        });
+
         // Closed loop: the reasoning provider decides what the coding agent does in this iteration.
         phase("instructing", attempt);
         const instr = await composeInstruction(provider, {
@@ -242,18 +289,37 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           autonomyMode,
           blueprintDocuments: blueprints,
           blueprintRequirements: requirements,
+          requirementInventory: inventory,
           files: projectFileList(root, 200),
           iteration: attempt,
           maxIterations: ctx.maxAttempts,
           history,
           guidance,
           signal,
+          memoryContextSection: memoryContext.promptSection,
         });
         ensureNotCancelled();
         if (instr.warning) {
           warnings.push(instr.warning);
           log(instr.warning, "warn");
         }
+        if (instr.fidelityReport) {
+          events.record(project.id, "requirements.fidelity_checked", {
+            attempt,
+            passed: instr.fidelityReport.passed,
+            score: instr.fidelityReport.score,
+            initialPassed: instr.initialFidelityReport?.passed,
+            initialScore: instr.initialFidelityReport?.score,
+            initialMissingRequirements: instr.initialFidelityReport?.missingRequirements,
+            residualUncertainties: instr.residualUncertainties,
+            missingRequirements: instr.fidelityReport.missingRequirements,
+            weakenedConstraints: instr.fidelityReport.weakenedConstraints,
+            unsupportedAdditions: instr.fidelityReport.unsupportedAdditions,
+            unresolvedContradictions: instr.fidelityReport.unresolvedContradictions,
+            summary: instr.fidelityReport.summary,
+          }, run.id, taskId);
+        }
+        memoryService.recordModelDecision(conversation.id, instr.instruction || instr.rationale, { attempt, action: instr.action, rationale: instr.rationale, runId: run.id });
         if (instr.action === "stop") {
           db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, instruction_text = ? WHERE id = ?").run(new Date().toISOString(), `(stopped) ${instr.rationale}`, attemptId);
           events.record(project.id, "brain.instruction", { attempt, action: "stop", rationale: instr.rationale, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
@@ -263,6 +329,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           return;
         }
         instructionText = instr.instruction;
+        memoryService.recordAgentDispatch(conversation.id, instructionText, { attempt, agent: agent.displayName, runId: run.id });
         db.prepare("UPDATE task_attempts SET instruction_text = ? WHERE id = ?").run(instructionText, attemptId);
         events.record(project.id, "brain.instruction", { attempt, action: "instruct", instruction: instructionText, rationale: instr.rationale, source: instr.source, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
         phase("coding", attempt);
@@ -294,6 +361,17 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         }
         events.record(project.id, "agent.result", { attempt, agent: agent.displayName, ...agentResult.transcript, toolCalls: agentResult.transcript.toolCalls.slice(0, 50) }, run.id, taskId);
       }
+      memoryService.recordAgentResponse(
+        conversation.id,
+        agentResult.transcript?.finalReply || `Attempt ${attempt} ended with status: ${agentResult.status}`,
+        {
+          attempt,
+          status: agentResult.status,
+          filesWritten: agentResult.filesWritten,
+          filesDeleted: agentResult.filesDeleted,
+          runId: run.id,
+        }
+      );
       ensureNotCancelled();
 
       // Ground truth: what actually changed on disk (this attempt, and since the run started).
@@ -383,6 +461,39 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
 
       persistAttempt(db, { taskId, attemptId, agentResult, diff, staticResults, attemptChecks, baselineChecks: attempt === 1 ? baselineChecks : [], critic, gate, root });
       events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: gate.accepted, outcome: gate.outcome, blockers: gate.blockers, warnings: gate.warnings, files: diff.changes }, run.id, taskId);
+
+      memoryService.recordVerificationOutcome(
+        conversation.id,
+        {
+          passed: gate.accepted,
+          checks: attemptChecks.map((c) => ({ label: c.label, status: c.status, output: c.output })),
+          blockers: gate.blockers,
+          filesChanged: diff.changes.map((c) => c.path),
+          criticVerdict: critic.verdict,
+          criticRationale: critic.summary,
+        },
+        { attempt, runId: run.id }
+      );
+
+      updateRequirementStatuses(inventory, {
+        filesChanged: diff.changes.map((c) => c.path),
+        passedChecks: attemptChecks.filter((c) => c.status === "passed").map((c) => c.label),
+        failedChecks: attemptChecks.filter((c) => c.status !== "passed").map((c) => c.label),
+        criticVerified: critic.available && critic.verdict === "accept"
+          ? critic.criteria.filter((c) => c.status === "passed").map((c) => `${c.id} ${c.reason}`)
+          : [],
+        criticFailed: critic.available && critic.verdict !== "accept"
+          ? [
+              ...critic.repairInstructions,
+              ...critic.criteria.filter((c) => c.status !== "passed").map((c) => `${c.id} ${c.reason}`),
+            ]
+          : [],
+      });
+      events.record(project.id, "requirements.updated", {
+        attempt,
+        summary: inventory.summary,
+        unverified: inventory.requirements.filter((r) => r.status !== "verified").map((r) => ({ id: r.id, status: r.status, title: r.title })),
+      }, run.id, taskId);
 
       const prevDiffExcerpt = history[history.length - 1]?.diffExcerpt;
       const isRepeatedAttempt = attempt > 1 && diff.diffText.slice(0, 6000) === prevDiffExcerpt;

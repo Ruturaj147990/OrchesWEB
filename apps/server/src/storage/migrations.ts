@@ -108,4 +108,49 @@ export function runMigrations(db: DatabaseSync): void {
     `);
     mark("0004_blueprints_and_modes");
   }
+
+  if (!applied("0005_conversation_memory")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resumed_run_id TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_memory_snapshots (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        snapshot_markdown TEXT NOT NULL,
+        token_count INTEGER NOT NULL DEFAULT 0,
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
+      CREATE INDEX IF NOT EXISTS idx_conversation_messages_convo_id ON conversation_messages(conversation_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_conversation_snapshots_convo_id ON conversation_memory_snapshots(conversation_id, created_at);
+    `);
+
+    if (!columnExists(db, "runs", "conversation_id")) {
+      db.exec("ALTER TABLE runs ADD COLUMN conversation_id TEXT");
+    }
+    mark("0005_conversation_memory");
+  }
 }
+

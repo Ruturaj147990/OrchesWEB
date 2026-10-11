@@ -38,9 +38,18 @@ export class RequirementExtractor {
         lower.includes("acceptance criteria");
 
       if ((isHeading || isBullet || isNumbered || hasRequirementKeyword) && line.length > 8) {
-        // Strip prefixes
         const cleanTitle = line.replace(/^[#\-*\d.\s:]+/, "").trim();
-        if (cleanTitle.length < 5 || cleanTitle.toLowerCase().startsWith("table of contents")) continue;
+        const lowerTitle = cleanTitle.toLowerCase();
+        if (
+          cleanTitle.length < 5 ||
+          lowerTitle.startsWith("table of contents") ||
+          lowerTitle === "requirements" ||
+          lowerTitle === "constraints" ||
+          lowerTitle === "acceptance criteria" ||
+          lowerTitle === "architecture" ||
+          lowerTitle === "overview" ||
+          lowerTitle === "features"
+        ) continue;
 
         const isExplicit = hasRequirementKeyword || lower.includes("must") || lower.includes("shall") || lower.includes("required");
 
@@ -57,7 +66,10 @@ export class RequirementExtractor {
           createdAt: new Date().toISOString(),
         });
 
-        if (requirements.length >= 50) break; // Bounded extraction
+        if (requirements.length >= 250) {
+          doc.warnings.push(`Document contains additional candidate requirements exceeding bounded extraction limit (250); excess requirements deferred.`);
+          break; // Bounded extraction with explicit warning
+        }
       }
     }
 

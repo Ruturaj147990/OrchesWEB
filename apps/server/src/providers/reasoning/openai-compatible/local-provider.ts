@@ -84,6 +84,10 @@ export class OpenAICompatibleLocalProvider implements ReasoningProvider {
     return this.model;
   }
 
+  public getContextWindow(): number {
+    return this.contextTokens;
+  }
+
   public getTimeoutMs(): number {
     return this.timeoutMs;
   }

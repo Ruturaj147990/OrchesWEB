@@ -8,6 +8,9 @@ import { ActivityLog } from "./components/ActivityLog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { BlueprintDialog } from "./components/BlueprintDialog";
+import { ConversationList } from "./components/ConversationList";
+import { ConversationModal } from "./components/ConversationModal";
+import { ConversationSummary } from "./api";
 
 type Theme = "light" | "dark" | "system";
 
@@ -41,6 +44,10 @@ export function App() {
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   const [livePhase, setLivePhase] = useState<{ phase: string; attempt: number | null } | null>(null);
   const [dialog, setDialog] = useState<"settings" | "new-project" | "edit-project" | "blueprints" | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<"runs" | "conversations">("runs");
+  const [conversationModalId, setConversationModalId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; tone: "error" | "info" } | null>(null);
   const [stopping, setStopping] = useState(false);
   const [theme, setTheme] = useState<Theme>((readStored("orches.theme") as Theme) || "system");
@@ -124,6 +131,17 @@ export function App() {
     return runs;
   }, [projectId]);
 
+  const refreshConversations = useCallback(async () => {
+    if (!projectId) return [];
+    try {
+      const { conversations: list } = await api.conversations(projectId);
+      setConversations(list);
+      return list;
+    } catch {
+      return [];
+    }
+  }, [projectId]);
+
   const refreshDetail = useCallback(async (runId: string | null) => {
     if (!runId) return setDetail(null);
     try {
@@ -138,14 +156,17 @@ export function App() {
     setWorkspace(null);
     setIde(null);
     setRuns([]);
+    setConversations([]);
     setDetail(null);
     setSelectedRunId(null);
+    setSelectedConversationId(null);
     setEvents([]);
     setLivePhase(null);
     if (!projectId) return;
     refreshWorkspace();
     refreshRuns().then((list) => setSelectedRunId(list[0]?.id ?? null)).catch(() => {});
-  }, [projectId, refreshWorkspace, refreshRuns]);
+    refreshConversations().catch(() => {});
+  }, [projectId, refreshWorkspace, refreshRuns, refreshConversations]);
 
   useEffect(() => {
     refreshDetail(selectedRunId);
@@ -174,6 +195,7 @@ export function App() {
       if (ev.type === "run.finished") {
         setLivePhase(null);
         refreshWorkspace();
+        refreshConversations();
       }
       if (ev.runId && /^(run\.|attempt\.|task\.)/.test(ev.type) && ev.type !== "run.log") {
         if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -232,6 +254,45 @@ export function App() {
     try {
       await api.sendGuidance(projectId, text);
       showNotice("Guidance will be included in the next attempt.");
+    } catch (err) {
+      showNotice(err instanceof ApiError ? err.message : String(err), "error");
+    }
+  };
+
+  const handleResumeConversation = async (convoId: string, taskText: string): Promise<boolean> => {
+    try {
+      const res = await api.resumeConversation(convoId, taskText);
+      setLivePhase({ phase: "preparing", attempt: null });
+      await Promise.all([refreshRuns(), refreshConversations()]);
+      setSelectedRunId(res.run.id);
+      showNotice(`Resumed conversation "${res.conversation.title}" with new run.`);
+      return true;
+    } catch (err) {
+      showNotice(err instanceof ApiError ? err.message : String(err), "error");
+      return false;
+    }
+  };
+
+  const handleDeleteConversation = async (convoId: string) => {
+    try {
+      await api.deleteConversation(convoId);
+      await refreshConversations();
+      if (selectedConversationId === convoId) setSelectedConversationId(null);
+      if (conversationModalId === convoId) setConversationModalId(null);
+      showNotice("Conversation deleted from server.");
+    } catch (err) {
+      showNotice(err instanceof ApiError ? err.message : String(err), "error");
+    }
+  };
+
+  const handleNewConversation = async () => {
+    if (!projectId) return;
+    try {
+      const res = await api.createConversation(projectId);
+      await refreshConversations();
+      setSelectedConversationId(res.conversation.id);
+      setConversationModalId(res.conversation.id);
+      showNotice("Created new conversation session.");
     } catch (err) {
       showNotice(err instanceof ApiError ? err.message : String(err), "error");
     }
@@ -349,10 +410,52 @@ export function App() {
             <RunResult detail={detail} livePhase={detail?.run.status === "running" ? livePhase : null} onStop={stopRun} stopping={stopping} />
           </div>
           <aside className="col-side">
-            <RunHistory runs={runs} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
+            <div style={{ display: "flex", gap: "6px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "4px" }}>
+              <button
+                className={`btn btn-sm ${sidebarTab === "runs" ? "btn-secondary" : "btn-ghost"}`}
+                style={{ flex: 1 }}
+                onClick={() => setSidebarTab("runs")}
+              >
+                Runs ({runs.length})
+              </button>
+              <button
+                className={`btn btn-sm ${sidebarTab === "conversations" ? "btn-secondary" : "btn-ghost"}`}
+                style={{ flex: 1 }}
+                onClick={() => setSidebarTab("conversations")}
+              >
+                Chats ({conversations.length})
+              </button>
+            </div>
+            {sidebarTab === "runs" ? (
+              <RunHistory runs={runs} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
+            ) : (
+              <ConversationList
+                conversations={conversations}
+                selectedId={selectedConversationId}
+                onSelect={(id) => {
+                  setSelectedConversationId(id);
+                  setConversationModalId(id);
+                }}
+                onNew={handleNewConversation}
+                onDelete={handleDeleteConversation}
+              />
+            )}
             <ActivityLog events={events} selectedRunId={selectedRunId} connection={connection} />
           </aside>
         </main>
+      )}
+
+      {conversationModalId && (
+        <ConversationModal
+          conversationId={conversationModalId}
+          onClose={() => setConversationModalId(null)}
+          onResume={handleResumeConversation}
+          onDeleted={async () => {
+            await refreshConversations();
+            setSelectedConversationId(null);
+            showNotice("Conversation deleted from server.");
+          }}
+        />
       )}
 
       {dialog === "settings" && settings && (

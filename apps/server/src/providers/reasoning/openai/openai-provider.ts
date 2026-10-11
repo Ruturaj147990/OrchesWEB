@@ -33,6 +33,16 @@ export class OpenAIProvider implements ReasoningProvider {
     return this.model;
   }
 
+  public getContextWindow(): number {
+    const m = this.model.toLowerCase();
+    if (m.includes("gpt-4o") || m.includes("gpt-4-turbo") || m.includes("o1") || m.includes("o3")) {
+      return 128_000;
+    }
+    if (m.includes("gpt-4")) return 32_768;
+    if (m.includes("gpt-3.5")) return 16_385;
+    return 128_000;
+  }
+
   public isConfigured(): boolean {
     return this.client !== null;
   }

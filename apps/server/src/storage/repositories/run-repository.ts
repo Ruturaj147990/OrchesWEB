@@ -11,27 +11,28 @@ export class RunRepository {
     this.db
       .prepare(`
         INSERT INTO runs (id, project_id, status, current_task_id, iteration_count, stop_reason, started_at, ended_at,
-                          task_text, title, provider_id, model_id, agent_id, outcome, summary, safety_mode, commit_sha)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          task_text, title, provider_id, model_id, agent_id, outcome, summary, safety_mode, commit_sha, conversation_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         run.id,
         run.projectId,
         run.status,
-        run.currentTaskId,
-        run.iterationCount,
-        run.stopReason,
-        run.startedAt,
-        run.endedAt,
-        run.taskText,
-        run.title,
-        run.providerId,
-        run.modelId,
-        run.agentId,
-        run.outcome,
-        run.summary,
-        run.safetyMode,
-        run.commitSha
+        run.currentTaskId ?? null,
+        run.iterationCount ?? 0,
+        run.stopReason ?? null,
+        run.startedAt ?? new Date().toISOString(),
+        run.endedAt ?? null,
+        run.taskText ?? "",
+        run.title ?? "",
+        run.providerId ?? "",
+        run.modelId ?? "",
+        run.agentId ?? "",
+        run.outcome ?? null,
+        run.summary ?? null,
+        run.safetyMode ?? "creative_within_constraints",
+        run.commitSha ?? null,
+        run.conversationId ?? null
       );
     return run;
   }
@@ -72,7 +73,7 @@ export class RunRepository {
       .run(status, stopReason ?? null, TERMINAL.has(status) ? 1 : 0, new Date().toISOString(), id);
   }
 
-  public updateFields(id: string, fields: Partial<Pick<Run, "title" | "currentTaskId" | "outcome" | "summary" | "safetyMode" | "commitSha">>): void {
+  public updateFields(id: string, fields: Partial<Pick<Run, "title" | "currentTaskId" | "outcome" | "summary" | "safetyMode" | "commitSha" | "conversationId">>): void {
     const map: Record<string, string> = {
       title: "title",
       currentTaskId: "current_task_id",
@@ -80,6 +81,7 @@ export class RunRepository {
       summary: "summary",
       safetyMode: "safety_mode",
       commitSha: "commit_sha",
+      conversationId: "conversation_id",
     };
     const keys = Object.keys(fields).filter((k) => k in map);
     if (keys.length === 0) return;
@@ -125,6 +127,7 @@ export class RunRepository {
       summary: s("summary"),
       safetyMode: s("safety_mode"),
       commitSha: s("commit_sha"),
+      conversationId: s("conversation_id"),
     };
   }
 }

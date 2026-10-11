@@ -235,7 +235,65 @@ export const api = {
   requirements: (projectId: string) => request<CandidateRequirement[]>("GET", `/projects/${projectId}/requirements`),
   updateRequirement: (projectId: string, requirementId: string, patch: Partial<CandidateRequirement>) =>
     request<CandidateRequirement>("PATCH", `/projects/${projectId}/requirements/${requirementId}`, patch),
+  conversations: (projectId: string) => request<{ conversations: ConversationSummary[] }>("GET", `/projects/${projectId}/conversations`),
+  conversationDetail: (conversationId: string) => request<ConversationDetail>("GET", `/conversations/${conversationId}`),
+  createConversation: (projectId: string, title?: string, initialInstruction?: string) =>
+    request<{ conversation: ConversationSummary }>("POST", `/projects/${projectId}/conversations`, { title, initialInstruction }),
+  updateConversation: (conversationId: string, updates: { title?: string; status?: string }) =>
+    request<{ conversation: ConversationSummary }>("PATCH", `/conversations/${conversationId}`, updates),
+  resumeConversation: (conversationId: string, taskText: string, maxAttempts?: number) =>
+    request<{ run: Run; conversation: ConversationSummary }>("POST", `/conversations/${conversationId}/resume`, { taskText, maxAttempts }),
+  deleteConversation: (conversationId: string) =>
+    request<{ ok: boolean; deletedId: string }>("DELETE", `/conversations/${conversationId}`),
 };
+
+export interface ConversationSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  status: "active" | "archived" | "completed";
+  createdAt: string;
+  updatedAt: string;
+  resumedRunId: string | null;
+  messageCount: number;
+  lastActivityAt: string | null;
+  hasMemorySnapshot: boolean;
+}
+
+export interface ConversationMessage {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant" | "system" | "tool" | "orchestrator";
+  content: string;
+  meta: Record<string, any>;
+  createdAt: string;
+}
+
+export interface ConversationMemorySnapshot {
+  id: string;
+  conversationId: string;
+  snapshotMarkdown: string;
+  tokenCount: number;
+  meta: Record<string, any>;
+  createdAt: string;
+}
+
+export interface ConversationDetail {
+  conversation: {
+    id: string;
+    projectId: string;
+    title: string;
+    status: "active" | "archived" | "completed";
+    createdAt: string;
+    updatedAt: string;
+    resumedRunId: string | null;
+    latestSnapshotId: string | null;
+    messageCount: number;
+    lastActivityAt: string | null;
+  };
+  messages: ConversationMessage[];
+  latestSnapshot: ConversationMemorySnapshot | null;
+}
 
 export const AUTONOMY_MODE_LABELS: Record<AutonomyMode, { label: string; description: string }> = {
   creative_within_constraints: {

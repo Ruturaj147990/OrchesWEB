@@ -49,7 +49,7 @@ export class RunManager {
     await this.active.get(runId)?.promise;
   }
 
-  public async start(projectId: string, taskText: string, options?: { maxAttempts?: number }): Promise<Run> {
+  public async start(projectId: string, taskText: string, options?: { maxAttempts?: number; conversationId?: string }): Promise<Run> {
     const project = this.projects.findById(projectId);
     if (!project) throw new RunStartError("Project not found.", 404);
     const text = (taskText || "").trim();
@@ -89,6 +89,7 @@ export class RunManager {
       providerId: provider.id,
       modelId: provider.getModel(),
       agentId: agent.id,
+      conversationId: options?.conversationId ?? null,
     });
     this.runs.create(run);
     this.events.record(projectId, "run.started", {

@@ -73,6 +73,7 @@ export const RunSchema = z.object({
   summary: z.string().nullable().default(null),
   safetyMode: z.string().nullable().default(null),
   commitSha: z.string().nullable().default(null),
+  conversationId: z.string().nullable().default(null),
 });
 export type Run = z.infer<typeof RunSchema>;
 
@@ -441,4 +442,60 @@ export const IdeConnectionStateSchema = z.object({
   errorMessage: z.string().nullable().default(null),
 });
 export type IdeConnectionState = z.infer<typeof IdeConnectionStateSchema>;
+
+// --- Persistent Conversation Memory & History ---
+export const ConversationRoleSchema = z.enum(["user", "assistant", "system", "tool", "orchestrator"]);
+export type ConversationRole = z.infer<typeof ConversationRoleSchema>;
+
+export const ConversationMessageSchema = z.object({
+  id: z.string(),
+  conversationId: z.string(),
+  role: ConversationRoleSchema,
+  content: z.string(),
+  meta: z.record(z.unknown()).default({}),
+  createdAt: z.string(),
+});
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+
+export const ConversationMemorySnapshotSchema = z.object({
+  id: z.string(),
+  conversationId: z.string(),
+  snapshotMarkdown: z.string(),
+  tokenCount: z.number().default(0),
+  meta: z.record(z.unknown()).default({}),
+  createdAt: z.string(),
+});
+export type ConversationMemorySnapshot = z.infer<typeof ConversationMemorySnapshotSchema>;
+
+export const ConversationStatusSchema = z.enum(["active", "archived", "completed"]);
+export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
+
+export const ConversationSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  status: ConversationStatusSchema.default("active"),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  resumedRunId: z.string().nullable().default(null),
+  latestSnapshotId: z.string().nullable().default(null),
+  messageCount: z.number().default(0),
+  lastActivityAt: z.string().nullable().default(null),
+});
+export type Conversation = z.infer<typeof ConversationSchema>;
+
+export const ConversationSummarySchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  status: ConversationStatusSchema.default("active"),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  resumedRunId: z.string().nullable().default(null),
+  messageCount: z.number().default(0),
+  lastActivityAt: z.string().nullable().default(null),
+  hasMemorySnapshot: z.boolean().default(false),
+});
+export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
+
 
