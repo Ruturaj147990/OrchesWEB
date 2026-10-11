@@ -1,6 +1,9 @@
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
 import { extractJsonFromText } from "../prompts/json-extractor.js";
 import { ProjectProfile, projectFileList } from "../workspace/project-inspector.js";
+import type { ProjectProfileDefinition } from "../domain/profiles/project-profiles.js";
+import type { AutonomyMode } from "@orchestrator/shared-types";
+import type { CandidateRequirement } from "../domain/blueprints/requirement-extractor.js";
 
 export interface TaskPlan {
   title: string;
@@ -25,17 +28,40 @@ function fallbackPlan(taskText: string, warning: string): TaskPlan {
 }
 
 /**
- * Turns the user's task into a short title, checkable acceptance criteria and
- * the files worth reading. Provider failures propagate (the run fails visibly);
- * unusable output falls back to the task text itself and is reported as such.
+ * Turns the user's task, profile, and blueprint into a short title, checkable
+ * acceptance criteria and the files worth reading.
  */
 export async function planTask(
   provider: ReasoningProvider,
-  input: { projectId: string; runId: string; taskText: string; workspacePath: string; profile: ProjectProfile; signal?: AbortSignal }
+  input: {
+    projectId: string;
+    runId: string;
+    taskText: string;
+    workspacePath: string;
+    profile: ProjectProfile;
+    profileDefinition?: ProjectProfileDefinition;
+    autonomyMode?: AutonomyMode;
+    blueprintRequirements?: CandidateRequirement[];
+    signal?: AbortSignal;
+  }
 ): Promise<TaskPlan> {
   const files = projectFileList(input.workspacePath, 200);
+
+  const profileNote = input.profileDefinition
+    ? `\nPROJECT PROFILE: ${input.profileDefinition.name} (${input.profileDefinition.description})\nFocus areas: ${input.profileDefinition.focusAreas.join(", ")}`
+    : "";
+
+  const blueprintNote = input.blueprintRequirements && input.blueprintRequirements.length > 0
+    ? `\nRELEVANT BLUEPRINT REQUIREMENTS:\n${input.blueprintRequirements
+        .slice(0, 10)
+        .map((r) => `- [${r.id}] ${r.title}`)
+        .join("\n")}`
+    : "";
+
   const prompt = `TASK FROM THE USER:
 ${input.taskText.trim()}
+${profileNote}
+${blueprintNote}
 
 PROJECT FILES (${files.length}${files.length >= 200 ? "+" : ""}):
 ${files.join("\n") || "(empty folder)"}
@@ -46,7 +72,7 @@ Respond with JSON:
   "acceptance_criteria": ["2 to 5 concrete, checkable statements that must be true when the task is done"],
   "files_to_read": ["existing files from the list above that the engineer must read or change"]
 }
-Only include criteria the user actually asked for. Do not add features.`;
+Only include criteria relevant to the task and project requirements. Do not add unrelated features.`;
 
   const response = await provider.generate(
     {

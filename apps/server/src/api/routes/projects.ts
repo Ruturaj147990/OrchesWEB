@@ -16,6 +16,8 @@ const CreateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
   rootPath: z.string().trim().min(1),
   createFolder: z.boolean().optional().default(false),
+  profileId: z.string().optional().default("general"),
+  autonomyMode: z.enum(["creative_within_constraints", "creative_exploration", "strict_blueprint_adherence"]).optional().default("creative_within_constraints"),
   verificationCommands: z.array(z.string().trim().min(1).max(500)).max(10).optional().default([]),
   autoCommit: z.boolean().optional().default(true),
 });
@@ -23,6 +25,8 @@ const CreateProjectSchema = z.object({
 const UpdateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   rootPath: z.string().trim().min(1).optional(),
+  profileId: z.string().optional(),
+  autonomyMode: z.enum(["creative_within_constraints", "creative_exploration", "strict_blueprint_adherence"]).optional(),
   verificationCommands: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
   autoCommit: z.boolean().optional(),
 });
@@ -57,6 +61,8 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
       name: body.name,
       objective: "",
       rootPath: check.canonicalPath,
+      profileId: body.profileId,
+      autonomyMode: body.autonomyMode,
       status: "ready",
       verificationCommands: body.verificationCommands,
       autoCommit: body.autoCommit,
@@ -64,7 +70,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
       updatedAt: now,
     });
     projects.create(project);
-    events.record(project.id, "project.created", { name: project.name, rootPath: project.rootPath });
+    events.record(project.id, "project.created", { name: project.name, rootPath: project.rootPath, profileId: project.profileId, autonomyMode: project.autonomyMode });
     return reply.status(201).send(project);
   });
 

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api, ApiError, IdeStatus, Project, WorkspaceInfo } from "../api";
+import { useEffect, useState } from "react";
+import { api, ApiError, AUTONOMY_MODE_LABELS, IdeStatus, Project, WorkspaceInfo } from "../api";
 
 interface Props {
   project: Project;
@@ -8,13 +8,36 @@ interface Props {
   runActive: boolean;
   onEdit: () => void;
   onRefresh: () => void;
+  onOpenBlueprints: () => void;
   onNotice: (msg: string, tone?: "error" | "info") => void;
 }
 
-export function WorkspacePanel({ project, workspace, ide, runActive, onEdit, onRefresh, onNotice }: Props) {
+export function WorkspacePanel({ project, workspace, ide, runActive, onEdit, onRefresh, onOpenBlueprints, onNotice }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [blueprintCount, setBlueprintCount] = useState<number | null>(null);
+  const [requirementCount, setRequirementCount] = useState<number | null>(null);
   const profile = workspace?.profile;
   const git = workspace?.git;
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([api.blueprints(project.id), api.requirements(project.id)])
+      .then(([bps, reqs]) => {
+        if (!cancelled) {
+          setBlueprintCount(bps.length);
+          setRequirementCount(reqs.length);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBlueprintCount(0);
+          setRequirementCount(0);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
   const act = async (label: string, fn: () => Promise<{ message: string }>) => {
     setBusy(label);
@@ -38,11 +61,16 @@ export function WorkspacePanel({ project, workspace, ide, runActive, onEdit, onR
     }
   };
 
+  const modeLabel = AUTONOMY_MODE_LABELS[project.autonomyMode]?.label ?? project.autonomyMode;
+
   return (
     <section className="card workspace" aria-label="Workspace">
       <div className="card-head">
         <h2 className="card-title">Workspace</h2>
         <div className="row tight">
+          <button className="btn btn-ghost btn-sm" onClick={onOpenBlueprints} title="Manage master blueprints">
+            Blueprints {blueprintCount ? `(${blueprintCount})` : ""}
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={onRefresh} title="Re-inspect the folder">
             Refresh
           </button>
@@ -59,6 +87,38 @@ export function WorkspacePanel({ project, workspace, ide, runActive, onEdit, onR
         <p className="callout callout-danger small">This folder no longer exists. Edit the project to point it at the right folder.</p>
       ) : (
         <dl className="facts">
+          <div>
+            <dt>Profile & Mode</dt>
+            <dd>
+              <span className="chip" title="Project Profile">{project.profileId.replace(/_/g, " ")}</span>
+              {" · "}
+              <span className="chip" title={AUTONOMY_MODE_LABELS[project.autonomyMode]?.description}>{modeLabel}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>Blueprint</dt>
+            <dd>
+              {blueprintCount !== null ? (
+                blueprintCount > 0 ? (
+                  <>
+                    <span>{blueprintCount} attached ({requirementCount} reqs)</span>{" "}
+                    <button className="link" onClick={onOpenBlueprints}>
+                      view / upload
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="muted">None attached</span>{" "}
+                    <button className="link" onClick={onOpenBlueprints}>
+                      + attach blueprint
+                    </button>
+                  </>
+                )
+              ) : (
+                "…"
+              )}
+            </dd>
+          </div>
           <div>
             <dt>Project</dt>
             <dd>{profile ? (profile.isEmpty ? "Empty folder" : `${profile.fileCount} files · ${profile.languages.join(", ") || "unknown type"}`) : "…"}</dd>

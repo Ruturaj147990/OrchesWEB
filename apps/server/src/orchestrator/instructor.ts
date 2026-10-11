@@ -1,6 +1,10 @@
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
 import { extractJsonFromText } from "../prompts/json-extractor.js";
 import type { ProjectProfile } from "../workspace/project-inspector.js";
+import type { ProjectProfileDefinition } from "../domain/profiles/project-profiles.js";
+import type { AutonomyMode } from "@orchestrator/shared-types";
+import type { CandidateRequirement } from "../domain/blueprints/requirement-extractor.js";
+import type { ImportedDocument } from "../domain/blueprints/importer.js";
 
 export interface IterationEvidence {
   iteration: number;
@@ -22,15 +26,25 @@ export interface Instruction {
   warning?: string;
 }
 
-const SYSTEM = `You are the technical lead directing an autonomous coding agent (the Antigravity Agent) that can read files, edit files and run commands inside one project folder.
-You do NOT write the code yourself. The agent is a capable engineer: tell it WHAT must be true when it is done (files, behaviour, how it will be tested), not full file contents.
-When asking for a fix, quote the exact failing check output and name the files involved, and ask the agent to run the project's tests itself before finishing.
-Reply with one JSON object only.`;
+const SYSTEM = `You are the Systems Architect and Technical Lead directing an autonomous coding agent (the Antigravity Agent) operating inside a project workspace.
+Your responsibility is to synthesize a comprehensive, cohesive Engineering Brief in Markdown that guides the agent to implement the user's objective as an integrated whole.
+DO NOT write the source code yourself. DO NOT output complete file contents, copy-paste templates, or micro-instructions like 'create file X with content Y'. The agent is a capable engineer that will inspect existing code conventions, decide necessary edits, implement the solution using its native tools, and run verification tests.
+When repairing a rejected iteration, conduct a root-cause analysis of the orchestrator's verification failure, quote the exact error output, and provide targeted corrective guidance.
+Reply with one JSON object only: {"action": "instruct" or "stop", "instruction": "comprehensive markdown engineering brief", "rationale": "one sentence", "stop_reason": "only if action is stop: the genuine blocker"}`;
+
+const MODE_DIRECTIVES: Record<AutonomyMode, string> = {
+  creative_within_constraints: `MODE: Creative within constraints (Default).
+Encourage innovative, robust, and clean technical solutions while strictly adhering to user requirements, existing project architecture, technical boundaries, and safety policies. Suggest modern patterns, effective abstractions, and algorithms while respecting the requested scope.`,
+  creative_exploration: `MODE: Creative exploration (Soft constraints).
+Grant greater autonomy in architectural design, technical approach, and alternative exploration. Requirements designated as preferences or soft constraints may be reconsidered if a superior, cleaner, or more performant alternative exists. Articulate trade-offs and rationale clearly. Mandatory core objectives and workspace safety remain strictly non-negotiable.`,
+  strict_blueprint_adherence: `MODE: Strict instruction & blueprint adherence.
+Prioritize exact, faithful implementation of the user's explicit requirements and blueprint specifications. Strictly discourage unsolicited features, speculative redesigns, scope expansion, or unrequested architectural restructuring. Fulfill the exact acceptance criteria with minimal, targeted changes.`,
+};
 
 /**
- * The reasoning provider decides what the coding agent should do next: the first instruction for the
- * task, or — after a rejected iteration — a correction based on the observed diff, check output and
- * review. Provider errors propagate; malformed output falls back to a deterministic instruction.
+ * The reasoning provider decides what the coding agent should do next: synthesizing
+ * a comprehensive Engineering Brief for the task, or — after a rejected iteration —
+ * a targeted corrective brief based on observed diffs, check outputs, and review.
  */
 export async function composeInstruction(
   provider: ReasoningProvider,
@@ -40,6 +54,10 @@ export async function composeInstruction(
     taskText: string;
     criteria: string[];
     profile: ProjectProfile;
+    profileDefinition?: ProjectProfileDefinition;
+    autonomyMode?: AutonomyMode;
+    blueprintDocuments?: ImportedDocument[];
+    blueprintRequirements?: CandidateRequirement[];
     files: string[];
     iteration: number;
     maxIterations: number;
@@ -48,6 +66,9 @@ export async function composeInstruction(
     signal?: AbortSignal;
   }
 ): Promise<Instruction> {
+  const mode = ctx.autonomyMode ?? "creative_within_constraints";
+  const modeDirective = MODE_DIRECTIVES[mode] || MODE_DIRECTIVES.creative_within_constraints;
+
   const checks = ctx.profile.checks.map((c) => c.label).join(", ") || "none detected (only file validation)";
   const history = ctx.history.slice(-2).map(
     (h) => `--- Iteration ${h.iteration} ---
@@ -64,23 +85,64 @@ ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}
 REVIEWER NOTES: ${h.reviewer || "(none)"}`
   );
 
-  const prompt = `OBJECTIVE FROM THE USER:
-${ctx.taskText.trim()}
+  const profileSection = ctx.profileDefinition
+    ? `PROJECT PROFILE: ${ctx.profileDefinition.name}
+${ctx.profileDefinition.description}
+Engineering Guidelines:
+${ctx.profileDefinition.engineeringGuidelines.map((g) => `- ${g}`).join("\n")}
+Focus Areas: ${ctx.profileDefinition.focusAreas.join(", ")}`
+    : "";
 
-ACCEPTANCE CRITERIA:
-${ctx.criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+  const blueprintSection = ctx.blueprintRequirements && ctx.blueprintRequirements.length > 0
+    ? `MASTER BLUEPRINT REQUIREMENTS:
+${ctx.blueprintRequirements
+  .slice(0, 20)
+  .map((r) => `- [${r.id}] (${r.provenanceKind}) ${r.title} — ${r.description} (Ref: ${r.sourceReference})`)
+  .join("\n")}${ctx.blueprintRequirements.length > 20 ? `\n… and ${ctx.blueprintRequirements.length - 20} additional blueprint requirements.` : ""}`
+    : ctx.blueprintDocuments && ctx.blueprintDocuments.length > 0
+      ? `MASTER BLUEPRINT ATTACHMENT:
+Attached document: ${ctx.blueprintDocuments.map((d) => `${d.filename} (${d.byteSize} bytes)`).join(", ")}
+Excerpt:
+${ctx.blueprintDocuments[0].extractedText.slice(0, 2500)}`
+      : "";
 
-PROJECT: ${ctx.profile.isEmpty ? "empty folder" : `${ctx.profile.fileCount} files; languages: ${ctx.profile.languages.join(", ") || "unknown"}`}. Checks the orchestrator runs afterwards: ${checks}.
-FILES: ${ctx.files.slice(0, 150).join(", ") || "(none)"}
+  const prompt = [
+    "OBJECTIVE FROM THE USER:",
+    ctx.taskText.trim(),
+    "",
+    "AUTONOMY & CREATIVITY DIRECTIVE:",
+    modeDirective,
+    "",
+    profileSection,
+    "",
+    blueprintSection,
+    "",
+    "ACCEPTANCE CRITERIA:",
+    ctx.criteria.map((c, i) => `${i + 1}. ${c}`).join("\n"),
+    "",
+    `PROJECT: ${ctx.profile.isEmpty ? "empty folder" : `${ctx.profile.fileCount} files; languages: ${ctx.profile.languages.join(", ") || "unknown"}`}. Checks the orchestrator runs afterwards: ${checks}.`,
+    `EXISTING FILES (sample): ${ctx.files.slice(0, 100).join(", ") || "(none)"}`,
+    "",
+    `ITERATION ${ctx.iteration} of at most ${ctx.maxIterations}.`,
+    history.length ? `PREVIOUS ITERATIONS:\n${history.join("\n\n")}` : "This is the first iteration.",
+    ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
+    "",
+    `Construct a cohesive Engineering Brief in Markdown for the Antigravity Agent.
+It must communicate:
+1. Executive Objective & Expected Outcome: Restate the full objective and target behavior.
+2. Architecture & Design Direction: Outline design patterns, interfaces, integration points, and algorithmic approach.
+3. Applicable Constraints & Profile Guidelines: Incorporate the profile guidelines and autonomy mode rules above.
+4. Scope of Implementation: Guide the agent on areas to inspect and coordinate without prescribing file-by-file source dumps.
+5. Verification Expectations: Explicitly state how the agent must validate its work before finishing (e.g. running the project's tests).
+${history.length ? "6. Root Cause Analysis & Fix Directions: Quote the exact failing checks above and specify the technical correction required." : ""}
 
-ITERATION ${ctx.iteration} of at most ${ctx.maxIterations}.
-${history.length ? `PREVIOUS ITERATIONS:\n${history.join("\n\n")}` : "This is the first iteration."}
-${ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : ""}
-
-Write the next instruction for the agent. It must be self-contained: restate the full objective and every acceptance criterion that is not yet met, name the files involved, and${history.length ? " quote the exact errors above that must be fixed" : " say how the result will be checked"}. Do not paste complete code; the agent writes the code.
+CRITICAL: Do NOT generate full source code files or paste complete file contents. The agent will independently inspect the workspace and write the code.
 Respond with JSON:
-{"action": "instruct" or "stop", "instruction": "text for the agent", "rationale": "one sentence", "stop_reason": "only if action is stop: the genuine blocker"}
-Use "stop" only when the objective cannot be achieved (e.g. it is impossible or needs information only the user has).`;
+{"action": "instruct" or "stop", "instruction": "markdown engineering brief for the agent", "rationale": "one sentence", "stop_reason": "only if action is stop: the genuine blocker"}
+Use "stop" only when the objective cannot be achieved (e.g. it is impossible or requires external human credentials).`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const response = await provider.generate(
     {
@@ -89,31 +151,43 @@ Use "stop" only when the objective cannot be achieved (e.g. it is impossible or 
       messages: [{ role: "user", content: prompt }],
       json: true,
       temperature: 0.2,
-      maxOutputTokens: 1500,
+      maxOutputTokens: 3500,
       projectId: ctx.projectId,
       runId: ctx.runId,
     },
     ctx.signal
   );
+
   const parsed = (response.parsed ?? extractJsonFromText(response.text)) as Record<string, unknown> | null;
   const action = String(parsed?.action ?? "").toLowerCase();
   const instruction = typeof parsed?.instruction === "string" ? parsed.instruction.trim() : "";
   if (action === "stop") {
-    return { action: "stop", instruction: "", rationale: String(parsed?.stop_reason ?? parsed?.rationale ?? "The reasoning model stopped the run."), source: "model" };
+    return {
+      action: "stop",
+      instruction: "",
+      rationale: String(parsed?.stop_reason ?? parsed?.rationale ?? "The reasoning model stopped the run."),
+      source: "model",
+    };
   }
   if (instruction.length >= 10) {
-    return { action: "instruct", instruction, rationale: typeof parsed?.rationale === "string" ? parsed.rationale : "", source: "model" };
+    return {
+      action: "instruct",
+      instruction,
+      rationale: typeof parsed?.rationale === "string" ? parsed.rationale : "",
+      source: "model",
+    };
   }
 
   const last = ctx.history[ctx.history.length - 1];
   const fallback = last
-    ? `${ctx.taskText.trim()}\n\nThe previous attempt was rejected. Fix these problems:\n${last.blockers.map((b) => `- ${b}`).join("\n")}`
-    : `${ctx.taskText.trim()}\n\nAcceptance criteria:\n${ctx.criteria.map((c) => `- ${c}`).join("\n")}`;
+    ? `### Engineering Brief: Corrective Iteration\n\n**Objective:**\n${ctx.taskText.trim()}\n\n**Identified Defects from Verification:**\n${last.blockers.map((b) => `- ${b}`).join("\n")}\n\n**Action Required:**\nInspect the affected files, apply the necessary corrections, and verify with automated tests before completing.`
+    : `### Engineering Brief\n\n**Objective:**\n${ctx.taskText.trim()}\n\n**Acceptance Criteria:**\n${ctx.criteria.map((c) => `- ${c}`).join("\n")}\n\n**Action Required:**\nInspect the workspace, implement the requested functionality according to project conventions, and verify with automated tests.`;
+
   return {
     action: "instruct",
     instruction: fallback,
     rationale: "",
     source: "fallback",
-    warning: "The reasoning model's instruction was not usable JSON; the orchestrator sent the task and known problems directly.",
+    warning: "The reasoning model's instruction was not usable JSON; the orchestrator synthesized an engineering brief from the task and known problems directly.",
   };
 }

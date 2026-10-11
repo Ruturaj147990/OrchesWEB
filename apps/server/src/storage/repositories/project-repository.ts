@@ -38,17 +38,17 @@ export class ProjectRepository {
 
   public update(
     id: string,
-    fields: Partial<Pick<Project, "name" | "objective" | "rootPath" | "status" | "verificationCommands" | "autoCommit">>
+    fields: Partial<Pick<Project, "name" | "objective" | "rootPath" | "status" | "profileId" | "autonomyMode" | "verificationCommands" | "autoCommit">>
   ): Project | null {
     const current = this.findById(id);
     if (!current) return null;
     const next = { ...current, ...fields, updatedAt: new Date().toISOString() };
     this.db
       .prepare(`
-        UPDATE projects SET name = ?, objective = ?, root_path = ?, status = ?, verification_commands_json = ?, auto_commit = ?, updated_at = ?
+        UPDATE projects SET name = ?, objective = ?, root_path = ?, status = ?, profile_id = ?, autonomy_mode = ?, verification_commands_json = ?, auto_commit = ?, updated_at = ?
         WHERE id = ?
       `)
-      .run(next.name, next.objective, next.rootPath, next.status, JSON.stringify(next.verificationCommands), next.autoCommit ? 1 : 0, next.updatedAt, id);
+      .run(next.name, next.objective, next.rootPath, next.status, next.profileId, next.autonomyMode, JSON.stringify(next.verificationCommands), next.autoCommit ? 1 : 0, next.updatedAt, id);
     return next;
   }
 

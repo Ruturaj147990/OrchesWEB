@@ -1119,3 +1119,93 @@ label.option-card {
 .probe-busy {
   color: var(--text-3);
 }
+
+/* --- Blueprint Dialog & Requirements ---------------------------------------------------- */
+.blueprint-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.blueprint-upload-section,
+.blueprint-list-section,
+.requirements-list-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.blueprint-upload-section h3,
+.blueprint-list-section h3,
+.requirements-list-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.upload-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.blueprint-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.requirements-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--surface);
+}
+.requirements-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.requirement-item {
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+}
+.requirement-item.provenance-explicit {
+  border-left-color: var(--ok);
+}
+.requirement-item.provenance-inferred {
+  border-left-color: var(--info);
+}
+.req-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.req-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.req-title {
+  font-size: 13px;
+  color: var(--text);
+}
+.req-source {
+  margin-left: auto;
+}
+.req-desc {
+  margin: 4px 0;
+  color: var(--text-2);
+}
+.req-test {
+  color: var(--text-3);
+  font-size: 11.5px;
+}

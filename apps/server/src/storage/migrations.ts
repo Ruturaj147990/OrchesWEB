@@ -73,4 +73,39 @@ export function runMigrations(db: DatabaseSync): void {
     }
     mark("0003_agent_loop");
   }
+
+  if (!applied("0004_blueprints_and_modes")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_blueprints (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        extension TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        extracted_text TEXT NOT NULL,
+        warnings_json TEXT NOT NULL DEFAULT '[]',
+        imported_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS project_requirements (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        blueprint_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        provenance_kind TEXT NOT NULL DEFAULT 'explicit',
+        source_reference TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'candidate',
+        proposed_acceptance_test TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_project_blueprints_project_id ON project_blueprints(project_id);
+      CREATE INDEX IF NOT EXISTS idx_project_requirements_project_id ON project_requirements(project_id);
+    `);
+    mark("0004_blueprints_and_modes");
+  }
 }

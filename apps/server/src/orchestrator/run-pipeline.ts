@@ -21,6 +21,8 @@ import { projectFileList } from "../workspace/project-inspector.js";
 import { missingRequestedFiles } from "../workspace/requested-files.js";
 import { ReasoningUsageLedger } from "../domain/budgets/usage-ledger.js";
 import { SettingsManager } from "../platform/settings-manager.js";
+import { BlueprintRepository } from "../storage/repositories/blueprint-repository.js";
+import { getProjectProfile } from "../domain/profiles/project-profiles.js";
 
 export const CLOUD_RUN_COST_CEILING_USD = 2.0;
 
@@ -109,6 +111,13 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     }
     log(`Coding mechanism: ${agent.displayName} — ${agent.description}`);
 
+    const blueprintRepo = new BlueprintRepository(db);
+    const blueprints = blueprintRepo.listBlueprints(project.id);
+    const requirements = blueprintRepo.listRequirements(project.id);
+    const profileDef = getProjectProfile(project.profileId);
+    const autonomyMode = project.autonomyMode || "creative_within_constraints";
+    log(`Profile: ${profileDef.name} · Mode: ${autonomyMode}${blueprints.length ? ` · Master blueprints: ${blueprints.length} (${requirements.length} requirement(s))` : ""}`);
+
     const git = new GitManager(root);
     const gitStart: GitStatusResult = await git.getStatus();
     runs.updateFields(run.id, { safetyMode: gitStart.safetyMode });
@@ -144,7 +153,17 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     phase("planning");
     let plan;
     try {
-      plan = await planTask(provider, { projectId: project.id, runId: run.id, taskText: ctx.taskText, workspacePath: root, profile: baselineProfile, signal });
+      plan = await planTask(provider, {
+        projectId: project.id,
+        runId: run.id,
+        taskText: ctx.taskText,
+        workspacePath: root,
+        profile: baselineProfile,
+        profileDefinition: profileDef,
+        autonomyMode,
+        blueprintRequirements: requirements,
+        signal,
+      });
     } catch (err) {
       ensureNotCancelled();
       finish("failed", "error", `Planning failed: ${(err as Error).message}`);
@@ -217,6 +236,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           taskText: ctx.taskText,
           criteria: plan.acceptanceCriteria,
           profile: baselineProfile,
+          profileDefinition: profileDef,
+          autonomyMode,
+          blueprintDocuments: blueprints,
+          blueprintRequirements: requirements,
           files: projectFileList(root, 200),
           iteration: attempt,
           maxIterations: ctx.maxAttempts,

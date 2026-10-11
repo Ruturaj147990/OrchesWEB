@@ -17,6 +17,7 @@ import { messageRoutes } from "./api/routes/messages.js";
 import { settingsRoutes } from "./api/routes/settings.js";
 import { ideRoutes } from "./api/routes/ide.js";
 import { gitRoutes } from "./api/routes/git.js";
+import { blueprintRoutes } from "./api/routes/blueprints.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -78,6 +79,7 @@ export async function buildApp(options: BuildAppOptions | string = {}): Promise<
   await app.register(settingsRoutes, { prefix: "/api/v1" });
   await app.register(ideRoutes, { prefix: "/api/v1" });
   await app.register(gitRoutes, { prefix: "/api/v1" });
+  await app.register(blueprintRoutes, { prefix: "/api/v1" });
 
   const webDist = path.join(ORCHESTRATOR_ROOT, "apps", "web", "dist");
   if (opts.serveWeb !== false && fs.existsSync(path.join(webDist, "index.html"))) {

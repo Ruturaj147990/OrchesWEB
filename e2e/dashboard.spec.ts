@@ -51,7 +51,7 @@ test("Run is disabled until a task is described; dialogs are keyboard accessible
   await page.getByRole("button", { name: "Settings" }).click();
   const settings = page.getByRole("dialog", { name: "Settings" });
   await expect(settings).toBeVisible();
-  await expect(settings).toContainText("Antigravity IDE agent — not available");
+  await expect(settings).toContainText("Antigravity Agent");
   await expect(settings).toContainText("Built-in coder");
   await page.keyboard.press("Escape");
   await expect(settings).toBeHidden();

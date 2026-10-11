@@ -1,8 +1,46 @@
+export type AutonomyMode = "creative_within_constraints" | "creative_exploration" | "strict_blueprint_adherence";
+
+export interface ProjectProfileDefinition {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  engineeringGuidelines: string[];
+  focusAreas: string[];
+  suggestedAcceptanceCriteria: string[];
+}
+
+export interface ImportedBlueprint {
+  id: string;
+  filename: string;
+  extension: string;
+  sha256: string;
+  byteSize: number;
+  extractedText: string;
+  warnings: string[];
+  importedAt: string;
+}
+
+export interface CandidateRequirement {
+  id: string;
+  projectId: string;
+  blueprintId?: string;
+  title: string;
+  description: string;
+  provenanceKind: "explicit" | "inferred";
+  sourceReference: string;
+  status: "candidate" | "approved" | "rejected";
+  proposedAcceptanceTest: string;
+  createdAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
   rootPath: string;
   status: string;
+  profileId: string;
+  autonomyMode: AutonomyMode;
   verificationCommands: string[];
   autoCommit: boolean;
   createdAt: string;
@@ -170,9 +208,9 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 export const api = {
   health: () => request<{ status: string }>("GET", "/health"),
   projects: () => request<Project[]>("GET", "/projects"),
-  createProject: (body: { name: string; rootPath: string; createFolder?: boolean; verificationCommands?: string[]; autoCommit?: boolean }) =>
+  createProject: (body: { name: string; rootPath: string; createFolder?: boolean; profileId?: string; autonomyMode?: AutonomyMode; verificationCommands?: string[]; autoCommit?: boolean }) =>
     request<Project>("POST", "/projects", body),
-  updateProject: (id: string, body: Partial<Pick<Project, "name" | "rootPath" | "verificationCommands" | "autoCommit">>) => request<Project>("PATCH", `/projects/${id}`, body),
+  updateProject: (id: string, body: Partial<Pick<Project, "name" | "rootPath" | "profileId" | "autonomyMode" | "verificationCommands" | "autoCommit">>) => request<Project>("PATCH", `/projects/${id}`, body),
   removeProject: (id: string) => request<{ success: boolean }>("DELETE", `/projects/${id}`),
   workspace: (id: string) => request<WorkspaceInfo>("GET", `/projects/${id}/workspace`),
   initGit: (id: string) => request<{ message: string }>("POST", `/projects/${id}/git/init`),
@@ -188,6 +226,29 @@ export const api = {
   localModels: (baseUrl?: string) => request<{ models: string[] }>("GET", `/settings/local-models${baseUrl ? `?baseUrl=${encodeURIComponent(baseUrl)}` : ""}`),
   ideStatus: (projectId?: string) => request<IdeStatus>("GET", `/ide/status${projectId ? `?projectId=${projectId}` : ""}`),
   openInIde: (projectId: string) => request<{ message: string }>("POST", `/projects/${projectId}/open-in-ide`),
+  profiles: () => request<ProjectProfileDefinition[]>("GET", "/profiles"),
+  blueprints: (projectId: string) => request<ImportedBlueprint[]>("GET", `/projects/${projectId}/blueprints`),
+  uploadBlueprint: (projectId: string, filename: string, contentText?: string, contentBase64?: string) =>
+    request<{ document: ImportedBlueprint; requirements: CandidateRequirement[] }>("POST", `/projects/${projectId}/blueprints`, { filename, contentText, contentBase64 }),
+  deleteBlueprint: (projectId: string, blueprintId: string) => request<{ success: boolean }>("DELETE", `/projects/${projectId}/blueprints/${blueprintId}`),
+  requirements: (projectId: string) => request<CandidateRequirement[]>("GET", `/projects/${projectId}/requirements`),
+  updateRequirement: (projectId: string, requirementId: string, patch: Partial<CandidateRequirement>) =>
+    request<CandidateRequirement>("PATCH", `/projects/${projectId}/requirements/${requirementId}`, patch),
+};
+
+export const AUTONOMY_MODE_LABELS: Record<AutonomyMode, { label: string; description: string }> = {
+  creative_within_constraints: {
+    label: "Creative with constraints",
+    description: "Balances innovation with strict requirement boundaries and safety.",
+  },
+  creative_exploration: {
+    label: "Creative exploration",
+    description: "Autonomy to explore alternative architectures and re-evaluate soft constraints.",
+  },
+  strict_blueprint_adherence: {
+    label: "Strict blueprint adherence",
+    description: "Exact, faithful implementation of explicit requirements without unsolicited features.",
+  },
 };
 
 export const PROVIDER_LABELS: Record<string, string> = {

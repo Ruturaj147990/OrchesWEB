@@ -7,6 +7,7 @@ import { RunHistory } from "./components/RunHistory";
 import { ActivityLog } from "./components/ActivityLog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ProjectDialog } from "./components/ProjectDialog";
+import { BlueprintDialog } from "./components/BlueprintDialog";
 
 type Theme = "light" | "dark" | "system";
 
@@ -39,7 +40,7 @@ export function App() {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   const [livePhase, setLivePhase] = useState<{ phase: string; attempt: number | null } | null>(null);
-  const [dialog, setDialog] = useState<"settings" | "new-project" | "edit-project" | null>(null);
+  const [dialog, setDialog] = useState<"settings" | "new-project" | "edit-project" | "blueprints" | null>(null);
   const [notice, setNotice] = useState<{ text: string; tone: "error" | "info" } | null>(null);
   const [stopping, setStopping] = useState(false);
   const [theme, setTheme] = useState<Theme>((readStored("orches.theme") as Theme) || "system");
@@ -332,9 +333,11 @@ export function App() {
               runActive={Boolean(activeRun)}
               onEdit={() => setDialog("edit-project")}
               onRefresh={refreshWorkspace}
+              onOpenBlueprints={() => setDialog("blueprints")}
               onNotice={showNotice}
             />
             <TaskComposer
+              project={project}
               settings={settings}
               providerReady={providerReady}
               runActive={Boolean(activeRun)}
@@ -379,6 +382,16 @@ export function App() {
             setDialog(null);
             setProjectId(null);
             await loadProjects();
+          }}
+        />
+      )}
+      {dialog === "blueprints" && project && (
+        <BlueprintDialog
+          projectId={project.id}
+          projectName={project.name}
+          onClose={() => setDialog(null)}
+          onChanged={() => {
+            refreshWorkspace();
           }}
         />
       )}

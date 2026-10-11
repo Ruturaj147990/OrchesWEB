@@ -68,13 +68,16 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
 
     const marker = `[orches ${input.runId.slice(4, 12)}#${input.attemptNumber}]`;
     const prompt = [
-      `${marker} Task from the Orches orchestrator (iteration ${input.attemptNumber}).`,
+      `${marker} Engineering Brief from Orches Orchestrator (iteration ${input.attemptNumber}).`,
       instruction,
       "",
-      "Constraints:",
-      `- Work only inside the open workspace folder ${input.workspacePath}. Do not modify files outside it.`,
+      "Execution Instructions for Antigravity Agent:",
+      `- Work exclusively inside the open workspace folder: ${input.workspacePath}. Do not modify files outside it.`,
+      "- Independently inspect existing files and project structure to understand conventions before editing.",
+      "- Implement the changes as a cohesive whole using your native coding tools.",
+      "- Run the project's tests and checks to verify your work before concluding.",
       "- Do not commit, switch branches, or push. Do not edit .env files or secrets.",
-      "- When you are finished, reply with a short summary of exactly what you changed and anything you could not do.",
+      "- When finished, reply with a concise summary of what you implemented and verified.",
     ].join("\n");
 
     // Track workspace activity so "idle" means both the conversation and the files have settled.

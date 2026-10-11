@@ -1,7 +1,8 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
-import { Settings } from "../api";
+import { AUTONOMY_MODE_LABELS, Project, Settings } from "../api";
 
 interface Props {
+  project?: Project | null;
   settings: Settings | null;
   providerReady: boolean | null;
   runActive: boolean;
@@ -11,7 +12,7 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-export function TaskComposer({ settings, providerReady, runActive, disabledReason, onRun, onGuidance, onOpenSettings }: Props) {
+export function TaskComposer({ project, settings, providerReady, runActive, disabledReason, onRun, onGuidance, onOpenSettings }: Props) {
   const [task, setTask] = useState("");
   const [guidance, setGuidance] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -35,6 +36,9 @@ export function TaskComposer({ settings, providerReady, runActive, disabledReaso
     ? `${settings.activeProviderId === "openai" ? "OpenAI" : "Local"} · ${settings.activeModel}`
     : "…";
   const agent = settings?.codingAgents.find((a) => a.id === settings.codingAgentId);
+  const modeText = project
+    ? `${project.profileId.replace(/_/g, " ")} (${AUTONOMY_MODE_LABELS[project.autonomyMode]?.label || project.autonomyMode})`
+    : null;
 
   return (
     <section className="card composer" aria-label="Task">
@@ -57,6 +61,12 @@ export function TaskComposer({ settings, providerReady, runActive, disabledReaso
             {providerText}
             <span className="sep">→</span>
             {agent?.name ?? "Built-in coder"}
+            {modeText && (
+              <>
+                <span className="sep">·</span>
+                <span title="Active Profile & Mode">{modeText}</span>
+              </>
+            )}
             <span className="sep">·</span>
             up to {settings?.maxAttempts ?? 3} attempts
           </button>
