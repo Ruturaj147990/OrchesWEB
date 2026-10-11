@@ -1,160 +1,101 @@
 import { FastifyPluginAsync } from "fastify";
-import crypto from "node:crypto";
-import { Run, RunSchema } from "@orchestrator/shared-types";
+import { z } from "zod";
 import { RunRepository } from "../../storage/repositories/run-repository.js";
-import { ProjectRepository } from "../../storage/repositories/project-repository.js";
-import { RunStateMachine } from "../../orchestrator/state-machine.js";
-import { EventStore } from "../../events/event-store.js";
 import { getDb } from "../../storage/db.js";
-import { RunExecutionService } from "../../orchestrator/run-execution-service.js";
+import { RunStartError } from "../../orchestrator/run-manager.js";
+
+const StartRunSchema = z.object({ task: z.string() });
+
+function parseJson<T>(raw: unknown, fallback: T): T {
+  if (typeof raw !== "string" || !raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
 
 export const runRoutes: FastifyPluginAsync = async (fastify) => {
   const db = getDb();
-  const runRepo = new RunRepository(db);
-  const projectRepo = new ProjectRepository(db);
-  const eventStore = new EventStore(db);
-  const stateMachine = new RunStateMachine(runRepo, eventStore);
-  const executionService = new RunExecutionService(db, runRepo, projectRepo, eventStore, stateMachine);
+  const runs = new RunRepository(db);
+  const manager = fastify.runManager;
 
-  // List all runs across projects
-  fastify.get("/runs", async () => {
-    const stmt = db.prepare("SELECT * FROM runs ORDER BY started_at DESC LIMIT 50");
-    const rows = stmt.all() as Record<string, unknown>[];
-    return {
-      runs: rows.map((r) => ({
-        id: r.id as string,
-        projectId: r.project_id as string,
-        status: r.status as Run["status"],
-        currentTaskId: (r.current_task_id as string) || null,
-        iterationCount: Number(r.iteration_count || 0),
-        stopReason: (r.stop_reason as string) || null,
-        startedAt: r.started_at as string,
-        endedAt: (r.ended_at as string) || null,
-      })),
-    };
-  });
+  fastify.get<{ Params: { projectId: string } }>("/projects/:projectId/runs", async (request) => ({
+    runs: runs.listByProject(request.params.projectId),
+  }));
 
-  // List runs for a specific project
-  fastify.get<{ Params: { projectId: string } }>("/projects/:projectId/runs", async (request) => {
-    const stmt = db.prepare("SELECT * FROM runs WHERE project_id = ? ORDER BY started_at DESC");
-    const rows = stmt.all(request.params.projectId) as Record<string, unknown>[];
-    return {
-      runs: rows.map((r) => ({
-        id: r.id as string,
-        projectId: r.project_id as string,
-        status: r.status as Run["status"],
-        currentTaskId: (r.current_task_id as string) || null,
-        iterationCount: Number(r.iteration_count || 0),
-        stopReason: (r.stop_reason as string) || null,
-        startedAt: r.started_at as string,
-        endedAt: (r.ended_at as string) || null,
-      })),
-    };
-  });
-
-  // Start or return existing active run for project (idempotent)
-  fastify.post<{ Params: { projectId: string }; Body: { allowDirty?: boolean } }>(
-    "/projects/:projectId/runs",
-    async (request, reply) => {
-      const { projectId } = request.params;
-      const { allowDirty } = request.body || {};
-
-      // Check for existing active run to guarantee idempotency
-      const existingActive = runRepo.findActiveByProjectId(projectId);
-      if (existingActive) {
-        if (existingActive.status === "ready" || existingActive.status === "paused") {
-          const resumed = stateMachine.transition(existingActive.id, "running");
-          // Trigger execution step in background
-          executionService.triggerRunExecution(projectId, existingActive.id, { allowDirty });
-          return reply.status(200).send(resumed);
-        }
-        return reply.status(200).send(existingActive);
-      }
-
-      const now = new Date().toISOString();
-      const newRun: Run = {
-        id: `run-${crypto.randomUUID()}`,
-        projectId,
-        status: "running",
-        currentTaskId: null,
-        iterationCount: 0,
-        stopReason: null,
-        startedAt: now,
-        endedAt: null,
-      };
-
-      const validated = RunSchema.parse(newRun);
-      runRepo.create(validated);
-
-      eventStore.record(projectId, "run.started", {
-        runId: validated.id,
-        status: validated.status,
-      }, validated.id);
-
-      // Trigger background autonomous loop execution
-      executionService.triggerRunExecution(projectId, validated.id, { allowDirty });
-
-      return reply.status(201).send(validated);
-    }
-  );
-
-  // Get run detail
-  fastify.get<{ Params: { runId: string } }>("/runs/:runId", async (request, reply) => {
-    const run = runRepo.findById(request.params.runId);
-    if (!run) {
-      return reply.status(404).send({ error: "Run not found" });
-    }
-    return run;
-  });
-
-  // Pause run
-  fastify.post<{ Params: { runId: string } }>("/runs/:runId/pause", async (request, reply) => {
+  fastify.post<{ Params: { projectId: string }; Body: unknown }>("/projects/:projectId/runs", async (request, reply) => {
+    const parsed = StartRunSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "Body must include a 'task' description." });
     try {
-      const updated = stateMachine.transition(request.params.runId, "paused", "User requested pause");
-      return reply.status(200).send(updated);
-    } catch (err: unknown) {
-      return reply.status(400).send({ error: (err as Error).message });
+      const run = manager.start(request.params.projectId, parsed.data.task);
+      return reply.status(201).send(run);
+    } catch (err) {
+      const status = err instanceof RunStartError ? err.statusCode : 500;
+      return reply.status(status).send({ error: (err as Error).message });
     }
   });
 
-  // Stop run
   fastify.post<{ Params: { runId: string } }>("/runs/:runId/stop", async (request, reply) => {
     try {
-      const updated = stateMachine.transition(request.params.runId, "stopped", "User requested stop");
-      return reply.status(200).send(updated);
-    } catch (err: unknown) {
-      return reply.status(400).send({ error: (err as Error).message });
+      return manager.stop(request.params.runId);
+    } catch (err) {
+      const status = err instanceof RunStartError ? err.statusCode : 500;
+      return reply.status(status).send({ error: (err as Error).message });
     }
   });
 
-  // Resume run
-  fastify.post<{ Params: { runId: string }; Body: { allowDirty?: boolean } }>(
-    "/runs/:runId/resume",
-    async (request, reply) => {
-      try {
-        const run = runRepo.findById(request.params.runId);
-        if (!run) {
-          return reply.status(404).send({ error: "Run not found" });
-        }
-        const updated = stateMachine.transition(request.params.runId, "running", "User resumed run");
-        executionService.triggerRunExecution(run.projectId, run.id, { allowDirty: request.body?.allowDirty });
-        return reply.status(200).send(updated);
-      } catch (err: unknown) {
-        return reply.status(400).send({ error: (err as Error).message });
-      }
-    }
-  );
-
-  // Trigger manual step execution on run
-  fastify.post<{ Params: { runId: string }; Body: { allowDirty?: boolean } }>(
-    "/runs/:runId/step",
-    async (request, reply) => {
-      const run = runRepo.findById(request.params.runId);
-      if (!run) {
-        return reply.status(404).send({ error: "Run not found" });
-      }
-      executionService.triggerRunExecution(run.projectId, run.id, { allowDirty: request.body?.allowDirty });
-      return reply.status(200).send({ message: "Task step dispatched" });
-    }
-  );
+  // Everything the dashboard needs to explain a run: plan, attempts, files, checks, review, gate.
+  fastify.get<{ Params: { runId: string } }>("/runs/:runId", async (request, reply) => {
+    const run = runs.findById(request.params.runId);
+    if (!run) return reply.status(404).send({ error: "Run not found" });
+    const details = runs.getDetails(run.id);
+    const task = db.prepare("SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at DESC LIMIT 1").get(run.id) as Record<string, unknown> | undefined;
+    const attempts = task
+      ? (db.prepare("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_number ASC").all(task.id as string) as Record<string, unknown>[])
+      : [];
+    const checks = task
+      ? (db.prepare("SELECT * FROM verification_runs WHERE task_id = ? ORDER BY timestamp ASC").all(task.id as string) as Record<string, unknown>[])
+      : [];
+    return {
+      run: { ...run, active: manager.isActive(run.id) },
+      details,
+      task: task
+        ? {
+            id: task.id,
+            title: task.title,
+            status: task.status,
+            acceptanceCriteria: parseJson<string[]>(task.acceptance_criteria_json, []),
+          }
+        : null,
+      attempts: attempts.map((a) => ({
+        id: a.id,
+        number: a.attempt_number,
+        status: a.status,
+        agentId: a.adapter_id,
+        providerId: a.provider_id,
+        modelId: a.model_id,
+        startedAt: a.started_at,
+        endedAt: a.ended_at,
+        agentSummary: a.agent_summary,
+        agentError: a.agent_error,
+        files: parseJson<unknown[]>(a.files_changed_json, []),
+        diff: typeof a.diff_text === "string" ? a.diff_text : "",
+        gate: parseJson<Record<string, unknown> | null>(a.gate_json, null),
+        rollback: parseJson<Record<string, unknown> | null>(a.rollback_json, null),
+        checks: checks
+          .filter((c) => c.attempt_id === a.id)
+          .map((c) => ({
+            phase: c.phase,
+            kind: c.check_type,
+            label: c.command,
+            source: c.source,
+            status: c.status,
+            exitCode: c.exit_code,
+            durationMs: c.duration_ms,
+            output: c.stdout_snippet,
+          })),
+      })),
+    };
+  });
 };

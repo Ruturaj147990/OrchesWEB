@@ -2,15 +2,35 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config/env.js";
 
+export type ProviderId = "openai-compatible-local" | "openai";
+
 export interface PersistedSettings {
+  activeProviderId: ProviderId;
   openaiApiKey?: string;
-  defaultProviderId?: string;
-  defaultModel?: string;
-  localBaseUrl?: string;
-  localModel?: string;
-  localTimeoutMs?: number;
+  openaiModel: string;
+  localBaseUrl: string;
+  localModel: string;
+  localTimeoutMs: number;
+  localContextTokens: number;
+  codingAgentId: string;
+  maxAttempts: number;
 }
 
+const DEFAULTS = (): PersistedSettings => ({
+  activeProviderId: "openai-compatible-local",
+  openaiModel: "gpt-4o-mini",
+  localBaseUrl: config.localReasoningBaseUrl,
+  localModel: config.localReasoningModel,
+  localTimeoutMs: 300_000,
+  localContextTokens: 16_384,
+  codingAgentId: "builtin",
+  maxAttempts: 3,
+});
+
+/**
+ * Settings persisted as JSON in the orchestrator data directory (never inside a
+ * project workspace). The OpenAI key may also come from OPENAI_API_KEY.
+ */
 export class SettingsManager {
   private static customDataDir: string | null = null;
 
@@ -22,145 +42,66 @@ export class SettingsManager {
     this.customDataDir = null;
   }
 
-  private static getEffectiveDataDir(): string {
+  public static getDataDir(): string {
     return this.customDataDir || config.dataDir;
   }
 
-  private static getSettingsFilePath(): string {
-    const dir = this.getEffectiveDataDir();
-    if (!fs.existsSync(dir)) {
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-      } catch {}
-    }
+  private static filePath(): string {
+    const dir = this.getDataDir();
+    fs.mkdirSync(dir, { recursive: true });
     return path.join(dir, "settings.json");
   }
 
   public static loadSettings(): PersistedSettings {
-    const filePath = this.getSettingsFilePath();
-    let fileSettings: PersistedSettings = {};
-
-    if (fs.existsSync(filePath)) {
+    const settings = DEFAULTS();
+    const file = this.filePath();
+    if (fs.existsSync(file)) {
       try {
-        const raw = fs.readFileSync(filePath, "utf8");
-        fileSettings = JSON.parse(raw) as PersistedSettings;
+        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+        // Older builds used defaultProviderId/defaultModel/localTimeoutMs naming.
+        const providerId = (raw.activeProviderId ?? raw.defaultProviderId) as string | undefined;
+        if (providerId === "openai" || providerId === "openai-compatible-local") settings.activeProviderId = providerId;
+        if (typeof raw.openaiApiKey === "string" && raw.openaiApiKey.trim()) settings.openaiApiKey = raw.openaiApiKey.trim();
+        const openaiModel = (raw.openaiModel ?? raw.defaultModel) as string | undefined;
+        if (typeof openaiModel === "string" && openaiModel.trim()) settings.openaiModel = openaiModel.trim();
+        if (typeof raw.localBaseUrl === "string" && raw.localBaseUrl.trim()) settings.localBaseUrl = raw.localBaseUrl.trim();
+        if (typeof raw.localModel === "string" && raw.localModel.trim()) settings.localModel = raw.localModel.trim();
+        if (typeof raw.localTimeoutMs === "number" && raw.localTimeoutMs > 0) settings.localTimeoutMs = raw.localTimeoutMs;
+        if (typeof raw.localContextTokens === "number" && raw.localContextTokens > 0) settings.localContextTokens = raw.localContextTokens;
+        if (typeof raw.codingAgentId === "string" && raw.codingAgentId) settings.codingAgentId = raw.codingAgentId;
+        if (typeof raw.maxAttempts === "number" && raw.maxAttempts >= 1 && raw.maxAttempts <= 5) settings.maxAttempts = Math.round(raw.maxAttempts);
       } catch (err) {
-        console.error("Failed to parse settings.json:", err);
+        console.error(`[settings] Ignoring unreadable ${file}: ${(err as Error).message}`);
       }
     }
-
-    // Only inspect project .env if NOT in isolated test mode
-    if (!this.customDataDir && !fileSettings.openaiApiKey) {
-      const envPath = path.resolve(process.cwd(), ".env");
-      if (fs.existsSync(envPath)) {
-        try {
-          const content = fs.readFileSync(envPath, "utf8");
-          const match = content.match(/^OPENAI_API_KEY\s*=\s*(.+)$/m);
-          if (match && match[1].trim()) {
-            fileSettings.openaiApiKey = match[1].trim();
-          }
-        } catch {}
-      }
+    const envKey = process.env.OPENAI_API_KEY;
+    if (!settings.openaiApiKey && envKey && envKey.trim() && !this.customDataDir) {
+      settings.openaiApiKey = envKey.trim();
     }
-
-    return fileSettings;
+    return settings;
   }
 
   public static saveSettings(updates: Partial<PersistedSettings>): PersistedSettings {
-    const current = this.loadSettings();
-    const merged: PersistedSettings = {
-      ...current,
-      ...updates,
-    };
-
-    const filePath = this.getSettingsFilePath();
-    try {
-      fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), "utf8");
-    } catch (err) {
-      console.error("Failed to save settings.json:", err);
-    }
-
-    // Secure local credential storage: do NOT spray API keys into arbitrary project .env files.
-    // Credentials remain safely encapsulated in settings.json within dataDir.
-
+    const merged = { ...this.loadSettings(), ...updates };
+    const file = this.filePath();
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), "utf8");
+    fs.renameSync(tmp, file);
     return merged;
+  }
+
+  public static clearOpenAiKey(): PersistedSettings {
+    const current = this.loadSettings();
+    delete current.openaiApiKey;
+    const file = this.filePath();
+    fs.writeFileSync(file, JSON.stringify(current, null, 2), "utf8");
+    return current;
   }
 
   public static maskApiKey(key?: string): string {
     if (!key) return "";
     const clean = key.trim();
-    if (clean.length <= 8) return "••••••••";
-    return `${clean.slice(0, 7)}••••${clean.slice(-4)}`;
-  }
-
-  public static async verifyOpenAiKey(key: string): Promise<{ valid: boolean; error?: string }> {
-    const cleanKey = key.trim();
-    if (!cleanKey) {
-      return { valid: false, error: "API key cannot be empty." };
-    }
-    if (!cleanKey.startsWith("sk-")) {
-      return {
-        valid: false,
-        error: "Invalid format. OpenAI API keys typically start with 'sk-'.",
-      };
-    }
-
-    // Bypass external network call for unit test mock keys or test runner
-    if (
-      cleanKey.startsWith("sk-test-") ||
-      process.env.NODE_ENV === "test" ||
-      config.env === "test"
-    ) {
-      return { valid: true };
-    }
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4500);
-
-      const res = await fetch("https://api.openai.com/v1/models", {
-        headers: {
-          Authorization: `Bearer ${cleanKey}`,
-        },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (res.status === 200) {
-        return { valid: true };
-      }
-      if (res.status === 401) {
-        return {
-          valid: false,
-          error: "Invalid API key (401 Unauthorized). Please check your OpenAI API key.",
-        };
-      }
-      if (res.status === 429) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, any>;
-        const msg = body?.error?.message || "Quota exceeded or rate limited (429).";
-        if (msg.toLowerCase().includes("quota")) {
-          return { valid: false, error: `OpenAI Quota Exceeded: ${msg}` };
-        }
-        // Authentication succeeded but rate limited
-        return { valid: true };
-      }
-
-      const body = (await res.json().catch(() => ({}))) as Record<string, any>;
-      return {
-        valid: false,
-        error: body?.error?.message || `OpenAI returned HTTP status ${res.status}`,
-      };
-    } catch (err: unknown) {
-      if ((err as Error).name === "AbortError") {
-        return {
-          valid: false,
-          error: "Key verification timed out after 4.5 seconds. Check internet connection.",
-        };
-      }
-      return {
-        valid: false,
-        error: `Could not connect to OpenAI API: ${(err as Error).message}`,
-      };
-    }
+    if (clean.length <= 10) return "••••••••";
+    return `${clean.slice(0, 3)}…${clean.slice(-4)}`;
   }
 }

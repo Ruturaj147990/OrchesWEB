@@ -80,13 +80,17 @@ export class ReasoningUsageLedger {
     }
   }
 
-  public calculateCost(modelId: string, promptTokens: number, completionTokens: number): {
+  public calculateCost(modelId: string, promptTokens: number, completionTokens: number, providerId?: string): {
     costUsd: number;
-    costState: "measured" | "estimated" | "local_no_api_charge";
+    costState: "measured" | "estimated" | "local_no_api_charge" | "unknown";
   } {
     const pricing = DEFAULT_PRICING_CATALOGUE[modelId];
-    if (!pricing || pricing.provider === "local") {
+    if (providerId === "openai-compatible-local" || pricing?.provider === "local") {
       return { costUsd: 0, costState: "local_no_api_charge" };
+    }
+    if (!pricing) {
+      // Cloud model without a price entry: the cost is real but not known here.
+      return { costUsd: 0, costState: "unknown" };
     }
     const cost =
       (promptTokens * pricing.inputPerMillionUsd) / 1_000_000 +
@@ -108,7 +112,7 @@ export class ReasoningUsageLedger {
     errorMessage?: string;
   }): UsageRecord {
     const totalTokens = params.promptTokens + params.completionTokens;
-    const { costUsd, costState } = this.calculateCost(params.modelId, params.promptTokens, params.completionTokens);
+    const { costUsd, costState } = this.calculateCost(params.modelId, params.promptTokens, params.completionTokens, params.providerId);
 
     const record: UsageRecord = {
       id: `usage-${crypto.randomUUID()}`,
@@ -166,6 +170,28 @@ export class ReasoningUsageLedger {
     }
 
     return record;
+  }
+
+  /** Token and cost totals for one run (used for run summaries and the cloud spend ceiling). */
+  public getRunUsage(runId: string): { requests: number; totalTokens: number; costUsd: number; costKnown: boolean } {
+    let rows: Array<{ total_tokens: number; estimated_cost_usd: number; cost_state: string }> = [];
+    if (this.db) {
+      try {
+        rows = this.db
+          .prepare("SELECT total_tokens, estimated_cost_usd, cost_state FROM reasoning_usage_ledger WHERE run_id = ?")
+          .all(runId) as typeof rows;
+      } catch {}
+    } else {
+      rows = this.memoryRecords
+        .filter((r) => r.runId === runId)
+        .map((r) => ({ total_tokens: r.totalTokens, estimated_cost_usd: r.estimatedCostUsd, cost_state: r.costState }));
+    }
+    return {
+      requests: rows.length,
+      totalTokens: rows.reduce((a, r) => a + (r.total_tokens || 0), 0),
+      costUsd: Number(rows.reduce((a, r) => a + (r.estimated_cost_usd || 0), 0).toFixed(4)),
+      costKnown: rows.every((r) => r.cost_state !== "unknown"),
+    };
   }
 
   public getSummary(projectId?: string): UsageSummary {

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import crypto from "node:crypto";
 import { RunEvent } from "@orchestrator/shared-types";
+import { SecretRedactor } from "../platform/secret-redactor.js";
 
 type EventListener = (event: RunEvent) => void;
 
@@ -28,7 +29,8 @@ export class EventStore {
       runId: runId || null,
       taskId: taskId || null,
       type,
-      payload,
+      // Event payloads include model output and command logs; never persist or stream secrets.
+      payload: SecretRedactor.redactObject(payload),
       timestamp: new Date().toISOString(),
     };
 

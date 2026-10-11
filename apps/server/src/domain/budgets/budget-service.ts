@@ -20,6 +20,9 @@ export const DEFAULT_PRICING_CATALOGUE: Record<string, ModelPricing> = {
     outputPerMillionUsd: 10.00,
     provider: "openai",
   },
+  "gpt-4.1": { modelId: "gpt-4.1", inputPerMillionUsd: 2.0, outputPerMillionUsd: 8.0, provider: "openai" },
+  "gpt-4.1-mini": { modelId: "gpt-4.1-mini", inputPerMillionUsd: 0.4, outputPerMillionUsd: 1.6, provider: "openai" },
+  "gpt-4.1-nano": { modelId: "gpt-4.1-nano", inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.4, provider: "openai" },
   "llama3.1:8b": {
     modelId: "llama3.1:8b",
     inputPerMillionUsd: 0,

@@ -1,132 +1,86 @@
-import { PlannerOutput, PlannerOutputSchema, Task } from "@orchestrator/shared-types";
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
-import { ContextBuilder } from "../prompts/context-builder.js";
 import { extractJsonFromText } from "../prompts/json-extractor.js";
+import { ProjectProfile, projectFileList } from "../workspace/project-inspector.js";
 
-const PLANNER_SYSTEM_INSTRUCTION = `
-You are the Project Brain and Planner in an autonomous development orchestrator.
-Your role is to analyze project context, roadmap, specifications, and current state to propose bounded, verifiable implementation tasks.
-
-RULES:
-1. Every executable task MUST reference an approved roadmap item (e.g. ROADMAP-001).
-2. Propose small, independently verifiable tasks with explicit acceptance criteria.
-3. Every acceptance criterion must have a concrete verification method (unit_test, integration_test, lint, build, browser_ui).
-4. Output MUST conform strictly to the JSON schema.
-`.trim();
-
-export class PlannerService {
-  constructor(
-    private provider: ReasoningProvider,
-    private contextBuilder: ContextBuilder
-  ) {}
-
-  public async planNextTask(
-    projectId: string,
-    objective: string,
-    budgetSummary: string,
-    approvedRoadmapIds: string[],
-    humanDirections?: string[]
-  ): Promise<PlannerOutput> {
-    const context = this.contextBuilder.buildPlannerContext(objective, budgetSummary, humanDirections);
-
-    const prompt = `
-Please propose the next task for project ${projectId}.
-Approved Roadmap Items available for dispatch: ${approvedRoadmapIds.join(", ")}
-
-Respond with JSON matching schema:
-{
-  "schema_version": 1,
-  "decision": "dispatch_task" | "no_eligible_work" | "stop",
-  "rationale": string,
-  "next_task": {
-    "task_id": string,
-    "roadmap_item_id": string,
-    "requirement_ids": string[],
-    "title": string,
-    "objective": string,
-    "allowed_paths": string[],
-    "acceptance_criteria": [
-      { "id": string, "description": string, "required": boolean, "verification": "unit_test" | "integration_test" | "lint" | "build" | "browser_ui" }
-    ],
-    "verification_plan_ids": string[],
-    "risk": "low" | "medium" | "high",
-    "requires_approval": boolean
-  } | null,
-  "roadmap_proposals": [],
-  "open_questions": [],
-  "stop": boolean,
-  "stop_reason": string | null
+export interface TaskPlan {
+  title: string;
+  acceptanceCriteria: string[];
+  filesToRead: string[];
+  /** "model" when the provider produced a usable plan, "fallback" when the task text was used directly. */
+  source: "model" | "fallback";
+  warning?: string;
 }
-`.trim();
 
-    try {
-      const result = await this.provider.generate({
-        operation: "task_planning",
-        systemInstruction: PLANNER_SYSTEM_INSTRUCTION,
-        messages: [
-          { role: "system", content: context },
-          { role: "user", content: prompt },
-        ],
-        responseSchema: {},
-        dataClassification: "internal",
-        projectId,
-      });
+const SYSTEM = `You plan one software change. Reply with a single JSON object and nothing else.`;
 
-      let parsed = result.parsed;
-      if (!parsed && result.text) {
-        parsed = extractJsonFromText(result.text);
-      }
+function fallbackPlan(taskText: string, warning: string): TaskPlan {
+  const firstLine = taskText.trim().split(/\r?\n/)[0];
+  return {
+    title: firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine,
+    acceptanceCriteria: [taskText.trim()],
+    filesToRead: [],
+    source: "fallback",
+    warning,
+  };
+}
 
-      if (parsed) {
-        const validated = PlannerOutputSchema.parse(parsed);
+/**
+ * Turns the user's task into a short title, checkable acceptance criteria and
+ * the files worth reading. Provider failures propagate (the run fails visibly);
+ * unusable output falls back to the task text itself and is reported as such.
+ */
+export async function planTask(
+  provider: ReasoningProvider,
+  input: { projectId: string; runId: string; taskText: string; workspacePath: string; profile: ProjectProfile; signal?: AbortSignal }
+): Promise<TaskPlan> {
+  const files = projectFileList(input.workspacePath, 200);
+  const prompt = `TASK FROM THE USER:
+${input.taskText.trim()}
 
-        // Normalize roadmap item ID if planner returned variant
-        if (validated.decision === "dispatch_task" && validated.next_task) {
-          if (approvedRoadmapIds.length > 0 && !approvedRoadmapIds.includes(validated.next_task.roadmap_item_id)) {
-            validated.next_task.roadmap_item_id = approvedRoadmapIds[0];
-          }
-          // Ensure allowed_paths permits root files if empty or restrictive
-          if (!validated.next_task.allowed_paths || validated.next_task.allowed_paths.length === 0) {
-            validated.next_task.allowed_paths = ["*", "**/*"];
-          }
-        }
-        return validated;
-      }
-    } catch (err) {
-      // In offline or fallback environments
-    }
+PROJECT FILES (${files.length}${files.length >= 200 ? "+" : ""}):
+${files.join("\n") || "(empty folder)"}
 
-    // Dynamic fallback planning derived from actual project objective
-    const firstRoadmapId = approvedRoadmapIds[0] || "ROADMAP-001";
-    const useNodeTest = objective.toLowerCase().includes("node:test") || objective.toLowerCase().includes("node --test");
+Respond with JSON:
+{
+  "title": "short imperative title, max 10 words",
+  "acceptance_criteria": ["2 to 5 concrete, checkable statements that must be true when the task is done"],
+  "files_to_read": ["existing files from the list above that the engineer must read or change"]
+}
+Only include criteria the user actually asked for. Do not add features.`;
 
-    return PlannerOutputSchema.parse({
-      schema_version: 1,
-      decision: "dispatch_task",
-      rationale: `Dispatching task aligned with project objective: ${objective.slice(0, 80)}`,
-      next_task: {
-        task_id: `task-${Date.now().toString().slice(-4)}`,
-        roadmap_item_id: firstRoadmapId,
-        requirement_ids: ["REQ-001"],
-        title: "Implement project specification",
-        objective: objective || "Build and verify feature fulfilling approved roadmap acceptance criteria.",
-        allowed_paths: ["*", "**/*"],
-        acceptance_criteria: [
-          {
-            id: "AC-1",
-            description: "Source code files and tests are created and pass verification",
-            required: true,
-            verification: "unit_test",
-          },
-        ],
-        verification_plan_ids: useNodeTest ? ["node --test"] : ["npm test"],
-        risk: "medium",
-        requires_approval: false,
-      },
-      roadmap_proposals: [],
-      open_questions: [],
-      stop: false,
-      stop_reason: null,
-    });
+  const response = await provider.generate(
+    {
+      operation: "task_planning",
+      systemInstruction: SYSTEM,
+      messages: [{ role: "user", content: prompt }],
+      json: true,
+      temperature: 0,
+      maxOutputTokens: 800,
+      projectId: input.projectId,
+      runId: input.runId,
+    },
+    input.signal
+  );
+
+  const parsed = (response.parsed ?? extractJsonFromText(response.text)) as Record<string, unknown> | null;
+  if (!parsed || typeof parsed !== "object") {
+    return fallbackPlan(input.taskText, "The planner's response was not valid JSON; the task text is used as the acceptance criterion.");
   }
+  const criteria = (Array.isArray(parsed.acceptance_criteria) ? parsed.acceptance_criteria : [])
+    .filter((c): c is string => typeof c === "string" && c.trim().length > 3)
+    .map((c) => c.trim())
+    .slice(0, 6);
+  const known = new Map(files.map((f) => [f.toLowerCase(), f]));
+  const filesToRead = (Array.isArray(parsed.files_to_read) ? parsed.files_to_read : [])
+    .filter((f): f is string => typeof f === "string")
+    .map((f) => known.get(f.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase()))
+    .filter((f): f is string => Boolean(f))
+    .slice(0, 12);
+  const title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim().slice(0, 100) : "";
+
+  if (criteria.length === 0 || !title) {
+    const fb = fallbackPlan(input.taskText, "The planner's response was incomplete; the task text is used as the acceptance criterion.");
+    return { ...fb, title: title || fb.title, filesToRead };
+  }
+  return { title, acceptanceCriteria: criteria, filesToRead, source: "model" };
 }

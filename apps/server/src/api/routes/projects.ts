@@ -2,218 +2,116 @@ import { FastifyPluginAsync } from "fastify";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Project, ProjectSchema } from "@orchestrator/shared-types";
+import { z } from "zod";
+import { ProjectSchema } from "@orchestrator/shared-types";
 import { ProjectRepository } from "../../storage/repositories/project-repository.js";
+import { RunRepository } from "../../storage/repositories/run-repository.js";
 import { EventStore } from "../../events/event-store.js";
 import { getDb } from "../../storage/db.js";
-import { SecretRedactor } from "../../platform/secret-redactor.js";
+import { validateWorkspaceRoot } from "../../workspace/path-safety.js";
+import { inspectProject } from "../../workspace/project-inspector.js";
+import { GitManager } from "../../git/git-manager.js";
+import { SettingsManager } from "../../platform/settings-manager.js";
+import { ORCHESTRATOR_ROOT } from "../../config/env.js";
+
+const CreateProjectSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  rootPath: z.string().trim().min(1),
+  createFolder: z.boolean().optional().default(false),
+  verificationCommands: z.array(z.string().trim().min(1).max(500)).max(10).optional().default([]),
+  autoCommit: z.boolean().optional().default(true),
+});
+
+const UpdateProjectSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  rootPath: z.string().trim().min(1).optional(),
+  verificationCommands: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
+  autoCommit: z.boolean().optional(),
+});
+
+export function forbiddenWorkspaceRoots(): string[] {
+  return [ORCHESTRATOR_ROOT, SettingsManager.getDataDir()];
+}
 
 export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   const db = getDb();
-  const projectRepo = new ProjectRepository(db);
-  const eventStore = new EventStore(db);
+  const projects = new ProjectRepository(db);
+  const runs = new RunRepository(db);
+  const events = new EventStore(db);
 
-  // List projects
-  fastify.get("/projects", async () => {
-    return projectRepo.list();
-  });
+  fastify.get("/projects", async () => projects.list());
 
-  // Get project by ID
   fastify.get<{ Params: { projectId: string } }>("/projects/:projectId", async (request, reply) => {
-    const project = projectRepo.findById(request.params.projectId);
-    if (!project) {
-      return reply.status(404).send({ error: "Project not found" });
-    }
-    return project;
+    const project = projects.findById(request.params.projectId);
+    return project ?? reply.status(404).send({ error: "Project not found" });
   });
 
-  // Create project draft
-  fastify.post<{ Body: Partial<Project> }>("/projects", async (request, reply) => {
-    const body = request.body || {};
-    const now = new Date().toISOString();
+  fastify.post<{ Body: unknown }>("/projects", async (request, reply) => {
+    const parsed = CreateProjectSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
+    const body = parsed.data;
+    const check = validateWorkspaceRoot(body.rootPath, forbiddenWorkspaceRoots(), { allowCreate: body.createFolder });
+    if (!check.ok) return reply.status(400).send({ error: check.reason });
+    if (!fs.existsSync(check.canonicalPath)) fs.mkdirSync(check.canonicalPath);
 
-    const projectData = {
-      id: body.id || `proj-${crypto.randomUUID()}`,
-      name: body.name || "Untitled Project",
-      objective: body.objective || "",
-      rootPath: body.rootPath || process.cwd(),
-      profileId: body.profileId || "general",
-      autonomyMode: body.autonomyMode || "creative_within_constraints",
-      status: "ready" as const,
+    const duplicate = projects.list().find((p) => path.resolve(p.rootPath).toLowerCase() === check.canonicalPath.toLowerCase());
+    if (duplicate) return reply.status(409).send({ error: `A project for this folder already exists ("${duplicate.name}").`, project: duplicate });
+
+    const now = new Date().toISOString();
+    const project = ProjectSchema.parse({
+      id: `proj-${crypto.randomUUID()}`,
+      name: body.name,
+      objective: "",
+      rootPath: check.canonicalPath,
+      status: "ready",
+      verificationCommands: body.verificationCommands,
+      autoCommit: body.autoCommit,
       createdAt: now,
       updatedAt: now,
-    };
-
-    const validated = ProjectSchema.parse(projectData);
-    const created = projectRepo.create(validated);
-
-    eventStore.record(created.id, "project.created", {
-      projectId: created.id,
-      name: created.name,
-      autonomyMode: created.autonomyMode,
     });
-
-    return reply.status(201).send(created);
+    projects.create(project);
+    events.record(project.id, "project.created", { name: project.name, rootPath: project.rootPath });
+    return reply.status(201).send(project);
   });
 
-  // Update project properties (rootPath, name, objective)
-  fastify.patch<{
-    Params: { projectId: string };
-    Body: { rootPath?: string; name?: string; objective?: string; status?: Project["status"] };
-  }>("/projects/:projectId", async (request, reply) => {
-    const { projectId } = request.params;
-    const project = projectRepo.findById(projectId);
-    if (!project) {
-      return reply.status(404).send({ error: "Project not found" });
+  fastify.patch<{ Params: { projectId: string }; Body: unknown }>("/projects/:projectId", async (request, reply) => {
+    const project = projects.findById(request.params.projectId);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+    const parsed = UpdateProjectSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues.map((i) => i.message).join("; ") });
+    const fields = { ...parsed.data };
+    if (fields.rootPath !== undefined) {
+      if (runs.findActiveByProjectId(project.id)) return reply.status(409).send({ error: "Stop the active run before changing the workspace folder." });
+      const check = validateWorkspaceRoot(fields.rootPath, forbiddenWorkspaceRoots());
+      if (!check.ok) return reply.status(400).send({ error: check.reason });
+      fields.rootPath = check.canonicalPath;
     }
+    const updated = projects.update(project.id, fields);
+    events.record(project.id, "project.updated", { fields: Object.keys(fields) });
+    return updated;
+  });
 
-    const body = request.body || {};
-    if (body.rootPath && body.rootPath.trim()) {
-      const canonical = path.normalize(path.resolve(body.rootPath.trim()));
-      projectRepo.updateRootPath(projectId, canonical);
-      project.rootPath = canonical;
-    }
-    if (body.status) {
-      projectRepo.updateStatus(projectId, body.status);
-      project.status = body.status;
-    }
+  // Removes the project from the dashboard. Never touches files in the workspace.
+  fastify.delete<{ Params: { projectId: string } }>("/projects/:projectId", async (request, reply) => {
+    const project = projects.findById(request.params.projectId);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+    if (runs.findActiveByProjectId(project.id)) return reply.status(409).send({ error: "Stop the active run first." });
+    projects.update(project.id, { status: "archived" });
+    return { success: true };
+  });
 
-    eventStore.record(projectId, "project.updated", {
-      projectId,
+  // What the orchestrator knows about the workspace: type, checks it would run, Git state.
+  fastify.get<{ Params: { projectId: string } }>("/projects/:projectId/workspace", async (request, reply) => {
+    const project = projects.findById(request.params.projectId);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+    const exists = fs.existsSync(project.rootPath);
+    if (!exists) return { exists: false, rootPath: project.rootPath };
+    const [profile, git] = await Promise.all([inspectProject(project.rootPath, project.verificationCommands), new GitManager(project.rootPath).getStatus()]);
+    return {
+      exists: true,
       rootPath: project.rootPath,
-      status: project.status,
-    });
-
-    return reply.status(200).send(project);
-  });
-
-  // Export complete project memory, tasks, verification evidence, and audit events
-  fastify.get<{
-    Params: { projectId: string };
-    Querystring: { format?: string };
-  }>("/projects/:projectId/export", async (request, reply) => {
-    const { projectId } = request.params;
-    const project = projectRepo.findById(projectId);
-    if (!project) {
-      return reply.status(404).send({ error: "Project not found" });
-    }
-
-    const readFileSafe = (relPath: string): string | null => {
-      try {
-        const full = path.join(project.rootPath, relPath);
-        if (fs.existsSync(full)) {
-          return fs.readFileSync(full, "utf8");
-        }
-      } catch {}
-      return null;
+      profile: { ...profile, checks: profile.checks.map((c) => ({ id: c.id, label: c.label, source: c.source, kind: c.kind })) },
+      git: { ...git, dirtyFiles: git.dirtyFiles.slice(0, 50) },
     };
-
-    const memory = {
-      spec: readFileSafe("SPEC.md"),
-      decisions: readFileSafe("DECISIONS.md"),
-      currentState: readFileSafe("CURRENT_STATE.md"),
-      roadmap: readFileSafe(".orchestrator/ROADMAP.md"),
-      repoMap: readFileSafe(".orchestrator/REPO_MAP.md"),
-      taskHistory: readFileSafe(".orchestrator/TASK_HISTORY.json"),
-    };
-
-    const tasks = db.prepare(`
-      SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at ASC
-    `).all(projectId);
-
-    const attempts = db.prepare(`
-      SELECT a.* FROM task_attempts a 
-      JOIN tasks t ON t.id = a.task_id 
-      WHERE t.project_id = ? 
-      ORDER BY a.started_at ASC
-    `).all(projectId);
-
-    const verifications = db.prepare(`
-      SELECT v.* FROM verification_runs v 
-      JOIN tasks t ON t.id = v.task_id 
-      WHERE t.project_id = ? 
-      ORDER BY v.timestamp ASC
-    `).all(projectId);
-
-    const criticReviews = db.prepare(`
-      SELECT c.* FROM critic_reviews c 
-      JOIN tasks t ON t.id = c.task_id 
-      WHERE t.project_id = ? 
-      ORDER BY c.created_at ASC
-    `).all(projectId);
-
-    const rawEvents = eventStore.getEvents(projectId);
-    const budgetCounters = db.prepare(`
-      SELECT * FROM budget_counters WHERE project_id = ?
-    `).all(projectId);
-
-    const exportBundle = {
-      exportedAt: new Date().toISOString(),
-      project,
-      memory,
-      tasks,
-      attempts,
-      verifications,
-      criticReviews,
-      budgetCounters,
-      events: rawEvents,
-    };
-
-    const sanitizedBundle = SecretRedactor.redactObject(exportBundle);
-
-    if (request.query.format === "markdown") {
-      const mdReport = `
-# Autonomous Orchestration Run Report: ${sanitizedBundle.project.name}
-
-- **Project ID:** \`${sanitizedBundle.project.id}\`
-- **Autonomy Mode:** \`${sanitizedBundle.project.autonomyMode}\`
-- **Profile:** \`${sanitizedBundle.project.profileId}\`
-- **Status:** \`${sanitizedBundle.project.status}\`
-- **Exported At:** ${sanitizedBundle.exportedAt}
-
----
-
-## 1. Project Objective & Memory Summary
-${sanitizedBundle.project.objective || "No objective statement recorded."}
-
-### Specification
-${sanitizedBundle.memory.spec || "*(No SPEC.md)*"}
-
-### Approved Roadmap
-${sanitizedBundle.memory.roadmap || "*(No ROADMAP.md)*"}
-
----
-
-## 2. Tasks & Independent Verification Evidence
-Total Tasks Dispatched: ${sanitizedBundle.tasks.length}
-Total Independent Verifications: ${sanitizedBundle.verifications.length}
-
-${sanitizedBundle.tasks.map((t: any) => `
-### Task: ${t.title} (\`${t.id}\`)
-- **Status:** \`${t.status}\` | **Priority:** \`${t.priority}\` | **Risk:** \`${t.risk}\`
-- **Objective:** ${t.objective}
-- **Roadmap Item:** \`${t.roadmap_item_id}\`
-`).join("\n")}
-
----
-
-## 3. Independent Critic Reviews
-${sanitizedBundle.criticReviews.map((c: any) => `
-- **Attempt \`${c.attempt_id}\` Verdict:** \`${c.verdict.toUpperCase()}\`
-  - Rationale: ${c.rationale}
-`).join("\n\n")}
-
----
-
-## 4. Audit Event Stream Summary
-Total Events Logged: ${sanitizedBundle.events.length}
-      `.trim();
-
-      reply.header("Content-Type", "text/markdown; charset=utf-8");
-      return reply.send(mdReport);
-    }
-
-    reply.header("Content-Type", "application/json; charset=utf-8");
-    return reply.send(sanitizedBundle);
   });
 };

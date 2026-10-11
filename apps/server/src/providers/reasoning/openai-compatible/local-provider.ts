@@ -1,4 +1,4 @@
-import { ReasoningProvider, ReasoningRequest, ReasoningResult, ProviderHealth } from "../provider.js";
+import { ReasoningProvider, ReasoningRequest, ReasoningResult, ProviderHealth, wantsJson, ledgerRequestType } from "../provider.js";
 import { PrivacyClass } from "@orchestrator/shared-types";
 import { ReasoningUsageLedger } from "../../../domain/budgets/usage-ledger.js";
 
@@ -7,6 +7,8 @@ export interface LocalProviderConfig {
   model?: string;
   apiKey?: string;
   timeoutMs?: number;
+  /** Context window requested from Ollama (ignored by other OpenAI-compatible servers). */
+  contextTokens?: number;
 }
 
 export interface OllamaNormalizedEndpoints {
@@ -21,61 +23,53 @@ export interface OllamaNormalizedEndpoints {
 
 export function normalizeOllamaEndpoint(rawUrl: string): OllamaNormalizedEndpoints {
   let cleaned = (rawUrl || "http://127.0.0.1:11434").trim();
-  if (!/^https?:\/\//i.test(cleaned)) {
-    cleaned = `http://${cleaned}`;
-  }
-
+  if (!/^https?:\/\//i.test(cleaned)) cleaned = `http://${cleaned}`;
+  let base: string;
   try {
     const parsed = new URL(cleaned);
-    let origin = `${parsed.protocol}//${parsed.host}`;
     let pathname = parsed.pathname.replace(/\/+$/, "");
-    if (pathname.endsWith("/v1")) {
-      pathname = pathname.slice(0, -3);
-    } else if (pathname.endsWith("/api")) {
-      pathname = pathname.slice(0, -4);
-    }
-    const basePath = pathname ? `${origin}${pathname}` : origin;
-
-    return {
-      serverOrigin: basePath,
-      nativeVersionUrl: `${basePath}/api/version`,
-      nativeTagsUrl: `${basePath}/api/tags`,
-      nativeChatUrl: `${basePath}/api/chat`,
-      openAiBaseUrl: `${basePath}/v1`,
-      openAiModelsUrl: `${basePath}/v1/models`,
-      chatCompletionsUrl: `${basePath}/v1/chat/completions`,
-    };
+    if (pathname.endsWith("/v1")) pathname = pathname.slice(0, -3);
+    else if (pathname.endsWith("/api")) pathname = pathname.slice(0, -4);
+    base = `${parsed.protocol}//${parsed.host}${pathname}`;
   } catch {
-    const stripped = cleaned.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
-    return {
-      serverOrigin: stripped,
-      nativeVersionUrl: `${stripped}/api/version`,
-      nativeTagsUrl: `${stripped}/api/tags`,
-      nativeChatUrl: `${stripped}/api/chat`,
-      openAiBaseUrl: `${stripped}/v1`,
-      openAiModelsUrl: `${stripped}/v1/models`,
-      chatCompletionsUrl: `${stripped}/v1/chat/completions`,
-    };
+    base = cleaned.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
   }
+  return {
+    serverOrigin: base,
+    nativeVersionUrl: `${base}/api/version`,
+    nativeTagsUrl: `${base}/api/tags`,
+    nativeChatUrl: `${base}/api/chat`,
+    openAiBaseUrl: `${base}/v1`,
+    openAiModelsUrl: `${base}/v1/models`,
+    chatCompletionsUrl: `${base}/v1/chat/completions`,
+  };
 }
 
+function modelMatches(installed: string, wanted: string): boolean {
+  return installed === wanted || installed === `${wanted}:latest` || `${installed}:latest` === wanted;
+}
+
+/**
+ * Local reasoning through Ollama (native API, so the context window can be set)
+ * or any OpenAI-compatible server. Never falls back to a cloud provider.
+ */
 export class OpenAICompatibleLocalProvider implements ReasoningProvider {
   public id = "openai-compatible-local";
-  public displayName = "Local LLM (OpenAI-Compatible)";
+  public displayName = "Local model (Ollama / OpenAI-compatible)";
   public privacyClass: PrivacyClass = "local";
-  private baseUrl: string;
   private endpoints: OllamaNormalizedEndpoints;
   private model: string;
   private apiKey: string;
   private timeoutMs: number;
+  private contextTokens: number;
+  private isOllama: boolean | null = null;
 
   constructor(config: LocalProviderConfig = {}) {
-    this.baseUrl = config.baseUrl || "http://127.0.0.1:11434";
-    this.endpoints = normalizeOllamaEndpoint(this.baseUrl);
+    this.endpoints = normalizeOllamaEndpoint(config.baseUrl || "http://127.0.0.1:11434");
     this.model = config.model || "llama3.1:8b";
     this.apiKey = config.apiKey || "local";
-    // Default 3-minute cold start allowance (180,000ms), configurable up to 300,000ms
-    this.timeoutMs = Math.min(Math.max(config.timeoutMs || 180000, 10000), 300000);
+    this.timeoutMs = Math.min(Math.max(config.timeoutMs || 300_000, 10_000), 900_000);
+    this.contextTokens = Math.min(Math.max(config.contextTokens || 16_384, 2048), 131_072);
   }
 
   public getBaseUrl(): string {
@@ -94,110 +88,27 @@ export class OpenAICompatibleLocalProvider implements ReasoningProvider {
     return this.timeoutMs;
   }
 
-  private getNormalizedChatUrl(): string {
-    return this.endpoints.chatCompletionsUrl;
-  }
-
-  public async healthCheck(): Promise<ProviderHealth> {
-    const start = Date.now();
-    const origin = this.endpoints.serverOrigin;
-
-    // 1. First probe native Ollama /api/version
-    let serverVersion: string | undefined = undefined;
+  private async detectOllama(): Promise<{ isOllama: boolean; version?: string }> {
     try {
-      const vRes = await fetch(this.endpoints.nativeVersionUrl, {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (vRes.ok) {
-        const vData = (await vRes.json()) as { version?: string };
-        serverVersion = vData.version;
+      const res = await fetch(this.endpoints.nativeVersionUrl, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        const data = (await res.json()) as { version?: string };
+        this.isOllama = typeof data.version === "string";
+        return { isOllama: this.isOllama, version: data.version };
       }
     } catch {}
-
-    // 2. Discover installed models via native /api/tags or OpenAI-compatible /v1/models
-    try {
-      const models = await this.listModels();
-      const latency = Date.now() - start;
-
-      if (models.length > 0 || serverVersion) {
-        const hasSelectedModel = models.some(
-          (m) => m === this.model || m.startsWith(`${this.model}:`) || `${m}:latest` === this.model
-        );
-
-        if (hasSelectedModel) {
-          return {
-            ok: true,
-            status: "ready",
-            latencyMs: latency,
-            serverVersion,
-            discoveredModels: models,
-            normalizedOrigin: origin,
-            message: `Connected to Ollama${serverVersion ? ` v${serverVersion}` : ""} (${latency}ms). Model '${this.model}' is installed and ready for reasoning.`,
-          };
-        } else {
-          return {
-            ok: false,
-            status: "model_unavailable",
-            latencyMs: latency,
-            serverVersion,
-            discoveredModels: models,
-            normalizedOrigin: origin,
-            installCommand: `ollama pull ${this.model}`,
-            message: `Ollama${serverVersion ? ` v${serverVersion}` : ""} server online (${latency}ms), but model '${this.model}' is not in installed list (${models.join(", ")}). Run 'ollama pull ${this.model}' to install.`,
-          };
-        }
-      }
-
-      // 3. Fallback: probe OpenAI-compatible /v1/models directly
-      const probeRes = await fetch(this.endpoints.openAiModelsUrl, {
-        headers: { Authorization: `Bearer ${this.apiKey}` },
-        signal: AbortSignal.timeout(3000),
-      });
-
-      if (probeRes.ok) {
-        return {
-          ok: true,
-          status: "ready",
-          latencyMs: Date.now() - start,
-          discoveredModels: [],
-          normalizedOrigin: origin,
-          message: `Connected to local OpenAI-compatible endpoint at ${origin} (${Date.now() - start}ms).`,
-        };
-      }
-
-      return {
-        ok: false,
-        status: "server_unreachable",
-        latencyMs: Date.now() - start,
-        normalizedOrigin: origin,
-        message: `Local endpoint responded with HTTP ${probeRes.status}: ${probeRes.statusText}`,
-      };
-    } catch (err: unknown) {
-      return {
-        ok: false,
-        status: "server_unreachable",
-        latencyMs: Date.now() - start,
-        normalizedOrigin: origin,
-        message: `Failed to connect to local Ollama server at ${origin}: ${(err as Error).message}. Ensure Ollama is running (e.g. 'ollama run ${this.model}'). Local-only mode strictly forbids falling back to cloud.`,
-      };
-    }
+    this.isOllama = false;
+    return { isOllama: false };
   }
 
   public async listModels(): Promise<string[]> {
-    // 1. Try native Ollama endpoint /api/tags
     try {
-      const res = await fetch(this.endpoints.nativeTagsUrl, {
-        signal: AbortSignal.timeout(3000),
-      });
+      const res = await fetch(this.endpoints.nativeTagsUrl, { signal: AbortSignal.timeout(3000) });
       if (res.ok) {
         const data = (await res.json()) as { models?: Array<{ name: string }> };
-        if (Array.isArray(data.models) && data.models.length > 0) {
-          return data.models.map((m) => m.name);
-        }
+        if (Array.isArray(data.models)) return data.models.map((m) => m.name);
       }
     } catch {}
-
-    // 2. Try OpenAI-compatible /v1/models endpoint
     try {
       const res = await fetch(this.endpoints.openAiModelsUrl, {
         headers: { Authorization: `Bearer ${this.apiKey}` },
@@ -205,112 +116,144 @@ export class OpenAICompatibleLocalProvider implements ReasoningProvider {
       });
       if (res.ok) {
         const data = (await res.json()) as { data?: Array<{ id: string }> };
-        if (Array.isArray(data.data) && data.data.length > 0) {
-          return data.data.map((m) => m.id);
-        }
+        if (Array.isArray(data.data)) return data.data.map((m) => m.id);
       }
     } catch {}
-
     return [];
   }
 
-  public async generate(request: ReasoningRequest, signal?: AbortSignal): Promise<ReasoningResult> {
+  public async healthCheck(): Promise<ProviderHealth> {
     const start = Date.now();
-    const messages = [
-      { role: "system", content: request.systemInstruction },
-      ...request.messages,
-    ];
+    const origin = this.endpoints.serverOrigin;
+    const { version } = await this.detectOllama();
+    const models = await this.listModels();
+    const latencyMs = Date.now() - start;
 
-    const body: Record<string, unknown> = {
-      model: this.model,
-      messages,
-      max_tokens: request.maxOutputTokens || 4096,
-    };
-
-    if (request.responseSchema) {
-      body.response_format = { type: "json_object" };
+    if (!version && models.length === 0) {
+      return {
+        ok: false,
+        status: "server_unreachable",
+        latencyMs,
+        normalizedOrigin: origin,
+        message: `No local model server answered at ${origin}. Start Ollama (or your OpenAI-compatible server) and try again.`,
+      };
     }
-
-    // Configure combined timeout controller supporting cold-start allowance
-    const timeoutController = new AbortController();
-    const timer = setTimeout(() => {
-      timeoutController.abort(new Error(`Local model request timed out after ${this.timeoutMs}ms (cold start allowance reached)`));
-    }, this.timeoutMs);
-
-    // Link caller signal if provided
-    const onCallerAbort = () => {
-      timeoutController.abort(signal?.reason || new Error("Task execution cancelled"));
-    };
-    if (signal) {
-      if (signal.aborted) {
-        clearTimeout(timer);
-        throw new Error("Task execution was cancelled before model dispatch.");
-      }
-      signal.addEventListener("abort", onCallerAbort);
+    if (models.length > 0 && !models.some((m) => modelMatches(m, this.model))) {
+      return {
+        ok: false,
+        status: "model_unavailable",
+        latencyMs,
+        serverVersion: version,
+        discoveredModels: models,
+        normalizedOrigin: origin,
+        installCommand: `ollama pull ${this.model}`,
+        message: `Server is running${version ? ` (Ollama ${version})` : ""} but model '${this.model}' is not installed. Installed: ${models.join(", ")}.`,
+      };
     }
+    return {
+      ok: true,
+      status: "ready",
+      latencyMs,
+      serverVersion: version,
+      discoveredModels: models,
+      normalizedOrigin: origin,
+      message: `${version ? `Ollama ${version}` : "Local server"} is running and model '${this.model}' is available.`,
+    };
+  }
 
-    let response: Response;
-    const chatUrl = this.getNormalizedChatUrl();
+  public async generate(request: ReasoningRequest, signal?: AbortSignal): Promise<ReasoningResult> {
+    if (signal?.aborted) throw new Error("Request cancelled before it was sent.");
+    if (this.isOllama === null) await this.detectOllama();
 
+    const start = Date.now();
+    const timeoutMs = request.timeoutMs ?? this.timeoutMs;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+    const onAbort = () => controller.abort(new Error("cancelled"));
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const messages = [{ role: "system", content: request.systemInstruction }, ...request.messages];
+    const json = wantsJson(request);
+    const maxTokens = request.maxOutputTokens || 4096;
+
+    let text = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+    const url = this.isOllama ? this.endpoints.nativeChatUrl : this.endpoints.chatCompletionsUrl;
     try {
-      response = await fetch(chatUrl, {
+      const body = this.isOllama
+        ? {
+            model: this.model,
+            messages,
+            stream: false,
+            ...(json ? { format: "json" } : {}),
+            options: { num_ctx: this.contextTokens, num_predict: maxTokens, temperature: request.temperature ?? 0.2 },
+          }
+        : {
+            model: this.model,
+            messages,
+            max_tokens: maxTokens,
+            temperature: request.temperature ?? 0.2,
+            ...(json ? { response_format: { type: "json_object" } } : {}),
+          };
+      const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify(body),
-        signal: timeoutController.signal,
+        signal: controller.signal,
       });
-    } catch (err: unknown) {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", onCallerAbort);
-
-      const errMsg = (err as Error).message || String(err);
-      if (errMsg.includes("cold start allowance reached") || (err as Error).name === "TimeoutError") {
-        throw new Error(
-          `[Local-Only Policy Enforcement] Request to local model '${this.model}' timed out after ${this.timeoutMs / 1000}s. Heavy models may require additional GPU/VRAM cold-start load time. You can adjust the timeout in Settings.`
-        );
+      if (!response.ok) {
+        const errText = (await response.text()).slice(0, 500);
+        throw new Error(`Local model server returned HTTP ${response.status}: ${errText}`);
       }
-      throw new Error(
-        `[Local-Only Policy Enforcement] Local reasoning endpoint unreachable at ${chatUrl}. Task halted without cloud fallback: ${errMsg}`
-      );
+      if (this.isOllama) {
+        const data = (await response.json()) as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number; done_reason?: string };
+        text = data.message?.content || "";
+        inputTokens = data.prompt_eval_count || 0;
+        outputTokens = data.eval_count || 0;
+      } else {
+        const data = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
+        text = data.choices?.[0]?.message?.content || "";
+        inputTokens = data.usage?.prompt_tokens || 0;
+        outputTokens = data.usage?.completion_tokens || 0;
+      }
+    } catch (err) {
+      const reason = (controller.signal.reason as Error | undefined)?.message;
+      const message =
+        reason === "timeout"
+          ? `Local model '${this.model}' did not answer within ${Math.round(timeoutMs / 1000)}s.`
+          : reason === "cancelled"
+            ? "Request cancelled."
+            : `Local model request to ${url} failed: ${(err as Error).message}`;
+      ReasoningUsageLedger.getShared().record({
+        providerId: this.id,
+        modelId: this.model,
+        requestType: ledgerRequestType(request.operation),
+        projectId: request.projectId,
+        runId: request.runId,
+        taskId: request.taskId,
+        promptTokens: 0,
+        completionTokens: 0,
+        durationMs: Date.now() - start,
+        success: false,
+        errorMessage: message,
+      });
+      throw new Error(message);
     } finally {
       clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", onCallerAbort);
+      signal?.removeEventListener("abort", onAbort);
     }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(
-        `[Local-Only Policy Enforcement] Local provider returned HTTP ${response.status}: ${errText}`
-      );
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-    };
-
-    const text = data.choices?.[0]?.message?.content || "";
-    let parsed: unknown = undefined;
-    if (request.responseSchema && text) {
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // Raw text retained
-      }
-    }
-
-    const inputTokens = data.usage?.prompt_tokens || 0;
-    const outputTokens = data.usage?.completion_tokens || 0;
     const durationMs = Date.now() - start;
-
     ReasoningUsageLedger.getShared().record({
       providerId: this.id,
       modelId: this.model,
-      requestType: request.operation === "task_planning" ? "planner" : request.operation === "result_review" ? "critic" : "planner",
+      requestType: ledgerRequestType(request.operation),
       projectId: request.projectId,
+      runId: request.runId,
       taskId: request.taskId,
       promptTokens: inputTokens,
       completionTokens: outputTokens,
@@ -318,19 +261,24 @@ export class OpenAICompatibleLocalProvider implements ReasoningProvider {
       success: true,
     });
 
+    const warnings: string[] = [];
+    if (inputTokens >= this.contextTokens - 32) {
+      warnings.push(`Prompt filled the ${this.contextTokens}-token context window; earlier content may have been truncated by the server.`);
+    }
+    let parsed: unknown = undefined;
+    if (json && text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {}
+    }
     return {
       text,
       parsed,
       providerId: this.id,
       modelId: this.model,
-      usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
-      },
+      usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
       durationMs,
-      warnings: [],
+      warnings,
     };
   }
 }
-

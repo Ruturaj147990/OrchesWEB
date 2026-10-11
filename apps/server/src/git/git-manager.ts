@@ -1,250 +1,119 @@
-import { spawn } from "node:child_process";
-import { SnapshotManager, SnapshotManifest } from "./snapshot-manager.js";
+import { runCommand } from "../platform/process-runner.js";
 
 export interface GitStatusResult {
   isGitRepo: boolean;
   hasRemote: boolean;
   remoteUrl: string | null;
   activeBranch: string | null;
-  baselineCommit: string | null;
+  headCommit: string | null;
   isDirty: boolean;
-  modifiedFiles: string[];
+  /** Paths with uncommitted changes (tracked or untracked), relative to the repository root. */
+  dirtyFiles: string[];
+  /** "git" when the workspace is a Git work tree, otherwise orchestrator snapshots are the only safety net. */
   safetyMode: "git" | "local_snapshot";
-  snapshotCount?: number;
 }
 
+export interface CommitResult {
+  committed: boolean;
+  commitSha: string | null;
+  message: string;
+}
+
+/**
+ * Read-mostly Git helper. It never switches branches, resets, or cleans; the
+ * only mutating operations are `commitPaths` (scoped to accepted files) and
+ * `initRepo` (explicit user request).
+ */
 export class GitManager {
-  private snapshotManager: SnapshotManager;
+  constructor(private workspacePath: string) {}
 
-  constructor(private workspacePath: string) {
-    this.workspacePath = workspacePath || process.cwd();
-    this.snapshotManager = new SnapshotManager(this.workspacePath);
-  }
-
-  public getSnapshotManager(): SnapshotManager {
-    return this.snapshotManager;
+  private git(args: string[], timeoutMs = 30_000) {
+    return runCommand(["git", ...args], {
+      cwd: this.workspacePath,
+      timeoutMs,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+    });
   }
 
   public async getStatus(): Promise<GitStatusResult> {
-    try {
-      // 1. Probe if workspace is inside an actual Git repository
-      const workTreeRes = await this.execGit(["rev-parse", "--is-inside-work-tree"]);
-      if (workTreeRes.exitCode === 0 && workTreeRes.stdout.trim() === "true") {
-        // Active Git repository
-        let baselineCommit: string | null = null;
-        const rev = await this.execGit(["rev-parse", "HEAD"]);
-        if (rev.exitCode === 0) {
-          baselineCommit = rev.stdout.trim();
-        }
+    const notGit: GitStatusResult = {
+      isGitRepo: false,
+      hasRemote: false,
+      remoteUrl: null,
+      activeBranch: null,
+      headCommit: null,
+      isDirty: false,
+      dirtyFiles: [],
+      safetyMode: "local_snapshot",
+    };
+    const inside = await this.git(["rev-parse", "--is-inside-work-tree"]);
+    if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") return notGit;
 
-        // Active branch
-        let activeBranch: string | null = null;
-        const branchRes = await this.execGit(["branch", "--show-current"]);
-        if (branchRes.exitCode === 0 && branchRes.stdout.trim()) {
-          activeBranch = branchRes.stdout.trim();
-        } else {
-          const abbrevRes = await this.execGit(["rev-parse", "--abbrev-ref", "HEAD"]);
-          if (abbrevRes.exitCode === 0) activeBranch = abbrevRes.stdout.trim();
-        }
-
-        // Check for remotes (GitHub, GitLab, etc.)
-        let hasRemote = false;
-        let remoteUrl: string | null = null;
-        const remoteRes = await this.execGit(["remote", "-v"]);
-        if (remoteRes.exitCode === 0 && remoteRes.stdout.trim().length > 0) {
-          const lines = remoteRes.stdout.split("\n").filter((l) => l.trim().length > 0);
-          if (lines.length > 0) {
-            hasRemote = true;
-            // Parse remote URL from: origin https://github.com/... (fetch)
-            const match = lines[0].match(/\s+([^\s]+)\s+\(/);
-            remoteUrl = match ? match[1] : lines[0].split(/\s+/)[1] || null;
-          }
-        }
-
-        // Working tree status
-        const statusRes = await this.execGit(["status", "--short"]);
-        const lines = statusRes.stdout.split("\n").filter((l) => l.trim().length > 0);
-        const modifiedFiles = lines.map((l) => l.slice(3).trim());
-
-        return {
-          isGitRepo: true,
-          hasRemote,
-          remoteUrl,
-          activeBranch,
-          baselineCommit,
-          isDirty: modifiedFiles.length > 0,
-          modifiedFiles,
-          safetyMode: "git",
-        };
-      }
-    } catch {
-      // Git command execution error, gracefully fall back to local snapshot mode
-    }
-
-    // 2. Non-Git Directory: Local File Snapshot Safety Active
-    try {
-      const latestSnapshot = this.snapshotManager.getLatestSnapshot();
-      const snapshotList = this.snapshotManager.listSnapshots();
-
-      if (!latestSnapshot) {
-        return {
-          isGitRepo: false,
-          hasRemote: false,
-          remoteUrl: null,
-          activeBranch: null,
-          baselineCommit: null,
-          isDirty: false,
-          modifiedFiles: [],
-          safetyMode: "local_snapshot",
-          snapshotCount: 0,
-        };
-      }
-
-      const diffResult = await this.snapshotManager.computeDiff(latestSnapshot.id);
-
-      return {
-        isGitRepo: false,
-        hasRemote: false,
-        remoteUrl: null,
-        activeBranch: null,
-        baselineCommit: latestSnapshot.id,
-        isDirty: diffResult.filesChanged.length > 0,
-        modifiedFiles: diffResult.filesChanged,
-        safetyMode: "local_snapshot",
-        snapshotCount: snapshotList.length,
-      };
-    } catch {
-      return {
-        isGitRepo: false,
-        hasRemote: false,
-        remoteUrl: null,
-        activeBranch: null,
-        baselineCommit: null,
-        isDirty: false,
-        modifiedFiles: [],
-        safetyMode: "local_snapshot",
-        snapshotCount: 0,
-      };
-    }
-  }
-
-  public async createAttemptBranch(projectId: string, taskId: string, attemptNumber: number): Promise<string> {
-    const status = await this.getStatus();
-    if (status.isGitRepo) {
-      const branchName = `orchestrator/${projectId}/${taskId}/attempt-${attemptNumber}`;
-      await this.execGit(["checkout", "-b", branchName]);
-      return branchName;
-    } else {
-      // Local snapshot mode: Capture isolated attempt baseline
-      const snap = await this.snapshotManager.takeSnapshot(
-        `attempt-${taskId}-${attemptNumber}`,
-        `Pre-attempt ${attemptNumber} isolation baseline for task ${taskId}`
-      );
-      return snap.id;
-    }
-  }
-
-  public async getDiffSummary(): Promise<{ diff: string; filesChanged: string[] }> {
-    const status = await this.getStatus();
-    if (status.isGitRepo) {
-      const diffRes = await this.execGit(["diff", "HEAD"]);
-      const statusRes = await this.execGit(["status", "--short"]);
-      const lines = statusRes.stdout.split("\n").filter((l) => l.trim().length > 0);
-      const filesChanged = lines.map((l) => l.slice(3).trim());
-
-      return {
-        diff: diffRes.stdout,
-        filesChanged,
-      };
-    } else {
-      // Local snapshot mode: Compute real file differences and diff text
-      const diffResult = await this.snapshotManager.computeDiff();
-      return {
-        diff: diffResult.diff,
-        filesChanged: diffResult.filesChanged,
-      };
-    }
-  }
-
-  public async commitCheckpoint(taskId: string, message: string, scopedPaths?: string[]): Promise<string> {
-    const status = await this.getStatus();
-    if (status.isGitRepo) {
-      if (scopedPaths && scopedPaths.length > 0) {
-        await this.execGit(["add", "--", ...scopedPaths]);
-      } else {
-        await this.execGit(["add", "-A"]);
-      }
-      const commitMsg = `chore(orchestrator): checkpoint task ${taskId} — ${message}`;
-      const commitRes = await this.execGit(["commit", "-m", commitMsg]);
-      if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
-        throw new Error(`Git commit failed: ${commitRes.stderr || commitRes.stdout}`);
-      }
-
-      const rev = await this.execGit(["rev-parse", "HEAD"]);
-      return rev.stdout.trim();
-    } else {
-      // Local snapshot mode: Record durable safety checkpoint
-      const snap = await this.snapshotManager.takeSnapshot(
-        `checkpoint-${taskId}`,
-        `Checkpoint task ${taskId} — ${message}`
-      );
-      return snap.id;
-    }
-  }
-
-  public async rollbackAttempt(baselineCommitOrSnapshotId: string, filesToDiscard?: string[]): Promise<void> {
-    const status = await this.getStatus();
-    if (status.isGitRepo) {
-      if (filesToDiscard && filesToDiscard.length > 0) {
-        await this.execGit(["checkout", baselineCommitOrSnapshotId, "--", ...filesToDiscard]);
-      } else {
-        await this.execGit(["checkout", baselineCommitOrSnapshotId]);
-      }
-    } else {
-      // Local snapshot mode: Restore baseline snapshot cleanly without touching unrelated user files
-      await this.snapshotManager.rollback(baselineCommitOrSnapshotId, filesToDiscard);
-    }
-  }
-
-  /**
-   * Initializes a local Git repository strictly with explicit user consent.
-   * Never configures a remote or attempts any network push.
-   */
-  public async initRepo(): Promise<{ success: boolean; message: string }> {
-    const initRes = await this.execGit(["init"]);
-    if (initRes.exitCode !== 0) {
-      throw new Error(`Git init failed: ${initRes.stderr || initRes.stdout}`);
-    }
-
-    // Create initial commit if files exist so repository has a valid HEAD
-    const statusRes = await this.execGit(["status", "--short"]);
-    if (statusRes.stdout.trim().length > 0) {
-      await this.execGit(["add", "-A"]);
-      await this.execGit(["commit", "-m", "chore: initial commit by orchestrator with explicit user consent"]);
-    }
+    const head = await this.git(["rev-parse", "--verify", "-q", "HEAD"]);
+    const branch = await this.git(["branch", "--show-current"]);
+    const remotes = await this.git(["remote", "-v"]);
+    const firstRemote = remotes.stdout.split("\n").find((l) => l.trim().length > 0);
+    const status = await this.git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const dirtyFiles = parsePorcelainZ(status.stdout);
 
     return {
-      success: true,
-      message: "Local Git repository initialized successfully. Remote connection is not configured.",
+      isGitRepo: true,
+      hasRemote: Boolean(firstRemote),
+      remoteUrl: firstRemote ? firstRemote.split(/\s+/)[1] ?? null : null,
+      activeBranch: branch.stdout.trim() || null,
+      headCommit: head.exitCode === 0 ? head.stdout.trim() : null,
+      isDirty: dirtyFiles.length > 0,
+      dirtyFiles,
+      safetyMode: "git",
     };
   }
 
-  private execGit(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return new Promise((resolve) => {
-      const child = spawn("git", args, { cwd: this.workspacePath, shell: false });
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
-      child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-
-      child.on("close", (code) => {
-        resolve({ exitCode: code ?? -1, stdout, stderr });
-      });
-
-      child.on("error", (err) => {
-        resolve({ exitCode: -1, stdout: "", stderr: err.message });
-      });
-    });
+  /** `git diff` against HEAD for display; falls back to an empty string. */
+  public async diffHead(): Promise<string> {
+    const res = await this.git(["diff", "HEAD"]);
+    return res.exitCode === 0 ? res.stdout : "";
   }
+
+  /**
+   * Commit exactly the given paths on the current branch. Other staged or
+   * unstaged user changes are left untouched (`--only`).
+   */
+  public async commitPaths(paths: string[], message: string): Promise<CommitResult> {
+    if (paths.length === 0) return { committed: false, commitSha: null, message: "No paths to commit." };
+    const add = await this.git(["add", "-A", "--", ...paths]);
+    if (add.exitCode !== 0) {
+      return { committed: false, commitSha: null, message: `git add failed: ${(add.stderr || add.stdout).trim()}` };
+    }
+    const commit = await this.git(["commit", "-m", message, "--only", "--", ...paths], 120_000);
+    if (commit.exitCode !== 0) {
+      const detail = (commit.stderr || commit.stdout).trim();
+      return { committed: false, commitSha: null, message: `git commit failed: ${detail}` };
+    }
+    const head = await this.git(["rev-parse", "HEAD"]);
+    return { committed: true, commitSha: head.stdout.trim(), message: "Committed accepted changes." };
+  }
+
+  /** Initialize a local repository (explicit user action only). Never adds a remote or pushes. */
+  public async initRepo(): Promise<{ success: boolean; message: string }> {
+    const init = await this.git(["init"]);
+    if (init.exitCode !== 0) {
+      throw new Error(`git init failed: ${(init.stderr || init.stdout).trim()}`);
+    }
+    return { success: true, message: "Local Git repository initialized. No remote was configured and nothing was committed." };
+  }
+}
+
+/** Parse `git status --porcelain=v1 -z` output into a list of paths. */
+export function parsePorcelainZ(out: string): string[] {
+  const files: string[] = [];
+  const parts = out.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i];
+    if (entry.length < 4) continue;
+    const xy = entry.slice(0, 2);
+    files.push(entry.slice(3));
+    // Renames and copies are followed by the original path as a separate field.
+    if (xy[0] === "R" || xy[0] === "C") i++;
+  }
+  return files;
 }

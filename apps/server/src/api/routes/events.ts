@@ -17,8 +17,10 @@ export const eventRoutes: FastifyPluginAsync = async (fastify) => {
     reply.raw.setHeader("Content-Type", "text/event-stream");
     reply.raw.setHeader("Cache-Control", "no-cache");
     reply.raw.setHeader("Connection", "keep-alive");
-    reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin || "*");
+    // Same-origin in production; the CORS hook has already rejected non-loopback origins.
+    if (request.headers.origin) reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin);
     reply.raw.flushHeaders();
+    reply.hijack();
 
     // 1. Replay missed events from cursor
     const missed = eventStore.getEventsSince(projectId, cursor);

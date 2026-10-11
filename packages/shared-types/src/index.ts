@@ -26,6 +26,10 @@ export const ProjectSchema = z.object({
   profileId: z.string().default("general"),
   autonomyMode: AutonomyModeSchema.default("creative_within_constraints"),
   status: ProjectStatusSchema.default("draft"),
+  /** Verification commands the user configured; when empty, checks are detected from project files. */
+  verificationCommands: z.array(z.string()).default([]),
+  /** Commit accepted changes on the current branch when the workspace is a clean Git work tree. */
+  autoCommit: z.boolean().default(true),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -59,6 +63,16 @@ export const RunSchema = z.object({
   stopReason: z.string().nullable().default(null),
   startedAt: z.string().nullable().default(null),
   endedAt: z.string().nullable().default(null),
+  taskText: z.string().nullable().default(null),
+  title: z.string().nullable().default(null),
+  providerId: z.string().nullable().default(null),
+  modelId: z.string().nullable().default(null),
+  agentId: z.string().nullable().default(null),
+  /** verified | unverified | rejected | error | cancelled — set when the run finishes. */
+  outcome: z.string().nullable().default(null),
+  summary: z.string().nullable().default(null),
+  safetyMode: z.string().nullable().default(null),
+  commitSha: z.string().nullable().default(null),
 });
 export type Run = z.infer<typeof RunSchema>;
 

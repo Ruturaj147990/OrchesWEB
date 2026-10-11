@@ -4,6 +4,7 @@ export type ReasoningOperation =
   | "project_analysis"
   | "requirement_extraction"
   | "task_planning"
+  | "code_generation"
   | "result_review"
   | "repair_diagnosis"
   | "memory_summary"
@@ -13,11 +14,16 @@ export interface ReasoningRequest {
   operation: ReasoningOperation;
   systemInstruction: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  /** Ask the provider for a JSON object response (JSON mode). */
+  json?: boolean;
+  /** @deprecated use `json`; kept so older callers still request JSON mode. */
   responseSchema?: Record<string, unknown>;
+  temperature?: number;
   timeoutMs?: number;
   maxOutputTokens?: number;
-  dataClassification: "public" | "internal" | "sensitive";
+  dataClassification?: "public" | "internal" | "sensitive";
   projectId: string;
+  runId?: string;
   taskId?: string;
 }
 
@@ -58,7 +64,20 @@ export interface ReasoningProvider {
   id: string;
   displayName: string;
   privacyClass: PrivacyClass;
+  /** Model identifier that `generate` will use. */
+  getModel(): string;
   healthCheck(): Promise<ProviderHealth>;
   listModels?(): Promise<string[]>;
   generate(request: ReasoningRequest, signal?: AbortSignal): Promise<ReasoningResult>;
+}
+
+export function wantsJson(request: ReasoningRequest): boolean {
+  return Boolean(request.json || request.responseSchema);
+}
+
+export function ledgerRequestType(op: ReasoningOperation): "planner" | "critic" | "agent_coding" | "test_generation" {
+  if (op === "result_review") return "critic";
+  if (op === "code_generation") return "agent_coding";
+  if (op === "project_analysis") return "test_generation";
+  return "planner";
 }

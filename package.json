@@ -8,7 +8,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build:packages": "npm run build --workspace=packages/shared-types && npm run build --workspace=packages/policy-schema && npm run build --workspace=packages/profile-presets",
+    "build:packages": "npm run build --workspace=packages/shared-types",
     "build:apps": "npm run build --workspace=apps/server && npm run build --workspace=apps/web",
     "build": "npm run build:packages && npm run build:apps",
     "lint": "npm run lint --workspaces --if-present",
@@ -17,8 +17,8 @@
     "test:e2e": "playwright test",
     "dev:server": "npm run dev --workspace=apps/server",
     "dev:web": "npm run dev --workspace=apps/web",
-    "dev": "tsx apps/server/src/server.ts",
-    "start": "node apps/server/dist/server.js"
+    "dev": "npm run build:packages && tsx apps/server/src/server.ts",
+    "start": "npm run build && node apps/server/dist/server.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",

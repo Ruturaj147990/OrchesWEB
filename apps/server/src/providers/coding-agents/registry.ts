@@ -1,45 +1,23 @@
 import { CodingAgentAdapter } from "./adapter.js";
-import { AntigravityAdapter } from "./antigravity/antigravity-adapter.js";
-import { VisibleIdeAdapter } from "./antigravity/visible-ide-adapter.js";
+import { BuiltinCoderAdapter } from "./builtin/builtin-coder.js";
 import { MockAgentAdapter } from "./mock/mock-adapter.js";
-import { ReasoningCodingAgentAdapter } from "./reasoning/reasoning-coding-adapter.js";
-import { IdeBridge } from "../../platform/ide/ide-bridge.js";
-import { reasoningRegistry } from "../reasoning/registry.js";
+import { ReasoningProvider } from "../reasoning/provider.js";
 
-export class AgentRegistry {
-  private adapters: Map<string, CodingAgentAdapter> = new Map();
-  private defaultAdapterId = "reasoning-coding-agent";
+export function mockAgentEnabled(): boolean {
+  return process.env.ORCHESTRATOR_ENABLE_MOCK_AGENT === "1";
+}
 
-  constructor(ideBridge?: IdeBridge, includeMock = false) {
-    const bridge = ideBridge || new IdeBridge();
-    this.register(new ReasoningCodingAgentAdapter(reasoningRegistry.getDefault()));
-    this.register(new VisibleIdeAdapter(bridge, reasoningRegistry.getDefault()));
-    this.register(new AntigravityAdapter());
-    if (includeMock || process.env.NODE_ENV === "test") {
-      this.register(new MockAgentAdapter());
-    }
+/** Coding mechanisms that can actually execute in this installation. */
+export function listCodingAgents(provider: ReasoningProvider): CodingAgentAdapter[] {
+  const agents: CodingAgentAdapter[] = [new BuiltinCoderAdapter(provider)];
+  if (mockAgentEnabled()) agents.push(new MockAgentAdapter());
+  return agents;
+}
+
+export function resolveCodingAgent(id: string, provider: ReasoningProvider): CodingAgentAdapter {
+  const agent = listCodingAgents(provider).find((a) => a.id === id);
+  if (!agent) {
+    throw new Error(`Coding mechanism '${id}' is not available. Available: ${listCodingAgents(provider).map((a) => a.id).join(", ")}.`);
   }
-
-  public register(adapter: CodingAgentAdapter): void {
-    this.adapters.set(adapter.id, adapter);
-  }
-
-  public get(id: string): CodingAgentAdapter | undefined {
-    return this.adapters.get(id);
-  }
-
-  public list(): CodingAgentAdapter[] {
-    return Array.from(this.adapters.values());
-  }
-
-  public getDefault(): CodingAgentAdapter {
-    return this.adapters.get(this.defaultAdapterId) || Array.from(this.adapters.values())[0];
-  }
-
-  public setDefault(id: string): void {
-    if (!this.adapters.has(id)) {
-      throw new Error(`Agent adapter '${id}' is not registered`);
-    }
-    this.defaultAdapterId = id;
-  }
+  return agent;
 }
