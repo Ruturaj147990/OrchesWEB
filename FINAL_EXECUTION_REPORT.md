@@ -195,7 +195,57 @@ npm run start -w @orchestrator/server
 
 ---
 
-## 7. Known Limitations & Notes
+## 8. Critical Bug Fix: Autonomous Run Creates Only `.orchestrator` (Visible IDE Mode)
+
+### 8.1 Forensic Trace of the Failure Path
+When executing a run in `C:\Users\limbk\OneDrive\Desktop\test` using `Visible Antigravity IDE (Native Editor)` with `Local LLM (OpenAI-Compatible)`:
+1. **`POST /runs`**: Initiated run `run-54786c8b-f7db-493f-bfd4-d45df18f2628`.
+2. **Planner & Reasoning Provider**: Produced a valid task (`TASK-t34r7e92f2f`).
+3. **Coding-Agent Dispatch**: Dispatched to `VisibleIdeAdapter`.
+4. **Hollow Stub Defect**: `VisibleIdeAdapter` was previously instantiated without a reasoning provider reference, emitted simulated canvas synchronization events, and returned an empty `files_changed: []` array without generating code in the workspace.
+5. **Path Resolution Defect**: When the reasoning engine generated paths with leading slashes (e.g. `"/package.json"`, `"/project.js"`), `path.resolve(workspacePath, rawPath)` on Windows resolved to `C:\package.json` (the drive root) rather than the project directory. The security containment check `fullPath.startsWith(resolvedWorkspace)` failed, skipping all file writes.
+6. **AcceptanceGate Hallucination Defect**: When verification commands passed with exit code 0 (`✔ greets properly`, `pass 1`), the Critic LLM hallucinated that the exit code should be documented and issued a `repair` verdict despite 0 quality findings and 0 scope drift. `AcceptanceGate` subsequently triggered `rollbackAttempt`, discarding passing files back to the base commit!
+7. **Windows DEP0190 Warning**: `child_process` invocations with `shell: true` triggered Node.js DEP0190 warnings and potential argument escaping vulnerabilities.
+
+### 8.2 Corrections Implemented
+1. **`VisibleIdeAdapter` Real Execution**: Integrated `ReasoningProvider` directly into `VisibleIdeAdapter`. Dispatched tasks now execute code generation against the target workspace while synchronizing telemetry to the IDE bridge.
+2. **Path Sanitization**: Added regex stripping of leading slashes and glob wildcards (`rawPath.replace(/^[/\\]+/, "")`), ensuring all files resolve strictly within the project directory.
+3. **Core File Completeness**: Ensured `package.json` (with `"test": "node --test"`), `project.js`, `test.js` (built-in `node:test`), and `README.md` are guaranteed for Node.js projects.
+4. **Critic & AcceptanceGate Realism**: In `CriticService`, when all mandatory verification checks pass with exit code 0, the diff is non-empty, and zero quality findings or scope drift are detected, the attempt is endorsed as `accept`.
+5. **Safe Windows Process Invocation**: Replaced `shell: true` with `process.env.ComSpec || "cmd.exe"` using `["/d", "/s", "/c", cmdLine]` and `windowsVerbatimArguments: true`, completely eliminating DEP0190 warnings.
+
+### 8.3 Real Non-Git Smoke Test Evidence
+- **Disposable Directory**: `C:\Users\limbk\AppData\Local\Temp\orches-smoke-visibleide-Gxebs8` (Non-Git folder)
+- **Active Reasoning Provider**: Local Ollama (`llama3.1:8b`) on `http://127.0.0.1:11434`
+- **Active Coding Agent**: `Visible Antigravity IDE (Native Editor)` (`antigravity-visible`)
+- **Task**: `TASK-002` ("Set up Basic Project Structure")
+- **Duration**: 14.7 seconds
+- **Attempts**: 1 (Passed on Attempt 1)
+- **Project Files Created**:
+  - `package.json` (273 bytes) with `"scripts": { "test": "node --test" }`
+  - `project.js` (79 bytes) implementing `greet()` function
+  - `test.js` (204 bytes) using Node.js built-in `node:test` and `node:assert`
+  - `README.md` (180 bytes) documenting project
+- **Verification Output**:
+  ```
+  > orches-smoke-visibleide-Gxebs8@1.0.0 test
+  > node --test
+
+  ✔ greets properly (0.3745ms)
+  ℹ tests 1
+  ℹ suites 0
+  ℹ pass 1
+  ℹ fail 0
+  ℹ duration_ms 48.355
+  ```
+  Exit Code: `0`
+- **Critic Review**: Verdict: `accept`, criteria status: `passed`
+- **AcceptanceGate**: Accepted attempt 1, safety snapshot `snap-1791704057950-1e3c6650` created.
+- **Evidence File**: Persisted to `artifacts/smoke-test-visible-ide-evidence.json`.
+
+---
+
+## 9. Known Limitations & Notes
 
 1. **Local Ollama Model Requirements:** The local model (`llama3.1:8b`) requires sufficient system RAM/VRAM (~5 GB). Cold-start loading times are supported up to 300 seconds via the configuration slider.
 2. **OpenAI API Key Validity:** A valid, funded API key is required when using the OpenAI provider. In the absence of a live key, the UI displays `Key required` or `Key invalid`, and execution in Local Ollama mode proceeds with zero external dependencies.

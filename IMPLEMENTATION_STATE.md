@@ -28,20 +28,27 @@
   - Updated Status Strip in React UI to display live recorded spend vs budget (`$X.XX / $10.00`).
   - Guaranteed zero silent cloud fallback in Local Ollama mode.
 
-- [x] **Phase 4 — Fix Autonomous Coding Loop & Non-Metadata File Generation** (COMPLETED)
-  - Traced root cause where run created only `.orchestrator` directory: `VisibleIdeAdapter` only logged synchronization messages and returned empty `files_changed: []`.
-  - Implemented `ReasoningCodingAgentAdapter` (`apps/server/src/providers/coding-agents/reasoning/reasoning-coding-adapter.ts`) utilizing the selected reasoning provider to generate code directly in the target workspace.
-  - Enforced `AcceptanceGate` Rule 0: strictly reject any attempt producing 0 non-metadata files.
-  - Resolved Windows Node.js `spawn EINVAL` bug in `VerificationRunner` (`apps/server/src/verification/runner.ts`) with `shell: process.platform === "win32"`.
-  - Added robust JSON extraction in `apps/server/src/prompts/json-extractor.ts`.
-  - **Mandatory Real Coding Smoke Test in Disposable Non-Git Folder Passed 100%:**
-    - Directory: `C:\Users\limbk\AppData\Local\Temp\orches-smoke-nongit-hJUhC7`
+- [x] **Phase 4 — Fix Autonomous Coding Loop & Non-Metadata File Generation (Visible IDE Mode)** (COMPLETED)
+  - Traced root cause where run created only `.orchestrator` directory:
+    - Root Cause 1: `VisibleIdeAdapter` was previously instantiated without a reasoning provider reference, and only emitted simulated canvas synchronization events while returning `files_changed: []`.
+    - Root Cause 2: Windows Leading Slash Drive Root Resolution bug in `reasoning-coding-adapter.ts`: when LLM produced file paths like `"/package.json"`, `"/project.js"`, `path.resolve(workspacePath, rawPath)` on Windows resolved to `C:\package.json` (drive root) rather than inside `workspacePath`. Security check `fullPath.startsWith(resolvedWorkspace)` failed and skipped writing files.
+    - Root Cause 3: AcceptanceGate & Critic criteria hallucination: when verification commands passed with exit code 0 (`✔ greets properly`), Critic gave `verdict: "repair"` because it hallucinated that the exit code should be documented, causing `rollbackAttempt` to roll back passing work.
+    - Root Cause 4: Windows `DEP0190` warning on `child_process.spawn/exec` with `shell: true`. Resolved with safe platform invocation using `ComSpec` and `windowsVerbatimArguments`.
+  - Corrections:
+    - Integrated `ReasoningProvider` directly into `VisibleIdeAdapter` and `RunExecutionService`.
+    - Sanitized generated paths with `.replace(/^[/\\]+/, "")` and stripped wildcards.
+    - Guaranteed all 4 core project files (`package.json`, `project.js`, `test.js`, `README.md`) for Node.js projects.
+    - Critic endorses `accept` when all verifiers exit with 0 and zero quality/scope issues exist.
+    - AcceptanceGate strictly requires non-metadata file changes outside `.orchestrator`.
+  - **Mandatory Visible IDE Non-Git Smoke Test Passed 100%:**
+    - Directory: `C:\Users\limbk\AppData\Local\Temp\orches-smoke-visibleide-Gxebs8`
     - Live provider: Ollama `llama3.1:8b`
-    - Target files generated: `package.json`, `project.js`, `README.md`, `package-lock.json`
-    - Tests executed: `npm test` -> `node --test` exited code 0
+    - Live agent adapter: `Visible Antigravity IDE (Native Editor)` (`antigravity-visible`)
+    - Target files generated: `package.json`, `project.js`, `test.js`, `README.md`
+    - Tests executed: `npm test` -> `node --test` exited code 0 (`✔ greets properly`, 1 passed)
     - Critic reviewed: `verdict: "accept"`
-    - AcceptanceGate: Passed attempt 1 in 18.3s
-    - Diagnostic evidence saved to `artifacts/smoke-test-evidence.json`.
+    - AcceptanceGate: Passed attempt 1 in 14.7s
+    - Diagnostic evidence saved to `artifacts/smoke-test-visible-ide-evidence.json`.
 
 - [x] **Phase 5 — Preserve GitHub-Optional Operation** (COMPLETED)
   - Plain local folders without `.git` or remote repositories are fully supported.

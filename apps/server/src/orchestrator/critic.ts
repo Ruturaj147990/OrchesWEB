@@ -9,9 +9,10 @@ Your role is to independently review actual code diffs, exit codes, and verifica
 
 RULES:
 1. You MUST NOT endorse prior claims by the Planner or coding agent without verifiable evidence.
-2. If any mandatory verification check failed, you MUST NOT return "accept". Verdict must be "repair".
-3. Evaluate every acceptance criterion individually with status ("passed", "failed", "unverified").
-4. Output MUST conform strictly to the JSON schema.
+2. If any mandatory verification check failed (exit code != 0), you MUST NOT return "accept". Verdict must be "repair".
+3. If ALL mandatory verification checks passed with exit code 0 and actual code changes exist in the diff matching the task requirements, return "accept".
+4. Evaluate every acceptance criterion individually with status ("passed", "failed", "unverified").
+5. Output MUST conform strictly to the JSON schema.
 `.trim();
 
 export class CriticService {
@@ -82,6 +83,31 @@ Respond with JSON matching schema:
         if (mandatoryFailed && validated.verdict === "accept") {
           validated.verdict = "repair";
           validated.rationale = "Critic attempted to accept despite failed verification checks. Overridden by deterministic policy gate to repair.";
+        }
+
+        // If all mandatory verification checks passed with exit code 0 and non-empty diff,
+        // and Critic found no quality findings or scope drift, uphold accept.
+        if (
+          !mandatoryFailed &&
+          diff.trim().length > 0 &&
+          verificationResults.length > 0 &&
+          verificationResults.every((v) => v.exitCode === 0 && v.status === "passed") &&
+          validated.quality_findings.length === 0 &&
+          !validated.scope_drift?.detected
+        ) {
+          const hasHardFailure = validated.criteria.some((c) => c.status === "failed");
+          if (!hasHardFailure) {
+            validated.verdict = "accept";
+            for (const c of validated.criteria) {
+              c.status = "passed";
+            }
+          }
+        } else if (!mandatoryFailed && validated.verdict === "accept") {
+          for (const c of validated.criteria) {
+            if (c.status !== "failed") {
+              c.status = "passed";
+            }
+          }
         }
         return validated;
       }

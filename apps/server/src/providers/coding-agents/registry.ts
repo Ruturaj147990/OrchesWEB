@@ -13,7 +13,7 @@ export class AgentRegistry {
   constructor(ideBridge?: IdeBridge, includeMock = false) {
     const bridge = ideBridge || new IdeBridge();
     this.register(new ReasoningCodingAgentAdapter(reasoningRegistry.getDefault()));
-    this.register(new VisibleIdeAdapter(bridge));
+    this.register(new VisibleIdeAdapter(bridge, reasoningRegistry.getDefault()));
     this.register(new AntigravityAdapter());
     if (includeMock || process.env.NODE_ENV === "test") {
       this.register(new MockAgentAdapter());

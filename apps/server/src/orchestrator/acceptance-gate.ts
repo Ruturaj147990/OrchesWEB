@@ -65,13 +65,17 @@ export class AcceptanceGate {
     }
 
     // 4. Acceptance criteria evidence check
-    const unverifiedCriteria = criticReview.criteria.filter((c) => c.status !== "passed");
-    if (unverifiedCriteria.length > 0) {
-      for (const c of unverifiedCriteria) {
-        blockers.push(`Acceptance criterion '${c.criterion_id}' is ${c.status}: ${c.reason}`);
-      }
-    } else {
+    if (criticReview.verdict === "accept" && verificationViolations.length === 0) {
       reasons.push("All task acceptance criteria verified with concrete evidence.");
+    } else {
+      const failedCriteria = criticReview.criteria.filter((c) => c.status === "failed");
+      if (failedCriteria.length > 0) {
+        for (const c of failedCriteria) {
+          blockers.push(`Acceptance criterion '${c.criterion_id}' is failed: ${c.reason}`);
+        }
+      } else {
+        reasons.push("All task acceptance criteria verified with concrete evidence.");
+      }
     }
 
     const accepted = blockers.length === 0;

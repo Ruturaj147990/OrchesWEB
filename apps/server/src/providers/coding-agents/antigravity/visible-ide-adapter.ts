@@ -3,13 +3,31 @@ import path from "node:path";
 import { AgentReport, AgentReportSchema, PrivacyClass, Task } from "@orchestrator/shared-types";
 import { CodingAgentAdapter, CodingAgentDetection } from "../adapter.js";
 import { IdeBridge } from "../../../platform/ide/ide-bridge.js";
+import { ReasoningCodingAgentAdapter } from "../reasoning/reasoning-coding-adapter.js";
+import { ReasoningProvider } from "../../reasoning/provider.js";
+import { reasoningRegistry } from "../../reasoning/registry.js";
 
 export class VisibleIdeAdapter implements CodingAgentAdapter {
   public id = "antigravity-visible";
   public displayName = "Visible Antigravity IDE (Native Editor)";
   public privacyClass: PrivacyClass = "local";
+  private reasoningAdapter?: ReasoningCodingAgentAdapter;
 
-  constructor(private bridge: IdeBridge) {}
+  constructor(
+    private bridge: IdeBridge,
+    private reasoningProvider?: ReasoningProvider
+  ) {
+    if (reasoningProvider) {
+      this.reasoningAdapter = new ReasoningCodingAgentAdapter(reasoningProvider);
+      this.privacyClass = reasoningProvider.privacyClass;
+    }
+  }
+
+  public setReasoningProvider(provider: ReasoningProvider): void {
+    this.reasoningProvider = provider;
+    this.reasoningAdapter = new ReasoningCodingAgentAdapter(provider);
+    this.privacyClass = provider.privacyClass;
+  }
 
   public async detectInstallation(): Promise<CodingAgentDetection> {
     const state = this.bridge.getState();
@@ -62,17 +80,33 @@ export class VisibleIdeAdapter implements CodingAgentAdapter {
 
     onLog?.(`[Visible Antigravity IDE] Task "${task.title}" (Attempt ${task.attemptCount}) dispatched to active IDE workspace.\n`);
     onLog?.(`[Visible Antigravity IDE] Connected Window: PID ${selectedWs.processId ?? "active"}, Workspace: ${selectedWs.canonicalPath}\n`);
-    onLog?.(`[Visible Antigravity IDE] Editor live synchronization active. Changes will appear live in editor canvas.\n`);
-
-    // Record prompt delivery
-    onLog?.(`[Visible Antigravity IDE] Prompt context delivered (${contextPacket.length} chars).\n`);
+    onLog?.(`[Visible Antigravity IDE] Editor live synchronization active. Generating code via active reasoning engine...\n`);
 
     // Check cancellation
     if (signal?.aborted) {
       throw new Error("Task execution cancelled before completion.");
     }
 
-    // Normalize return report
+    // If reasoning adapter is configured, execute real code generation in the workspace
+    if (this.reasoningAdapter) {
+      const innerReport = await this.reasoningAdapter.executeTask(
+        task,
+        workspacePath,
+        contextPacket,
+        signal,
+        onLog
+      );
+
+      onLog?.(`[Visible Antigravity IDE] Real-time code edits synchronized to editor canvas (${innerReport.files_changed.length} file(s) modified).\n`);
+
+      return AgentReportSchema.parse({
+        ...innerReport,
+        summary: `Task "${task.title}" executed via Visible Antigravity IDE in active workspace ${selectedWs.name}: ${innerReport.summary}`,
+        agent_session_id: `ide-session-${task.id}`,
+      });
+    }
+
+    // Fallback if no reasoning adapter configured (e.g. unit tests that mock file writing)
     const report = AgentReportSchema.parse({
       schema_version: 1,
       task_id: task.id,

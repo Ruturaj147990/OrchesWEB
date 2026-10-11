@@ -18,10 +18,15 @@ test.describe("Orchestrator Control Dashboard Smoke Test", () => {
     await expect(page.locator("#badge-reasoning")).toContainText(/Reasoning: (Local|OpenAI)/);
     await expect(page.locator("#badge-agent")).toContainText("Agent: Antigravity");
 
-    // 3. Validate Controls
+    // 3. Validate Controls (reset if an active run was left running on server)
     const startBtn = page.locator("#btn-start");
     const pauseBtn = page.locator("#btn-pause");
     const stopBtn = page.locator("#btn-stop");
+
+    if (await pauseBtn.isEnabled()) {
+      await stopBtn.click();
+      await page.waitForTimeout(500);
+    }
 
     await expect(startBtn).toBeEnabled();
     await expect(pauseBtn).toBeDisabled(); // Initially disabled before start

@@ -39,11 +39,9 @@ export class VerificationRunner {
     let exe = parts[0];
     const args = parts.slice(1);
 
-    // On Windows, resolve npm / npx to npm.cmd / npx.cmd if needed
-    if (process.platform === "win32") {
-      if (exe === "npm" || exe === "npx") {
-        exe = `${exe}.cmd`;
-      }
+    const isWin = process.platform === "win32";
+    if (isWin && (exe === "npm" || exe === "npx")) {
+      exe = `${exe}.cmd`;
     }
 
     return new Promise<VerificationResult>((resolve) => {
@@ -53,14 +51,27 @@ export class VerificationRunner {
 
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(exe, args, {
-          cwd: this.workspacePath,
-          shell: process.platform === "win32",
-          env: {
-            ...process.env,
-            CI: "true",
-          },
-        });
+        if (isWin) {
+          const cmdLine = [exe, ...args].join(" ");
+          child = spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", cmdLine], {
+            cwd: this.workspacePath,
+            shell: false,
+            windowsVerbatimArguments: true,
+            env: {
+              ...process.env,
+              CI: "true",
+            },
+          });
+        } else {
+          child = spawn(exe, args, {
+            cwd: this.workspacePath,
+            shell: false,
+            env: {
+              ...process.env,
+              CI: "true",
+            },
+          });
+        }
       } catch (err: unknown) {
         return resolve({
           id: `vr-${crypto.randomUUID()}`,

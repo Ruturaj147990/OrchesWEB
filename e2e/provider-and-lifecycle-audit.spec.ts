@@ -53,7 +53,11 @@ test.describe("Reasoning Engine Provider & Autonomous Lifecycle UI Audit", () =>
     // If key required prompt opens or drawer opens, capture OpenAI selected state
     await saveScreenshot(page, "provider-openai-selected.png");
 
-    // Close any open drawer with Escape
+    // Close any open drawer with Close button or Escape
+    const closeConfigBtn = page.locator("button[aria-label='Close configuration']");
+    if (await closeConfigBtn.isVisible()) {
+      await closeConfigBtn.click();
+    }
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 

@@ -32,7 +32,7 @@ export default defineConfig({
     {
       command: "npm run dev:server",
       url: "http://127.0.0.1:4317/api/v1/health",
-      reuseExistingServer: false,
+      reuseExistingServer: true,
       timeout: 15000,
       env: {
         ORCHESTRATOR_DATA_DIR: path.join(os.tmpdir(), "orchestrator-e2e-data"),
@@ -42,7 +42,7 @@ export default defineConfig({
     {
       command: "npm run dev:web",
       url: "http://127.0.0.1:5173",
-      reuseExistingServer: false,
+      reuseExistingServer: true,
       timeout: 15000,
     },
   ],

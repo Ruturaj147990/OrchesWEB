@@ -66,7 +66,7 @@ export class RunExecutionService {
             adapter = new ReasoningCodingAgentAdapter(activeProvider);
           }
         } else if (ideState.activeMode === "visible_ide" && ideState.status === "ready") {
-          adapter = new VisibleIdeAdapter(bridge);
+          adapter = new VisibleIdeAdapter(bridge, activeProvider);
         } else {
           // Default autonomous coding execution: uses active reasoning provider
           adapter = new ReasoningCodingAgentAdapter(activeProvider);
