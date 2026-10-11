@@ -5,7 +5,7 @@ import { EventStore } from "../events/event-store.js";
 /** A run executes one task. It is created "running" and ends in exactly one terminal state. */
 const VALID_TRANSITIONS: Partial<Record<RunStatus, RunStatus[]>> = {
   ready: ["running", "stopped", "failed"],
-  running: ["completed", "completed_with_warnings", "failed", "stopped", "budget_exhausted"],
+  running: ["completed", "completed_with_warnings", "failed", "stopped", "budget_exhausted", "blocked", "paused"],
 };
 
 export class RunStateMachine {

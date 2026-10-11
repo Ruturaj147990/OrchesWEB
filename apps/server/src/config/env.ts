@@ -31,5 +31,5 @@ export const config: AppConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   localReasoningBaseUrl: process.env.LOCAL_REASONING_BASE_URL || "http://127.0.0.1:11434",
-  localReasoningModel: process.env.LOCAL_REASONING_MODEL || "llama3.1:8b",
+  localReasoningModel: process.env.LOCAL_REASONING_MODEL || "qwen3:30b",
 };

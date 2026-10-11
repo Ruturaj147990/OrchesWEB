@@ -29,6 +29,12 @@ export const DEFAULT_PRICING_CATALOGUE: Record<string, ModelPricing> = {
     outputPerMillionUsd: 0,
     provider: "local",
   },
+  "qwen3:30b": {
+    modelId: "qwen3:30b",
+    inputPerMillionUsd: 0,
+    outputPerMillionUsd: 0,
+    provider: "local",
+  },
 };
 
 export class BudgetExceededError extends Error {

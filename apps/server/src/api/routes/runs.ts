@@ -4,7 +4,10 @@ import { RunRepository } from "../../storage/repositories/run-repository.js";
 import { getDb } from "../../storage/db.js";
 import { RunStartError } from "../../orchestrator/run-manager.js";
 
-const StartRunSchema = z.object({ task: z.string() });
+const StartRunSchema = z.object({
+  task: z.string(),
+  maxAttempts: z.number().int().min(1).max(30).optional(),
+});
 
 function parseJson<T>(raw: unknown, fallback: T): T {
   if (typeof raw !== "string" || !raw) return fallback;
@@ -28,7 +31,7 @@ export const runRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = StartRunSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: "Body must include a 'task' description." });
     try {
-      const run = await manager.start(request.params.projectId, parsed.data.task);
+      const run = await manager.start(request.params.projectId, parsed.data.task, { maxAttempts: parsed.data.maxAttempts });
       return reply.status(201).send(run);
     } catch (err) {
       const status = err instanceof RunStartError ? err.statusCode : 500;

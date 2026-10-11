@@ -125,6 +125,7 @@ Use "repair" only for a concrete problem you can point to in the diff (a criteri
     } catch (err) {
       lastError = (err as Error).message;
       if (input.signal?.aborted) break;
+      if (lastError.includes("404") || lastError.includes("not found") || lastError.includes("ECONNREFUSED") || lastError.includes("unreachable")) break;
     }
   }
   return { available: false, error: lastError, verdict: "repair", criteria: [], findings: [], repairInstructions: [], summary: "" };

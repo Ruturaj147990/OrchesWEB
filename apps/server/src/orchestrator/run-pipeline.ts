@@ -64,7 +64,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     if (signal.aborted) throw new RunCancelled("Stopped by user.");
   };
 
-  const finish = (status: "completed" | "completed_with_warnings" | "failed" | "stopped" | "budget_exhausted", outcome: string, summary: string, extra: Record<string, unknown> = {}) => {
+  const finish = (status: "completed" | "completed_with_warnings" | "failed" | "stopped" | "budget_exhausted" | "blocked" | "paused", outcome: string, summary: string, extra: Record<string, unknown> = {}) => {
     const current = runs.findById(run.id);
     if (current && current.status !== "running") {
       // Already finalized elsewhere (e.g. crash recovery); keep that record instead of overwriting it.
@@ -339,6 +339,32 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         });
         ensureNotCancelled();
         log(critic.available ? `Review verdict: ${critic.verdict}${critic.summary ? ` — ${critic.summary}` : ""}` : `Review unavailable: ${critic.error}`, critic.available ? "info" : "warn");
+
+        if (!critic.available && isProviderOutageOrConfigError(critic.error)) {
+          const diag = diagnoseProviderError(critic.error || "Unknown provider error", provider);
+          log(`Reviewer failed due to reasoning provider error: ${diag}`, "error");
+          persistAttempt(db, {
+            taskId,
+            attemptId,
+            agentResult,
+            diff,
+            staticResults,
+            attemptChecks,
+            baselineChecks: attempt === 1 ? baselineChecks : [],
+            critic,
+            gate: { accepted: false, outcome: "rejected", blockers: [diag], warnings: [critic.error ?? ""], evidence: [] },
+            root,
+          });
+          events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: false, outcome: "rejected", blockers: [diag], warnings: [critic.error], files: diff.changes }, run.id, taskId);
+          activeSnapshot = null; // Preserve workspace changes on disk so work is not lost
+          finish(
+            "blocked",
+            "error",
+            `Run blocked: Independent review failed due to provider error (${diag}). Workspace changes were preserved. Fix the model configuration or start the provider to continue.`,
+            { evidence: [diag] }
+          );
+          return;
+        }
       }
 
       const gate: GateDecision = evaluateAttempt({
@@ -352,12 +378,29 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         critic,
         externalWrites: agentResult.transcript?.writesOutsideWorkspace ?? [],
         missingRequestedFiles: missingFiles,
+        isFinalAttempt: attempt === ctx.maxAttempts,
       });
 
       persistAttempt(db, { taskId, attemptId, agentResult, diff, staticResults, attemptChecks, baselineChecks: attempt === 1 ? baselineChecks : [], critic, gate, root });
       events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: gate.accepted, outcome: gate.outcome, blockers: gate.blockers, warnings: gate.warnings, files: diff.changes }, run.id, taskId);
 
-      if (gate.accepted) {
+      const prevDiffExcerpt = history[history.length - 1]?.diffExcerpt;
+      const isRepeatedAttempt = attempt > 1 && diff.diffText.slice(0, 6000) === prevDiffExcerpt;
+
+      // Acceptance handling:
+      // An attempt concludes if:
+      // 1. It is accepted AND verified (has passing checks and critic endorsed), OR
+      // 2. It is not an external agent (e.g. built-in coder), OR
+      // 3. It has reached the maximum allowed attempts (ctx.maxAttempts), OR
+      // 4. A repeated ineffective attempt was detected where no new files or changes were made.
+      const canConclude = gate.accepted && (
+        gate.outcome === "verified" ||
+        !external ||
+        attempt >= ctx.maxAttempts ||
+        isRepeatedAttempt
+      );
+
+      if (canConclude) {
         activeSnapshot = null;
         runs.incrementIteration(run.id);
         warnings.push(...gate.warnings);
@@ -388,8 +431,15 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         return;
       }
 
-      log(`Attempt ${attempt} rejected: ${gate.blockers.join(" | ")}`, "warn");
-      previousFailure = buildRepairFeedback(gate, attemptChecks, staticResults, critic);
+      if (gate.accepted && gate.outcome === "unverified" && attempt < ctx.maxAttempts) {
+        log(`The project has no automated checks the orchestrator could run, so behaviour was not tested. Continuing feedback loop (${attempt} of ${ctx.maxAttempts}) so tests can be implemented and validated.`, "info");
+        runs.incrementIteration(run.id);
+        previousFailure = "The project currently has no automated checks, so behaviour was not tested. Implement automated verification tests (e.g. test suite or verification script) to validate the system, and complete any remaining requirements.";
+      } else {
+        log(`Attempt ${attempt} rejected: ${gate.blockers.join(" | ")}`, "warn");
+        previousFailure = buildRepairFeedback(gate, attemptChecks, staticResults, critic);
+      }
+
       history.push({
         iteration: attempt,
         instruction: instructionText ?? "",
@@ -397,8 +447,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         agentState: agentResult.transcript?.state ?? agentResult.status,
         changedFiles: diff.changes.map((c) => `${c.path} (${c.kind})`),
         diffExcerpt: diff.diffText.slice(0, 6000),
-        checks: [...staticResults.filter((c) => c.status !== "passed"), ...attemptChecks].map((c) => ({ label: c.label, status: c.status, output: c.output })),
-        blockers: gate.blockers,
+        checks: attemptChecks.length
+          ? [...staticResults.filter((c) => c.status !== "passed"), ...attemptChecks].map((c) => ({ label: c.label, status: c.status, output: c.output }))
+          : [{ label: "Automated Checks", status: "unverified", output: "The project has no automated checks the orchestrator could run, so behaviour was not tested." }],
+        blockers: gate.accepted ? ["No automated checks exist: behaviour was not tested. Please implement automated verification tests (e.g. test suite) and verify remaining functionality."] : gate.blockers,
         reviewer: critic.available ? `${critic.verdict}: ${critic.summary} ${critic.repairInstructions.join(" ")}` : "",
       });
       if (attempt < ctx.maxAttempts) log("Keeping this attempt's files so the next attempt can repair them; everything is rolled back if no attempt is accepted.");
@@ -525,4 +577,33 @@ function persistAttempt(
     a.agentResult.error ?? null,
     a.attemptId
   );
+}
+
+function isProviderOutageOrConfigError(error?: string): boolean {
+  if (!error) return false;
+  const lower = error.toLowerCase();
+  return (
+    lower.includes("404") ||
+    lower.includes("not found") ||
+    lower.includes("econnrefused") ||
+    lower.includes("unreachable") ||
+    lower.includes("401") ||
+    lower.includes("403") ||
+    lower.includes("unauthorized") ||
+    lower.includes("model_unavailable")
+  );
+}
+
+function diagnoseProviderError(error: string, provider: ReasoningProvider): string {
+  const lower = error.toLowerCase();
+  if (lower.includes("404") || lower.includes("not found")) {
+    return `Model '${provider.getModel()}' not found on local model server (HTTP 404). Run 'ollama pull ${provider.getModel()}' or select an available model in Settings.`;
+  }
+  if (lower.includes("econnrefused") || lower.includes("unreachable")) {
+    return `Local reasoning model server is unreachable at ${provider.displayName}. Ensure Ollama or local model server is running.`;
+  }
+  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized")) {
+    return `Authentication failed for reasoning provider '${provider.displayName}'. Check your API key.`;
+  }
+  return error;
 }

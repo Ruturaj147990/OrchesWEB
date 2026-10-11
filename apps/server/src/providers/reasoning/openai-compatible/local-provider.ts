@@ -66,7 +66,7 @@ export class OpenAICompatibleLocalProvider implements ReasoningProvider {
 
   constructor(config: LocalProviderConfig = {}) {
     this.endpoints = normalizeOllamaEndpoint(config.baseUrl || "http://127.0.0.1:11434");
-    this.model = config.model || "llama3.1:8b";
+    this.model = config.model || "qwen3:30b";
     this.apiKey = config.apiKey || "local";
     this.timeoutMs = Math.min(Math.max(config.timeoutMs || 300_000, 10_000), 900_000);
     this.contextTokens = Math.min(Math.max(config.contextTokens || 16_384, 2048), 131_072);
@@ -204,6 +204,9 @@ export class OpenAICompatibleLocalProvider implements ReasoningProvider {
       });
       if (!response.ok) {
         const errText = (await response.text()).slice(0, 500);
+        if (response.status === 404) {
+          throw new Error(`Local model server returned HTTP 404: model '${this.model}' not found. Run 'ollama pull ${this.model}' or configure an available model.`);
+        }
         throw new Error(`Local model server returned HTTP ${response.status}: ${errText}`);
       }
       if (this.isOllama) {

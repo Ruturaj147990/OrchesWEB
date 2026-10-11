@@ -65,7 +65,10 @@ export class SettingsManager {
         const openaiModel = (raw.openaiModel ?? raw.defaultModel) as string | undefined;
         if (typeof openaiModel === "string" && openaiModel.trim()) settings.openaiModel = openaiModel.trim();
         if (typeof raw.localBaseUrl === "string" && raw.localBaseUrl.trim()) settings.localBaseUrl = raw.localBaseUrl.trim();
-        if (typeof raw.localModel === "string" && raw.localModel.trim()) settings.localModel = raw.localModel.trim();
+        if (typeof raw.localModel === "string" && raw.localModel.trim()) {
+          const m = raw.localModel.trim();
+          settings.localModel = m === "llama3.1:8b" ? "qwen3:30b" : m;
+        }
         if (typeof raw.localTimeoutMs === "number" && raw.localTimeoutMs > 0) settings.localTimeoutMs = raw.localTimeoutMs;
         if (typeof raw.localContextTokens === "number" && raw.localContextTokens > 0) settings.localContextTokens = raw.localContextTokens;
         if (typeof raw.codingAgentId === "string" && raw.codingAgentId) settings.codingAgentId = raw.codingAgentId;

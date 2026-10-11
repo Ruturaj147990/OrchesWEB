@@ -95,6 +95,70 @@ describe("closed loop: reasoning provider instructs an external coding agent", (
     expect(fs.readdirSync(ws)).toEqual([]);
     await app.close();
   }, 60_000);
+
+  it("continues feedback loop when no automated checks exist so the agent can implement tests and verify", async () => {
+    const provider = new ScriptedProvider();
+    provider.enqueue(
+      "repair_diagnosis",
+      () => JSON.stringify({ action: "instruct", instruction: "Create math.js", rationale: "init" }),
+      (req) => {
+        // Must receive feedback that automated checks were absent
+        expect(req.messages[0].content).toMatch(/no automated checks|behaviour was not tested/i);
+        return JSON.stringify({ action: "instruct", instruction: "Add math.test.js and package.json with test script", rationale: "add tests" });
+      }
+    );
+    provider.enqueue(
+      "result_review",
+      () => JSON.stringify({ verdict: "accept", criteria: [{ id: "AC-1", status: "passed", reason: "math.js created" }], summary: "good" }),
+      () => JSON.stringify({ verdict: "accept", criteria: [{ id: "AC-1", status: "passed", reason: "tests pass" }], summary: "verified" })
+    );
+
+    const agent = new FakeExternalAgent([
+      () => ({ files: { "math.js": "exports.add = (a, b) => a + b;\n" }, reply: "Implemented math.js without tests" }),
+      () => ({ files: { "package.json": PKG, "math.test.js": TEST }, reply: "Added test suite" }),
+    ]);
+    const { app, dataDir } = await makeApp({ provider, agent: () => agent });
+    const ws = tempDir("loop-tests");
+    dirs.push(ws, dataDir);
+    const project = await createProject(app, ws);
+    const detail = await runTask(app, project.id, "Create math module with verification");
+
+    expect(detail.attempts).toHaveLength(2);
+    expect(detail.run).toMatchObject({ status: "completed", outcome: "verified" });
+    expect(fs.existsSync(path.join(ws, "math.js"))).toBe(true);
+    expect(fs.existsSync(path.join(ws, "math.test.js"))).toBe(true);
+    await app.close();
+  }, 60_000);
+
+  it("halts in an honest recoverable blocked state when reviewer fails with 404, preserving workspace changes", async () => {
+    const provider = new ScriptedProvider();
+    provider.enqueue(
+      "repair_diagnosis",
+      () => JSON.stringify({ action: "instruct", instruction: "Create schemas.js", rationale: "init" })
+    );
+    provider.enqueue(
+      "result_review",
+      () => {
+        throw new Error("Local model server returned HTTP 404: model 'qwen3:30b' not found");
+      }
+    );
+
+    const agent = new FakeExternalAgent([
+      () => ({ files: { "schemas.js": "export const schema = {};\n" }, reply: "Wrote schemas" }),
+    ]);
+    const { app, dataDir } = await makeApp({ provider, agent: () => agent });
+    const ws = tempDir("loop-404");
+    dirs.push(ws, dataDir);
+    const project = await createProject(app, ws);
+    const detail = await runTask(app, project.id, "Create schemas");
+
+    expect(detail.run.status).toBe("blocked");
+    expect(detail.run.summary).toMatch(/Independent review failed due to provider error|model 'qwen3:30b' not found/i);
+    // Workspace changes MUST be preserved so work is not lost
+    expect(fs.existsSync(path.join(ws, "schemas.js"))).toBe(true);
+    expect(fs.readFileSync(path.join(ws, "schemas.js"), "utf8")).toBe("export const schema = {};\n");
+    await app.close();
+  }, 60_000);
 });
 
 describe("Antigravity trajectory decoding", () => {

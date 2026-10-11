@@ -49,7 +49,7 @@ export class RunManager {
     await this.active.get(runId)?.promise;
   }
 
-  public async start(projectId: string, taskText: string): Promise<Run> {
+  public async start(projectId: string, taskText: string, options?: { maxAttempts?: number }): Promise<Run> {
     const project = this.projects.findById(projectId);
     if (!project) throw new RunStartError("Project not found.", 404);
     const text = (taskText || "").trim();
@@ -68,6 +68,9 @@ export class RunManager {
     }
 
     const settings = SettingsManager.loadSettings();
+    const effectiveMaxAttempts = typeof options?.maxAttempts === "number" && options.maxAttempts >= 1 && options.maxAttempts <= 30
+      ? Math.round(options.maxAttempts)
+      : settings.maxAttempts;
     const provider = this.overrides.provider ? this.overrides.provider() : getActiveProvider();
     const agent = this.overrides.agent ? this.overrides.agent(provider) : resolveCodingAgent(settings.codingAgentId, provider);
     if (agent.id === "antigravity" && !this.overrides.agent) {
@@ -106,7 +109,7 @@ export class RunManager {
       taskText: text,
       provider,
       agent,
-      maxAttempts: settings.maxAttempts,
+      maxAttempts: effectiveMaxAttempts,
       signal: controller.signal,
     })
       .catch((err) => {

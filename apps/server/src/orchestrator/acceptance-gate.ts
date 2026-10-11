@@ -18,6 +18,8 @@ export interface GateInput {
   externalWrites?: string[];
   /** Files named in the task that do not exist after the attempt. */
   missingRequestedFiles?: string[];
+  /** Whether this attempt is the final allowed attempt (prevents premature unverified acceptance on intermediate attempts). */
+  isFinalAttempt?: boolean;
 }
 
 export interface GateDecision {
@@ -108,6 +110,9 @@ export function evaluateAttempt(input: GateInput): GateDecision {
       evidence.push(`Critic review accepted the change${critic.summary ? `: ${critic.summary}` : "."}`);
     } else {
       warnings.push(`Critic asked for changes without a concrete failed criterion or serious finding${critic.summary ? ` (${critic.summary})` : ""}.`);
+      if (input.isFinalAttempt === false) {
+        blockers.push(`Critic requested repair: ${critic.summary || "revisions requested by reviewer before acceptance"}.`);
+      }
     }
   }
 
