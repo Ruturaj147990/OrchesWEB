@@ -14,6 +14,10 @@ export interface GateInput {
   baselineChecks: CheckResult[];
   attemptChecks: CheckResult[];
   critic: CriticOutcome;
+  /** Absolute paths an external agent reported writing outside the workspace. */
+  externalWrites?: string[];
+  /** Files named in the task that do not exist after the attempt. */
+  missingRequestedFiles?: string[];
 }
 
 export interface GateDecision {
@@ -47,6 +51,9 @@ export function evaluateAttempt(input: GateInput): GateDecision {
     const reason = reservedPathReason(change.path);
     if (reason) blockers.push(`Change to protected path '${change.path}' is not allowed: ${reason}.`);
   }
+  for (const w of input.externalWrites ?? []) {
+    blockers.push(`The coding agent wrote outside the workspace: ${w}`);
+  }
   for (const rw of input.rejectedWrites) {
     warnings.push(`Blocked an unsafe write to '${rw.path}': ${rw.reason}`);
   }
@@ -76,25 +83,36 @@ export function evaluateAttempt(input: GateInput): GateDecision {
     warnings.push("The project has no automated checks the orchestrator could run, so behaviour was not tested.");
   }
 
+  for (const f of input.missingRequestedFiles ?? []) {
+    blockers.push(`The task asks for '${f}', but it does not exist in the workspace.`);
+  }
+
   const critic = input.critic;
+  let criticEndorses = false;
   if (!critic.available) {
     warnings.push(`Independent review was unavailable: ${critic.error || "unknown error"}.`);
-  } else if (critic.verdict === "accept") {
-    evidence.push(`Critic review accepted the change${critic.summary ? `: ${critic.summary}` : "."}`);
   } else {
+    // Concrete objections count whatever the verdict word says: a reviewer that answers "accept" while
+    // marking a criterion failed, or unverified *and* asking for a specific fix, has not accepted it.
     const concrete = [
       ...critic.criteria.filter((c) => c.status === "failed" && c.reason.trim()).map((c) => `criterion ${c.id} not met — ${c.reason}`),
+      ...(critic.repairInstructions.length > 0
+        ? critic.criteria.filter((c) => c.status === "unverified" && c.reason.trim()).map((c) => `criterion ${c.id} not shown to be met — ${c.reason} (requested: ${critic.repairInstructions.join("; ")})`)
+        : []),
       ...critic.findings.filter((f) => f.severity === "high" || f.severity === "critical").map((f) => `${f.severity} issue — ${f.message}`),
     ];
     if (concrete.length > 0) {
       for (const c of concrete) blockers.push(`Critic: ${c}`);
+    } else if (critic.verdict === "accept") {
+      criticEndorses = true;
+      evidence.push(`Critic review accepted the change${critic.summary ? `: ${critic.summary}` : "."}`);
     } else {
       warnings.push(`Critic asked for changes without a concrete failed criterion or serious finding${critic.summary ? ` (${critic.summary})` : ""}.`);
     }
   }
 
   const accepted = blockers.length === 0;
-  const verified = accepted && passedChecks > 0 && preExistingFailures === 0 && critic.available && critic.verdict === "accept";
+  const verified = accepted && passedChecks > 0 && preExistingFailures === 0 && criticEndorses;
   return {
     accepted,
     outcome: !accepted ? "rejected" : verified ? "verified" : "unverified",

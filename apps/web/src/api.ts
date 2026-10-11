@@ -73,6 +73,15 @@ export interface Attempt {
   status: string;
   agentSummary: string | null;
   agentError: string | null;
+  /** Instruction the reasoning model wrote for an external coding agent (closed-loop mode). */
+  instruction: string | null;
+  transcript: {
+    conversationId: string | null;
+    state: string;
+    finalReply: string;
+    toolCalls: Array<{ tool: string; summary: string }>;
+    writesOutsideWorkspace: string[];
+  } | null;
   files: FileChange[];
   diff: string;
   gate: {
@@ -117,7 +126,7 @@ export interface IdeStatus {
   running: boolean;
   openFolders: string[];
   workspaceOpen: boolean;
-  nativeAgent: { available: false; reason: string };
+  nativeAgent: { available: boolean; reason: string; bridgeInstalled: boolean };
 }
 
 export interface RunEvent {
@@ -188,6 +197,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
 
 export const AGENT_LABELS: Record<string, string> = {
   builtin: "Built-in coder",
+  antigravity: "Antigravity Agent",
   mock: "Scripted test agent",
 };
 

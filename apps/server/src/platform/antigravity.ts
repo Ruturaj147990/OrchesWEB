@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runCommand } from "./process-runner.js";
+import { getBridgeStatus } from "./antigravity-agent.js";
 
 export interface AntigravityStatus {
   installed: boolean;
@@ -10,22 +11,18 @@ export interface AntigravityStatus {
   openFolders: string[];
   /** True when the project workspace is one of the open folders. */
   workspaceOpen: boolean;
-  nativeAgent: { available: false; reason: string };
+  /** Whether the native Antigravity Agent can be driven for this workspace (via the Orches Bridge). */
+  nativeAgent: { available: boolean; reason: string; bridgeInstalled: boolean };
 }
 
 /**
- * What this installation can and cannot do with Antigravity IDE. Verified on
- * Antigravity IDE 1.107 (Windows):
- * - `antigravity-ide <folder>` (documented VS Code-style CLI) opens a folder; works.
+ * Antigravity IDE facts verified on version 1.107 (Windows):
+ * - `antigravity-ide <folder>` (documented VS Code-style CLI) opens a folder.
  * - `antigravity-ide chat -m agent <prompt>` opens the Agent panel but does not submit the prompt.
- * - The language server's `agentapi new-conversation` refuses to run unless the IDE itself supplies
- *   ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CSRF_TOKEN, which it only gives to processes it launches.
- * So the orchestrator cannot drive the IDE's built-in agent; it can show the workspace in the IDE,
- * where file changes made by the orchestrator appear live.
+ * - The language server's `agentapi` needs credentials the IDE only passes to processes it launches.
+ * - The workbench command `antigravity.sendPromptToAgentPanel` submits a prompt to the Agent panel;
+ *   the Orches Bridge extension (apps/antigravity-bridge) invokes it inside the IDE. See antigravity-agent.ts.
  */
-export const NATIVE_AGENT_UNAVAILABLE_REASON =
-  "Antigravity's built-in agent has no supported interface for external programs: its agent API requires credentials the IDE only passes to processes it launches. Tasks are executed by the orchestrator's built-in coder; open the workspace in Antigravity to watch the files change.";
-
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
@@ -80,13 +77,18 @@ export async function getAntigravityStatus(workspaceRoot?: string): Promise<Anti
   const cliPath = findAntigravityCli();
   const running = await isRunning();
   const openFolders = running ? readOpenFolders() : [];
+  const bridge = await getBridgeStatus(workspaceRoot);
   return {
     installed: Boolean(cliPath),
     cliPath,
     running,
     openFolders,
-    workspaceOpen: Boolean(workspaceRoot && openFolders.some((f) => samePath(f, workspaceRoot))),
-    nativeAgent: { available: false, reason: NATIVE_AGENT_UNAVAILABLE_REASON },
+    workspaceOpen: Boolean(workspaceRoot && (openFolders.some((f) => samePath(f, workspaceRoot)) || bridge.matchingWindow)),
+    nativeAgent: {
+      available: Boolean(bridge.matchingWindow?.canSubmit) || (!workspaceRoot && bridge.windows.some((w) => w.canSubmit)),
+      reason: bridge.message,
+      bridgeInstalled: bridge.bridgeInstalled,
+    },
   };
 }
 

@@ -126,3 +126,34 @@ describe("focusOutput", () => {
     expect(out.split("\n").length).toBeLessThanOrEqual(45);
   });
 });
+
+describe("gate regressions from live closed-loop runs", () => {
+  it("does not accept when the reviewer says 'accept' but marks a criterion unverified and asks for a fix", () => {
+    const d = evaluateAttempt(
+      base({
+        attemptChecks: [],
+        baselineChecks: [],
+        critic: {
+          ...accept,
+          verdict: "accept",
+          criteria: [
+            { id: "AC-1", status: "passed", reason: "ok" },
+            { id: "AC-4", status: "unverified", reason: "No tests are provided in the diff" },
+          ],
+          repairInstructions: ["Create a stats.test.js file with tests"],
+          summary: "meets all criteria except for providing tests",
+        },
+      })
+    );
+    expect(d.accepted).toBe(false);
+    expect(d.blockers.join(" ")).toMatch(/AC-4 not shown to be met/);
+  });
+
+  it("blocks when files the task explicitly asks for are missing", async () => {
+    const { missingRequestedFiles } = await import("../src/workspace/requested-files.js");
+    const task = 'Create a Node.js module stats.js with mean and median. Add tests in stats.test.js and a package.json whose test script is "node --test". Do not create index.js; delete old.js.';
+    expect(missingRequestedFiles(task, ["stats.js"])).toEqual(["stats.test.js", "package.json"]);
+    expect(missingRequestedFiles(task, ["stats.js", "test/stats.test.js", "package.json"])).toEqual([]);
+    expect(evaluateAttempt(base({ missingRequestedFiles: ["stats.test.js"] })).accepted).toBe(false);
+  });
+});

@@ -16,6 +16,9 @@ import { runChecks, validateChangedFiles, CheckResult } from "../verification/ru
 import { planTask } from "./planner.js";
 import { reviewAttempt, CriticOutcome } from "./critic.js";
 import { evaluateAttempt, GateDecision } from "./acceptance-gate.js";
+import { composeInstruction, IterationEvidence } from "./instructor.js";
+import { projectFileList } from "../workspace/project-inspector.js";
+import { missingRequestedFiles } from "../workspace/requested-files.js";
 import { ReasoningUsageLedger } from "../domain/budgets/usage-ledger.js";
 import { SettingsManager } from "../platform/settings-manager.js";
 
@@ -95,7 +98,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       finish("failed", "error", `Workspace folder not found: ${root}`);
       return;
     }
-    if (agent.usesReasoningProvider) {
+    {
+      // The reasoning provider plans, instructs/writes code, and reviews in every mode.
       const health = await provider.healthCheck();
       if (!health.ok) {
         finish("failed", "error", `Reasoning provider is not ready: ${health.message}`);
@@ -177,6 +181,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     // run's starting snapshot happens only when the run ends without an accepted result.
     activeSnapshot = store.take(`${run.id}-start`);
     let previousFailure: string | undefined;
+    const history: IterationEvidence[] = [];
+    const external = !agent.usesReasoningProvider;
     for (let attempt = 1; attempt <= ctx.maxAttempts; attempt++) {
       ensureNotCancelled();
       if (provider.privacyClass === "cloud") {
@@ -201,6 +207,41 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       events.record(project.id, "attempt.started", { attempt, attemptId, maxAttempts: ctx.maxAttempts }, run.id, taskId);
 
       const changedSoFar = store.diff(activeSnapshot).changes.filter((c) => c.kind !== "deleted").map((c) => c.path);
+      let instructionText: string | undefined;
+      if (external) {
+        // Closed loop: the reasoning provider decides what the coding agent does in this iteration.
+        phase("instructing", attempt);
+        const instr = await composeInstruction(provider, {
+          projectId: project.id,
+          runId: run.id,
+          taskText: ctx.taskText,
+          criteria: plan.acceptanceCriteria,
+          profile: baselineProfile,
+          files: projectFileList(root, 200),
+          iteration: attempt,
+          maxIterations: ctx.maxAttempts,
+          history,
+          guidance,
+          signal,
+        });
+        ensureNotCancelled();
+        if (instr.warning) {
+          warnings.push(instr.warning);
+          log(instr.warning, "warn");
+        }
+        if (instr.action === "stop") {
+          db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, instruction_text = ? WHERE id = ?").run(new Date().toISOString(), `(stopped) ${instr.rationale}`, attemptId);
+          events.record(project.id, "brain.instruction", { attempt, action: "stop", rationale: instr.rationale, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
+          const rb = rollbackActive("brain-stopped");
+          activeSnapshot = null;
+          finish("failed", "rejected", `${provider.displayName} stopped the run: ${instr.rationale} ${describeRollback(rb)}`, { rollback: rb });
+          return;
+        }
+        instructionText = instr.instruction;
+        db.prepare("UPDATE task_attempts SET instruction_text = ? WHERE id = ?").run(instructionText, attemptId);
+        events.record(project.id, "brain.instruction", { attempt, action: "instruct", instruction: instructionText, rationale: instr.rationale, source: instr.source, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
+        phase("coding", attempt);
+      }
       const agentResult = await agent.execute({
         projectId: project.id,
         runId: run.id,
@@ -214,10 +255,15 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         filesToRead: [...new Set([...changedSoFar, ...plan.filesToRead])],
         previousFailure,
         guidance,
+        instruction: instructionText,
         signal,
         onLog: (l) => log(l),
       });
       for (const w of agentResult.warnings) log(w, "warn");
+      if (agentResult.transcript) {
+        db.prepare("UPDATE task_attempts SET agent_transcript_json = ? WHERE id = ?").run(JSON.stringify(agentResult.transcript), attemptId);
+        events.record(project.id, "agent.result", { attempt, agent: agent.displayName, ...agentResult.transcript, toolCalls: agentResult.transcript.toolCalls.slice(0, 50) }, run.id, taskId);
+      }
       ensureNotCancelled();
 
       // Ground truth: what actually changed on disk (this attempt, and since the run started).
@@ -241,10 +287,12 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       ensureNotCancelled();
 
       let critic: CriticOutcome = { available: false, error: "not run because the attempt already failed deterministic checks", verdict: "repair", criteria: [], findings: [], repairInstructions: [], summary: "" };
+      const missingFiles = missingRequestedFiles(ctx.taskText, store.listWorkspaceFiles().files);
       const deterministicFailure =
         agentResult.status !== "completed" ||
         diff.changes.length === 0 ||
         staticFailed ||
+        missingFiles.length > 0 ||
         attemptChecks.some((c) => c.status !== "passed" && baselineChecks.find((b) => b.checkId === c.checkId)?.status !== c.status);
       if (!deterministicFailure) {
         phase("reviewing", attempt);
@@ -256,6 +304,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           criteria: plan.acceptanceCriteria,
           diffText: diff.diffText,
           checks: attemptChecks,
+          agentReport: agentResult.transcript?.finalReply,
           signal,
         });
         ensureNotCancelled();
@@ -271,6 +320,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         baselineChecks,
         attemptChecks,
         critic,
+        externalWrites: agentResult.transcript?.writesOutsideWorkspace ?? [],
+        missingRequestedFiles: missingFiles,
       });
 
       persistAttempt(db, { taskId, attemptId, agentResult, diff, staticResults, attemptChecks, baselineChecks: attempt === 1 ? baselineChecks : [], critic, gate, root });
@@ -309,6 +360,17 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
 
       log(`Attempt ${attempt} rejected: ${gate.blockers.join(" | ")}`, "warn");
       previousFailure = buildRepairFeedback(gate, attemptChecks, staticResults, critic);
+      history.push({
+        iteration: attempt,
+        instruction: instructionText ?? "",
+        agentReply: agentResult.transcript?.finalReply ?? agentResult.summary ?? "",
+        agentState: agentResult.transcript?.state ?? agentResult.status,
+        changedFiles: diff.changes.map((c) => `${c.path} (${c.kind})`),
+        diffExcerpt: diff.diffText.slice(0, 6000),
+        checks: [...staticResults.filter((c) => c.status !== "passed"), ...attemptChecks].map((c) => ({ label: c.label, status: c.status, output: c.output })),
+        blockers: gate.blockers,
+        reviewer: critic.available ? `${critic.verdict}: ${critic.summary} ${critic.repairInstructions.join(" ")}` : "",
+      });
       if (attempt < ctx.maxAttempts) log("Keeping this attempt's files so the next attempt can repair them; everything is rolled back if no attempt is accepted.");
     }
 

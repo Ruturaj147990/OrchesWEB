@@ -15,8 +15,20 @@ export interface AgentExecutionInput {
   /** Concrete reasons the previous attempt was rejected, including check output. */
   previousFailure?: string;
   guidance?: string[];
+  /** Instructions written by the reasoning provider for an external agent (closed-loop mode). */
+  instruction?: string;
   signal?: AbortSignal;
   onLog: (line: string) => void;
+}
+
+/** What an external agent observably did, read from its own records. */
+export interface AgentTranscript {
+  conversationId: string | null;
+  state: "finished" | "timeout" | "not_started" | "cancelled";
+  finalReply: string;
+  toolCalls: Array<{ tool: string; summary: string }>;
+  writesOutsideWorkspace: string[];
+  prompt: string;
 }
 
 export interface AgentExecutionResult {
@@ -29,6 +41,7 @@ export interface AgentExecutionResult {
   error?: string;
   modelId?: string;
   warnings: string[];
+  transcript?: AgentTranscript;
 }
 
 export interface CodingAgentAvailability {

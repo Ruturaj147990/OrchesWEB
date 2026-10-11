@@ -1,8 +1,16 @@
 import { useMemo, useState } from "react";
 import { AGENT_LABELS, Attempt, CheckRecord, describeRun, FileChange, PROVIDER_LABELS, RunDetail } from "../api";
 
-const PHASES = ["planning", "coding", "verifying", "reviewing"] as const;
-const PHASE_LABEL: Record<string, string> = { preparing: "Preparing", baseline: "Baseline checks", planning: "Planning", coding: "Writing code", verifying: "Verifying", reviewing: "Reviewing" };
+const PHASES = ["planning", "instructing", "coding", "verifying", "reviewing"] as const;
+const PHASE_LABEL: Record<string, string> = {
+  preparing: "Preparing",
+  baseline: "Baseline checks",
+  planning: "Planning",
+  instructing: "Brain instructing",
+  coding: "Coding",
+  verifying: "Verifying",
+  reviewing: "Reviewing",
+};
 
 export function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
@@ -122,14 +130,50 @@ function CheckList({ checks }: { checks: CheckRecord[] }) {
   );
 }
 
-function AttemptBlock({ attempt, total, defaultOpen }: { attempt: Attempt; total: number; defaultOpen: boolean }) {
+function AgentExchange({ attempt, brainName }: { attempt: Attempt; brainName: string }) {
+  const t = attempt.transcript;
+  if (!attempt.instruction && !t) return null;
+  return (
+    <>
+      {attempt.instruction && (
+        <>
+          <h4>Instruction from {brainName}</h4>
+          <pre className="output instruction">{attempt.instruction}</pre>
+        </>
+      )}
+      {t && (
+        <>
+          <h4>
+            Antigravity Agent reported <span className="muted small">({t.state}{t.conversationId ? ` · conversation ${t.conversationId.slice(0, 8)}` : ""})</span>
+          </h4>
+          <pre className="output">{t.finalReply || "(no reply recorded)"}</pre>
+          {t.toolCalls.length > 0 && (
+            <details className="tool-calls">
+              <summary className="small">{t.toolCalls.length} agent action(s)</summary>
+              <ul className="small">
+                {t.toolCalls.map((c, i) => (
+                  <li key={i}>
+                    <code>{c.summary}</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function AttemptBlock({ attempt, total, defaultOpen, brainName }: { attempt: Attempt; total: number; defaultOpen: boolean; brainName: string }) {
   const gate = attempt.gate;
   const critic = gate?.critic;
+  const label = attempt.instruction || attempt.transcript ? "Iteration" : "Attempt";
   return (
     <details className="attempt" open={defaultOpen}>
       <summary>
         <span>
-          Attempt {attempt.number}
+          {label} {attempt.number}
           {total > 1 ? ` of ${total}` : ""}
         </span>
         {gate ? (
@@ -138,6 +182,7 @@ function AttemptBlock({ attempt, total, defaultOpen }: { attempt: Attempt; total
           <Badge tone="running">{attempt.status}</Badge>
         )}
       </summary>
+      <AgentExchange attempt={attempt} brainName={brainName} />
       {attempt.agentError && <p className="callout callout-danger small">Coding mechanism: {attempt.agentError}</p>}
       {gate && gate.blockers.length > 0 && (
         <div className="callout callout-danger">
@@ -260,7 +305,7 @@ export function RunResult({ detail, livePhase, onStop, stopping }: Props) {
             </li>
           ))}
           {livePhase && !PHASES.includes(livePhase.phase as any) && <li className="current">{PHASE_LABEL[livePhase.phase] ?? livePhase.phase}</li>}
-          {livePhase?.attempt ? <li className="attempt-count">attempt {livePhase.attempt}</li> : null}
+          {livePhase?.attempt ? <li className="attempt-count">{run.agentId === "antigravity" ? "iteration" : "attempt"} {livePhase.attempt}</li> : null}
         </ol>
       )}
 
@@ -287,7 +332,7 @@ export function RunResult({ detail, livePhase, onStop, stopping }: Props) {
       )}
 
       {attempts.map((a) => (
-        <AttemptBlock key={a.id} attempt={a} total={attempts.length} defaultOpen={a === lastAttempt && !running} />
+        <AttemptBlock key={a.id} attempt={a} total={attempts.length} defaultOpen={a === lastAttempt} brainName={`${PROVIDER_LABELS[run.providerId ?? ""] ?? run.providerId} (${run.modelId})`} />
       ))}
     </section>
   );

@@ -13,6 +13,7 @@ import { CodingAgentAdapter } from "../providers/coding-agents/adapter.js";
 import { getActiveProvider } from "../providers/reasoning/registry.js";
 import { resolveCodingAgent } from "../providers/coding-agents/registry.js";
 import { SettingsManager } from "../platform/settings-manager.js";
+import { getBridgeStatus } from "../platform/antigravity-agent.js";
 import { validateWorkspaceRoot, forbiddenWorkspaceRoots } from "../workspace/path-safety.js";
 
 export interface RunManagerOverrides {
@@ -48,7 +49,7 @@ export class RunManager {
     await this.active.get(runId)?.promise;
   }
 
-  public start(projectId: string, taskText: string): Run {
+  public async start(projectId: string, taskText: string): Promise<Run> {
     const project = this.projects.findById(projectId);
     if (!project) throw new RunStartError("Project not found.", 404);
     const text = (taskText || "").trim();
@@ -69,6 +70,12 @@ export class RunManager {
     const settings = SettingsManager.loadSettings();
     const provider = this.overrides.provider ? this.overrides.provider() : getActiveProvider();
     const agent = this.overrides.agent ? this.overrides.agent(provider) : resolveCodingAgent(settings.codingAgentId, provider);
+    if (agent.id === "antigravity" && !this.overrides.agent) {
+      const bridge = await getBridgeStatus(project.rootPath);
+      if (!bridge.matchingWindow?.canSubmit) throw new RunStartError(`Antigravity Agent is not reachable for this project: ${bridge.message}`);
+    }
+    // Re-check after the await: another request may have started a run meanwhile.
+    if (this.runs.findActiveByProjectId(projectId)) throw new RunStartError("A run is already in progress for this project.", 409);
 
     const run: Run = RunSchema.parse({
       id: `run-${crypto.randomUUID()}`,

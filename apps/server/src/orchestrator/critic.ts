@@ -71,6 +71,8 @@ export async function reviewAttempt(
     criteria: string[];
     diffText: string;
     checks: CheckResult[];
+    /** The coding agent's own description of its work (an unverified claim). */
+    agentReport?: string;
     signal?: AbortSignal;
   }
 ): Promise<CriticOutcome> {
@@ -87,7 +89,7 @@ ${input.criteria.map((c, i) => `AC-${i + 1}: ${c}`).join("\n")}
 CHECK RESULTS (run by the orchestrator, trustworthy):
 ${checks}
 
-DIFF OF ALL CHANGES:
+${input.agentReport ? `CODING AGENT'S OWN REPORT (unverified; judge from the diff):\n${input.agentReport.slice(0, 1500)}\n\n` : ""}DIFF OF ALL CHANGES:
 ${diff || "(no changes)"}
 
 Judge each criterion from the diff. Respond with JSON:

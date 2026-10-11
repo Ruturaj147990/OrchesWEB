@@ -11,6 +11,7 @@ interface Line {
 
 const PHASE_TEXT: Record<string, string> = {
   preparing: "Preparing workspace and checking the reasoning model…",
+  instructing: "Reasoning model is writing instructions for the coding agent…",
   baseline: "Running the project's checks before any change (baseline)…",
   planning: "Planning the task…",
   coding: "Writing code…",
@@ -31,6 +32,16 @@ export function formatEvent(ev: RunEvent): Line | null {
       return { ...base, level: "info", text: `${p.attempt ? `[attempt ${p.attempt}] ` : ""}${PHASE_TEXT[p.phase] ?? p.phase}` };
     case "task.planned":
       return { ...base, level: "info", text: `Plan: ${p.title} — ${(p.criteria ?? []).length} acceptance criteria${p.source === "fallback" ? " (task text used directly)" : ""}` };
+    case "brain.instruction":
+      return p.action === "stop"
+        ? { ...base, level: "warn", text: `[iteration ${p.attempt}] ${p.provider} stopped the run: ${p.rationale}` }
+        : { ...base, level: "info", text: `[iteration ${p.attempt}] ${p.provider} (${p.model}) → Antigravity: ${String(p.instruction ?? "").replace(/\s+/g, " ").slice(0, 400)}` };
+    case "agent.result":
+      return {
+        ...base,
+        level: p.state === "finished" ? "info" : "warn",
+        text: `[iteration ${p.attempt}] Antigravity Agent ${p.state} (${(p.toolCalls ?? []).length} actions): ${String(p.finalReply ?? "").replace(/\s+/g, " ").slice(0, 400) || "(no reply)"}`,
+      };
     case "attempt.started":
       return { ...base, level: "info", text: `Attempt ${p.attempt} of ${p.maxAttempts} started` };
     case "attempt.evaluated":

@@ -1,0 +1,22 @@
+{
+  "name": "orches-bridge",
+  "displayName": "Orches Bridge",
+  "description": "Lets the local Orches orchestrator submit prompts to the Antigravity Agent panel in this window.",
+  "version": "0.1.0",
+  "publisher": "orches",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "scripts": {
+    "package": "node package-vsix.mjs"
+  }
+}

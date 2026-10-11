@@ -28,7 +28,7 @@ export const runRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = StartRunSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: "Body must include a 'task' description." });
     try {
-      const run = manager.start(request.params.projectId, parsed.data.task);
+      const run = await manager.start(request.params.projectId, parsed.data.task);
       return reply.status(201).send(run);
     } catch (err) {
       const status = err instanceof RunStartError ? err.statusCode : 500;
@@ -79,6 +79,8 @@ export const runRoutes: FastifyPluginAsync = async (fastify) => {
         endedAt: a.ended_at,
         agentSummary: a.agent_summary,
         agentError: a.agent_error,
+        instruction: typeof a.instruction_text === "string" ? a.instruction_text : null,
+        transcript: parseJson<Record<string, unknown> | null>(a.agent_transcript_json, null),
         files: parseJson<unknown[]>(a.files_changed_json, []),
         diff: typeof a.diff_text === "string" ? a.diff_text : "",
         gate: parseJson<Record<string, unknown> | null>(a.gate_json, null),

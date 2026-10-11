@@ -22,6 +22,7 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState(settings.openai.model);
   const [maxAttempts, setMaxAttempts] = useState(settings.maxAttempts);
+  const [agentId, setAgentId] = useState(settings.codingAgentId);
   const [probe, setProbe] = useState<Probe>({ state: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,6 +42,7 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
     localContextTokens: contextTokens,
     openaiModel: openaiModel.trim(),
     maxAttempts,
+    codingAgentId: agentId,
     ...(openaiKey.trim() ? { openaiApiKey: openaiKey.trim() } : {}),
   });
 
@@ -87,7 +89,6 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
     }
   };
 
-  const agent = settings.codingAgents.find((a) => a.id === settings.codingAgentId) ?? settings.codingAgents[0];
 
   return (
     <Modal
@@ -196,22 +197,31 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
 
         <section className="settings-section">
           <h3>Coding mechanism</h3>
-          <div className="option-card selected">
-            <strong>{agent?.name}</strong>
-            <p className="small">{agent?.description}</p>
+          <p className="muted small">Who edits the files. With the Antigravity Agent, the reasoning model writes instructions, the agent codes, and Orches feeds the verified results back each iteration.</p>
+          <div role="radiogroup" aria-label="Coding mechanism" className="option-list">
+            {settings.codingAgents.map((a) => (
+              <label key={a.id} className={`option-card${agentId === a.id ? " selected" : ""}`}>
+                <span className="row">
+                  <input type="radio" name="agent" value={a.id} checked={agentId === a.id} onChange={() => setAgentId(a.id)} />
+                  <strong>{a.name}</strong>
+                  <span className={`dot dot-${a.available ? "ok" : "bad"}`} aria-hidden />
+                  <span className="small muted">{a.available ? "available" : "not reachable now"}</span>
+                </span>
+                <span className="small">{a.description}</span>
+                {!a.available && <span className="small warn-text">{a.detail}</span>}
+              </label>
+            ))}
           </div>
-          <div className="option-card disabled" aria-disabled="true">
-            <strong>Antigravity IDE agent — not available</strong>
-            <p className="small">{ide?.nativeAgent.reason ?? "Antigravity's built-in agent cannot be controlled by external programs."}</p>
+          {agentId === "antigravity" && (
             <p className="small muted">
-              {ide?.installed ? (ide.running ? "Antigravity IDE is running." : "Antigravity IDE is installed but not running.") : "Antigravity IDE was not found."} You can still open the
-              workspace in it from the dashboard to watch files change.
+              Requires the Orches Bridge extension in Antigravity IDE and the project folder open in exactly one Antigravity window. The agent uses your Antigravity account.
+              {ide && !ide.nativeAgent.bridgeInstalled ? " The bridge extension is not installed yet (see README)." : ""}
             </p>
-          </div>
+          )}
           <label className="field narrow">
-            <span>Attempts per task</span>
+            <span>{agentId === "antigravity" ? "Iterations per task" : "Attempts per task"}</span>
             <select value={maxAttempts} onChange={(e) => setMaxAttempts(Number(e.target.value))}>
-              {[1, 2, 3, 4, 5].map((n) => (
+              {[1, 2, 3, 4, 5, 6, 8].map((n) => (
                 <option key={n} value={n}>
                   {n} {n === 1 ? "(no repair)" : `(1 + ${n - 1} repair${n > 2 ? "s" : ""})`}
                 </option>

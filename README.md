@@ -4,23 +4,30 @@ Orches takes a development task you describe, changes the code in **one project 
 the result with that project's own tests, has the diff reviewed, and keeps the change only if it holds up.
 If it doesn't, every file it touched is restored.
 
+Two coding mechanisms, chosen in Settings:
+
+**Antigravity Agent (closed loop)** — the reasoning model directs the native Antigravity Agent:
 ```
-task ─▶ plan (model) ─▶ snapshot ─▶ write files (built-in coder) ─▶ validate & run project checks
-                                         ▲                                   │
-                                         └──── repair with real errors ◀─────┤ rejected (bounded attempts)
-                                                                             ▼
-                                            independent review (model) ─▶ deterministic gate
-                                                                             │
-                              accepted: keep (+ commit in a clean Git repo)  │  rejected/stopped: restore files
+you ─▶ Orches ─▶ reasoning model (OpenAI or Ollama): plan + first instruction
+                     │
+                     ▼
+        Orches Bridge ─▶ Antigravity Agent codes in the IDE ─▶ Orches reads what it did
+                     ▲                                          (conversation record + real diff)
+                     │                                                   │
+   next instruction ◀── reasoning model judges the evidence ◀── checks, validation, review
+                                                                         │
+                                  deterministic gate: keep (+ commit) or, after the last iteration, roll back
 ```
+
+**Built-in coder** — the reasoning model writes the files itself; same verification, repair and rollback.
 
 ## What it does — and what it does not
 
 | | |
 |---|---|
 | **Reasoning provider** | Local model through Ollama (native API, configurable context window) or any OpenAI-compatible server; or the OpenAI API. The selection in Settings is what runs, and every run records the provider and model it used. Local providers never fall back to the cloud. |
-| **Coding mechanism** | *Built-in coder*: the selected model returns complete file contents, and Orches writes them inside the workspace after path-safety checks. |
-| **Antigravity IDE** | Detected (installed / running / is this folder open) and you can open the workspace in it to watch files change. Its built-in agent **cannot** be driven: its agent API requires credentials the IDE only gives to processes it launches itself, and `antigravity-ide chat` opens the panel without submitting the prompt (both verified on Antigravity IDE 1.107). Orches says so instead of pretending. |
+| **Coding mechanism** | *Antigravity Agent*: each iteration the reasoning model writes an instruction; the **Orches Bridge** extension submits it to the Agent panel of the Antigravity window that has the project open (using the IDE's own `antigravity.sendPromptToAgentPanel` command); Orches then follows the agent's conversation record (read-only) until it goes idle and collects its reply and tool calls. *Built-in coder*: the reasoning model returns complete files and Orches writes them after path-safety checks. |
+| **Antigravity limits** | The agent cannot be cancelled from outside (no public command): **Stop** waits up to 2 minutes for it to go idle before rolling back and tells you if it is still running. The conversation format is undocumented, so the agent's report is shown as evidence, never trusted for acceptance. The agent uses your Antigravity account. |
 | **Verification** | Checks come from the project, not the model: npm `test`/`lint`/`typecheck` scripts, pytest or unittest, `go test`, `cargo test`, or commands you configure. They run before the change (baseline) and after, so regressions and pre-existing failures are told apart. Changed files are also syntax-checked (JSON, JavaScript, Python) and scanned for fences and "rest of code unchanged" stubs. |
 | **Acceptance** | A model saying "done" is never enough. Accepted requires real file changes, no protected paths touched, valid files, no failing or regressed checks, and no concrete objection from the reviewer. |
 | **Outcomes** | **Verified**: checks passed and the reviewer accepted. **Done — not fully verified**: accepted but without passing project checks or reviewer endorsement; review the diff. **Rejected — rolled back**: nothing kept. **Failed**: an error such as an unreachable model. **Stopped**: cancelled by you, with in-progress changes rolled back. |
@@ -44,7 +51,9 @@ reload, run `npm run dev` in one terminal and `npm run dev:web` in another (http
 Then:
 1. **Add project**: enter the absolute path of the folder to work in (tick *Create the folder* for a new project).
 2. **Settings**: pick Local (Ollama) or OpenAI. *Check connection* is free; *Send test request* makes one tiny call.
-3. Describe the task and press **Run task** (Ctrl+Enter). Watch progress in *Activity*; inspect files, diffs,
+3. For the Antigravity Agent: run `npm run bridge:install` once, open the project folder in Antigravity IDE
+   (exactly one window), and choose *Antigravity Agent* under Settings → Coding mechanism.
+4. Describe the task and press **Run task** (Ctrl+Enter). Watch progress in *Activity*; inspect files, diffs,
    checks and the review in *Result*. **Stop** cancels the current step and rolls back.
 
 Data (SQLite database, settings, snapshots) lives in `%APPDATA%\AutonomousDevOrchestrator` on Windows; override

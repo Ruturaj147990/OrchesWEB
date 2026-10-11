@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "dev": "npm run build:packages && npm run build --workspace=apps/web && tsx apps/server/src/server.ts",
     "dev:web": "npm run dev --workspace=apps/web",
-    "start": "npm run build && node apps/server/dist/server.js"
+    "start": "npm run build && node apps/server/dist/server.js",
+    "bridge:install": "node apps/antigravity-bridge/install.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",

@@ -63,4 +63,14 @@ export function runMigrations(db: DatabaseSync): void {
       throw err;
     }
   }
+
+  if (!applied("0003_agent_loop")) {
+    for (const [table, column, type] of [
+      ["task_attempts", "instruction_text", "TEXT"],
+      ["task_attempts", "agent_transcript_json", "TEXT"],
+    ]) {
+      if (!columnExists(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+    mark("0003_agent_loop");
+  }
 }

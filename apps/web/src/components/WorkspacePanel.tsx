@@ -108,7 +108,8 @@ export function WorkspacePanel({ project, workspace, ide, runActive, onEdit, onR
               {ide ? (
                 ide.installed ? (
                   <>
-                    Antigravity {ide.running ? (ide.workspaceOpen ? "· this folder is open" : "· running") : "· not running"}{" "}
+                    Antigravity {ide.running ? (ide.workspaceOpen ? "· this folder is open" : "· running") : "· not running"}
+                    {ide.nativeAgent.available ? " · agent reachable" : ""}{" "}
                     {!ide.workspaceOpen && (
                       <button className="link" onClick={() => act("ide", () => api.openInIde(project.id))} disabled={busy !== null}>
                         {busy === "ide" ? "opening…" : "open folder"}
