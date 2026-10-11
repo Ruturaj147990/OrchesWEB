@@ -1,0 +1,211 @@
+export interface Project {
+  id: string;
+  name: string;
+  rootPath: string;
+  status: string;
+  verificationCommands: string[];
+  autoCommit: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceInfo {
+  exists: boolean;
+  rootPath: string;
+  profile?: {
+    isEmpty: boolean;
+    fileCount: number;
+    languages: string[];
+    manifests: string[];
+    checks: Array<{ id: string; label: string; source: string; kind: string }>;
+    notes: string[];
+  };
+  git?: {
+    isGitRepo: boolean;
+    activeBranch: string | null;
+    isDirty: boolean;
+    dirtyFiles: string[];
+    hasRemote: boolean;
+    safetyMode: "git" | "local_snapshot";
+  };
+}
+
+export interface Run {
+  id: string;
+  projectId: string;
+  status: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  taskText: string | null;
+  title: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  agentId: string | null;
+  outcome: string | null;
+  summary: string | null;
+  safetyMode: string | null;
+  commitSha: string | null;
+  iterationCount: number;
+}
+
+export interface FileChange {
+  path: string;
+  kind: "added" | "modified" | "deleted";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface CheckRecord {
+  phase: "baseline" | "static" | "attempt";
+  kind: string;
+  label: string;
+  source: string | null;
+  status: string;
+  exitCode: number | null;
+  durationMs: number;
+  output: string;
+}
+
+export interface Attempt {
+  id: string;
+  number: number;
+  status: string;
+  agentSummary: string | null;
+  agentError: string | null;
+  files: FileChange[];
+  diff: string;
+  gate: {
+    accepted: boolean;
+    outcome: string;
+    blockers: string[];
+    warnings: string[];
+    evidence: string[];
+    critic?: { available: boolean; error?: string; verdict: string; summary: string; criteria: Array<{ id: string; status: string; reason: string }>; findings: Array<{ severity: string; message: string }> };
+  } | null;
+  rollback: { restored: string[]; removed: string[]; failed: Array<{ path: string; error: string }>; backupDir: string | null } | null;
+  checks: CheckRecord[];
+}
+
+export interface RunDetail {
+  run: Run & { active: boolean };
+  details: { warnings?: string[]; evidence?: string[]; usage?: { requests: number; totalTokens: number; costUsd: number; costKnown: boolean }; rollback?: Attempt["rollback"] };
+  task: { id: string; title: string; status: string; acceptanceCriteria: string[] } | null;
+  attempts: Attempt[];
+}
+
+export interface Settings {
+  activeProviderId: "openai-compatible-local" | "openai";
+  activeModel: string;
+  local: { baseUrl: string; model: string; timeoutMs: number; contextTokens: number };
+  openai: { configured: boolean; maskedKey: string; model: string; keySource: "environment" | "settings" | null };
+  codingAgentId: string;
+  codingAgents: Array<{ id: string; name: string; description: string; usesReasoningProvider: boolean; available: boolean; detail: string }>;
+  maxAttempts: number;
+}
+
+export interface ProviderHealth {
+  ok: boolean;
+  status?: string;
+  message?: string;
+  discoveredModels?: string[];
+  latencyMs?: number;
+}
+
+export interface IdeStatus {
+  installed: boolean;
+  running: boolean;
+  openFolders: string[];
+  workspaceOpen: boolean;
+  nativeAgent: { available: false; reason: string };
+}
+
+export interface RunEvent {
+  id: string;
+  eventSeq: number;
+  projectId: string;
+  runId: string | null;
+  type: string;
+  payload: Record<string, any>;
+  timestamp: string;
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/v1${url}`, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError("Cannot reach the orchestrator server. Is it running?", 0);
+  }
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) throw new ApiError(data?.error || data?.message || `Request failed (HTTP ${res.status})`, res.status);
+  return data as T;
+}
+
+export const api = {
+  health: () => request<{ status: string }>("GET", "/health"),
+  projects: () => request<Project[]>("GET", "/projects"),
+  createProject: (body: { name: string; rootPath: string; createFolder?: boolean; verificationCommands?: string[]; autoCommit?: boolean }) =>
+    request<Project>("POST", "/projects", body),
+  updateProject: (id: string, body: Partial<Pick<Project, "name" | "rootPath" | "verificationCommands" | "autoCommit">>) => request<Project>("PATCH", `/projects/${id}`, body),
+  removeProject: (id: string) => request<{ success: boolean }>("DELETE", `/projects/${id}`),
+  workspace: (id: string) => request<WorkspaceInfo>("GET", `/projects/${id}/workspace`),
+  initGit: (id: string) => request<{ message: string }>("POST", `/projects/${id}/git/init`),
+  runs: (id: string) => request<{ runs: Run[] }>("GET", `/projects/${id}/runs`),
+  startRun: (id: string, task: string) => request<Run>("POST", `/projects/${id}/runs`, { task }),
+  stopRun: (runId: string) => request<Run>("POST", `/runs/${runId}/stop`),
+  runDetail: (runId: string) => request<RunDetail>("GET", `/runs/${runId}`),
+  sendGuidance: (projectId: string, content: string) => request("POST", `/projects/${projectId}/messages`, { kind: "guidance", content }),
+  settings: () => request<Settings>("GET", "/settings"),
+  saveSettings: (body: Record<string, unknown>) => request<Settings>("PUT", "/settings", body),
+  checkProvider: (id: string) => request<ProviderHealth>("POST", `/settings/providers/${id}/check`),
+  testProvider: (id: string) => request<{ ok: boolean; output?: string; durationMs?: number; model?: string }>("POST", `/settings/providers/${id}/test`),
+  localModels: (baseUrl?: string) => request<{ models: string[] }>("GET", `/settings/local-models${baseUrl ? `?baseUrl=${encodeURIComponent(baseUrl)}` : ""}`),
+  ideStatus: (projectId?: string) => request<IdeStatus>("GET", `/ide/status${projectId ? `?projectId=${projectId}` : ""}`),
+  openInIde: (projectId: string) => request<{ message: string }>("POST", `/projects/${projectId}/open-in-ide`),
+};
+
+export const PROVIDER_LABELS: Record<string, string> = {
+  "openai-compatible-local": "Local model",
+  openai: "OpenAI",
+};
+
+export const AGENT_LABELS: Record<string, string> = {
+  builtin: "Built-in coder",
+  mock: "Scripted test agent",
+};
+
+/** Human wording for a run's state; the single source for badges and headings. */
+export function describeRun(run: Pick<Run, "status" | "outcome">): { label: string; tone: "neutral" | "running" | "success" | "warning" | "danger" } {
+  if (run.status === "running" || run.status === "ready") return { label: "Running", tone: "running" };
+  switch (run.outcome) {
+    case "verified":
+      return { label: "Verified", tone: "success" };
+    case "unverified":
+      return { label: "Done — not fully verified", tone: "warning" };
+    case "rejected":
+      return { label: "Rejected — rolled back", tone: "danger" };
+    case "cancelled":
+      return { label: "Stopped", tone: "neutral" };
+    case "error":
+      return { label: "Failed", tone: "danger" };
+    default:
+      return { label: run.status.replace(/_/g, " "), tone: "neutral" };
+  }
+}

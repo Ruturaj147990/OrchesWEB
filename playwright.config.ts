@@ -3,47 +3,38 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
-const testDataDir = path.join(os.tmpdir(), "orchestrator-e2e-data");
-if (fs.existsSync(testDataDir)) {
-  try {
-    fs.rmSync(testDataDir, { recursive: true, force: true });
-  } catch {}
+// The e2e server gets its own port and a throwaway data directory, so it never touches
+// the user's real orchestrator settings, database or a server they already have running.
+export const E2E_PORT = 4318;
+// The config is evaluated by the runner and again by workers; create the directory once.
+if (!process.env.ORCHES_E2E_DATA_DIR) {
+  process.env.ORCHES_E2E_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "orches-e2e-data-"));
 }
+export const E2E_DATA_DIR = process.env.ORCHES_E2E_DATA_DIR;
 
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
-  forbidOnly: !!process.env.CI,
-  retries: 0,
+  fullyParallel: false,
   workers: 1,
+  retries: 0,
   reporter: "list",
+  timeout: 60_000,
   use: {
-    baseURL: "http://127.0.0.1:5173",
-    trace: "on-first-retry",
+    baseURL: `http://127.0.0.1:${E2E_PORT}`,
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [
-    {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  webServer: {
+    // Builds the real UI and serves it from the real server (no dev proxy, no mocks).
+    command: "npm run build:packages && npm run build --workspace=apps/web && npx tsx apps/server/src/server.ts",
+    url: `http://127.0.0.1:${E2E_PORT}/api/v1/health`,
+    reuseExistingServer: false,
+    timeout: 120_000,
+    env: {
+      ORCHESTRATOR_PORT: String(E2E_PORT),
+      ORCHESTRATOR_DATA_DIR: E2E_DATA_DIR,
+      OPENAI_API_KEY: "",
     },
-  ],
-  webServer: [
-    {
-      command: "npm run dev:server",
-      url: "http://127.0.0.1:4317/api/v1/health",
-      reuseExistingServer: true,
-      timeout: 15000,
-      env: {
-        ORCHESTRATOR_DATA_DIR: path.join(os.tmpdir(), "orchestrator-e2e-data"),
-        NODE_ENV: "test",
-      },
-    },
-    {
-      command: "npm run dev:web",
-      url: "http://127.0.0.1:5173",
-      reuseExistingServer: true,
-      timeout: 15000,
-    },
-  ],
+  },
 });

@@ -5,8 +5,15 @@ import { SecretRedactor } from "../platform/secret-redactor.js";
 
 type EventListener = (event: RunEvent) => void;
 
+/**
+ * Subscribers are shared by every EventStore instance: routes and the run pipeline each
+ * construct their own store, and a per-instance registry meant live SSE clients never saw
+ * events recorded by the pipeline.
+ */
+const sharedListeners: Map<string, Set<EventListener>> = new Map();
+
 export class EventStore {
-  private listeners: Map<string, Set<EventListener>> = new Map();
+  private listeners = sharedListeners;
 
   constructor(private db: DatabaseSync) {}
 
@@ -72,6 +79,14 @@ export class EventStore {
     `);
     const rows = stmt.all(projectId, cursorSeq) as Record<string, unknown>[];
     return rows.map((r) => this.mapRow(r));
+  }
+
+  /** The most recent `limit` events, oldest first. */
+  public getRecentEvents(projectId: string, limit: number): RunEvent[] {
+    const rows = this.db
+      .prepare("SELECT * FROM run_events WHERE project_id = ? ORDER BY event_seq DESC LIMIT ?")
+      .all(projectId, limit) as Record<string, unknown>[];
+    return rows.map((r) => this.mapRow(r)).reverse();
   }
 
   public getEvents(projectId: string): RunEvent[] {

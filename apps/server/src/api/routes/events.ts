@@ -1,51 +1,38 @@
 import { FastifyPluginAsync } from "fastify";
 import { EventStore } from "../../events/event-store.js";
 import { getDb } from "../../storage/db.js";
+import { RunEvent } from "@orchestrator/shared-types";
 
 export const eventRoutes: FastifyPluginAsync = async (fastify) => {
-  const db = getDb();
-  const eventStore = new EventStore(db);
+  const eventStore = new EventStore(getDb());
 
-  fastify.get<{
-    Params: { projectId: string };
-    Querystring: { cursor?: string };
-  }>("/projects/:projectId/events", async (request, reply) => {
-    const { projectId } = request.params;
-    const rawCursor = (request.headers["last-event-id"] as string) || request.query.cursor || "0";
-    const cursor = parseInt(rawCursor, 10) || 0;
+  // Server-sent events. A fresh connection replays the latest `tail` events; a reconnect
+  // (Last-Event-ID) or an explicit cursor replays everything after that sequence number.
+  fastify.get<{ Params: { projectId: string }; Querystring: { cursor?: string; tail?: string } }>(
+    "/projects/:projectId/events",
+    async (request, reply) => {
+      const { projectId } = request.params;
+      const lastId = (request.headers["last-event-id"] as string) || request.query.cursor;
+      const tail = Math.min(Math.max(parseInt(request.query.tail || "200", 10) || 200, 1), 2000);
 
-    reply.raw.setHeader("Content-Type", "text/event-stream");
-    reply.raw.setHeader("Cache-Control", "no-cache");
-    reply.raw.setHeader("Connection", "keep-alive");
-    // Same-origin in production; the CORS hook has already rejected non-loopback origins.
-    if (request.headers.origin) reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin);
-    reply.raw.flushHeaders();
-    reply.hijack();
+      reply.raw.setHeader("Content-Type", "text/event-stream");
+      reply.raw.setHeader("Cache-Control", "no-cache");
+      reply.raw.setHeader("Connection", "keep-alive");
+      if (request.headers.origin) reply.raw.setHeader("Access-Control-Allow-Origin", request.headers.origin);
+      reply.raw.flushHeaders();
+      reply.hijack();
 
-    // 1. Replay missed events from cursor
-    const missed = eventStore.getEventsSince(projectId, cursor);
-    for (const ev of missed) {
-      reply.raw.write(`id: ${ev.eventSeq}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
+      const send = (ev: RunEvent) => reply.raw.write(`id: ${ev.eventSeq}\ndata: ${JSON.stringify(ev)}\n\n`);
+      const replay = lastId !== undefined ? eventStore.getEventsSince(projectId, parseInt(lastId, 10) || 0) : eventStore.getRecentEvents(projectId, tail);
+      replay.forEach(send);
+      reply.raw.write(`event: replay-complete\ndata: {}\n\n`);
+
+      const unsubscribe = eventStore.subscribe(projectId, send);
+      const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), 15000);
+      request.raw.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
     }
-
-    // 2. Subscribe to new real-time events
-    const unsubscribe = eventStore.subscribe(projectId, (ev) => {
-      reply.raw.write(`id: ${ev.eventSeq}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
-    });
-
-    // 3. Heartbeat ping
-    const interval = setInterval(() => {
-      reply.raw.write(": ping\n\n");
-    }, 15000);
-
-    request.raw.on("close", () => {
-      clearInterval(interval);
-      unsubscribe();
-    });
-
-    // Keep connection open indefinitely for SSE
-    await new Promise<void>((resolve) => {
-      request.raw.on("close", resolve);
-    });
-  });
+  );
 };
