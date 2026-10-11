@@ -166,11 +166,46 @@ Before autonomous task dispatch is permitted, the orchestrator enforces a strict
 - **Visible Antigravity IDE (Native Editor)**: Changes appear live in the open editor canvas as the agent works.
 - **Headless CLI (`agy`)**: Alternative background mode running via standard CLI execution.
 
-### Git Workspace Safety Guard
+### Git & Non-Git Workspace Safety Guard
 To protect unrelated human work:
-- Before any task dispatch, the orchestrator inspects `git status --porcelain`.
-- If uncommitted or untracked changes exist that were made manually in the IDE, the loop safely pauses with a `run.dirty_workspace` event.
+- Before any task dispatch, the orchestrator inspects workspace state.
+- In Git repositories, it inspects `git status --porcelain`. In non-Git folders, it scans file hashes against `.orchestrator/snapshots`.
+- If uncommitted or untracked changes exist that were made manually, the loop safely pauses with a `run.dirty_workspace` event unless explicitly allowed.
 - It **never** discards, overwrites, or reverts unrelated developer work.
+
+---
+
+## Optional Git Support & Non-Git Local Snapshot Safety
+
+The Autonomous Development Orchestrator treats Git and GitHub integration as **entirely optional**:
+
+1. **GitHub is Never Required:**
+   - No GitHub account, remote repository, or internet connection is needed to create projects or run autonomous development loops.
+   - Repositories without remotes function 100% offline.
+
+2. **Universal Local Directory Support:**
+   - Any valid local filesystem directory can be orchestrated, including directories without a `.git` folder.
+
+3. **Dual Safety Mechanisms:**
+   - **When Git is Available:** Employs isolated branches (`orchestrator/<project>/<task>/attempt-<n>`) and deterministic checkpoint commits (`chore(orchestrator): checkpoint task ...`).
+   - **When Git is Unavailable (Local Snapshot Mode):** Activates `SnapshotManager`. Takes durable file snapshots in `.orchestrator/snapshots/<id>/files` with a cryptographic `manifest.json`. Computes unified diffs directly without Git CLI. Failed attempts roll back strictly the attempt-modified and newly created files while preserving pre-existing user files.
+
+4. **Strict Explicit User Consent for Git Initialization:**
+   - The orchestrator **never** runs `git init` or configures a remote automatically.
+   - Local Git initialization happens only when the operator explicitly clicks "Initialize Local Git Repository" or checks the consent box in the Project Wizard.
+   - Remote configurations and pushes are never performed.
+
+5. **Graceful UI Adaptation:**
+   - In non-Git mode, remote-specific controls are disabled with clear explanations, while local snapshot creation, diff inspection, and rollbacks remain fully operational.
+   - Planning, agent execution, independent verification, Critic review, deterministic acceptance, budgets, and dual-viewport browser screenshots work identically across both modes.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/projects/:projectId/git/status` | Active Git branch or non-Git snapshot count, dirty state, safety mode |
+| `GET` | `/api/v1/projects/:projectId/git/diff` | Unified diff against baseline (Git diff or snapshot diff) |
+| `POST` | `/api/v1/projects/:projectId/git/checkpoint` | Commit checkpoint or take durable safety snapshot |
+| `POST` | `/api/v1/projects/:projectId/git/rollback` | Roll back failed attempt cleanly |
+| `POST` | `/api/v1/projects/:projectId/git/init` | Initialize local Git repository (explicit user consent only) |
 
 
 ---

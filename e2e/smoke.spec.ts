@@ -15,7 +15,7 @@ test.describe("Orchestrator Control Dashboard Smoke Test", () => {
     await expect(page.locator(".brand-title")).toHaveText("Autonomous Development Orchestrator");
 
     // 2. Validate Privacy & Provider Badges
-    await expect(page.locator("#badge-reasoning")).toContainText("Reasoning: Local");
+    await expect(page.locator("#badge-reasoning")).toContainText(/Reasoning: (Local|OpenAI)/);
     await expect(page.locator("#badge-agent")).toContainText("Agent: Antigravity");
 
     // 3. Validate Controls

@@ -16,6 +16,7 @@ export function ProjectWizard({ isOpen, onClose, onProjectCreated }: WizardProps
   const [autonomyMode, setAutonomyMode] = useState<
     "creative_within_constraints" | "creative_exploration" | "strict_blueprint_adherence"
   >("creative_within_constraints");
+  const [initGit, setInitGit] = useState(false);
   const [requirements, setRequirements] = useState<any[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -64,6 +65,13 @@ export function ProjectWizard({ isOpen, onClose, onProjectCreated }: WizardProps
           }),
         });
         const created = await res.json();
+        if (initGit && created.id) {
+          try {
+            await fetch(`/api/v1/projects/${created.id}/git/init`, { method: "POST" });
+          } catch (initErr) {
+            console.error("Git init error:", initErr);
+          }
+        }
         onProjectCreated(created);
         onClose();
       } catch (err) {
@@ -144,6 +152,20 @@ export function ProjectWizard({ isOpen, onClose, onProjectCreated }: WizardProps
             </div>
             <div style={{ fontSize: "0.8rem", color: "var(--accent-emerald)" }}>
               ✓ Workspace bounded to local filesystem. Path traversal protections enabled.
+            </div>
+
+            <div style={{ padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.82rem", color: "var(--text-main)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={initGit}
+                  onChange={(e) => setInitGit(e.target.checked)}
+                />
+                <span>Initialize local Git repository <span style={{ color: "var(--text-dim)" }}>(Optional — explicit user consent)</span></span>
+              </label>
+              <div style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: "0.25rem", paddingLeft: "1.4rem" }}>
+                If unchecked, this folder will operate safely using <strong>automatic local file snapshots</strong>. GitHub integration and remote repositories are entirely optional and never required.
+              </div>
             </div>
           </div>
         )}

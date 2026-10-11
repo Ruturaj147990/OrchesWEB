@@ -21,9 +21,9 @@
 | **Autonomous Coding Task** | Real task execution with file creation and independent verification | `apps/server/tests/real-world-e2e.test.ts` | **PASS** | `hello.txt` created, independent verification `node verify-hello.js` exited 0. Critic accepted. AcceptanceGate passed. Checkpoint committed to Git. |
 | **Failure Path & Stalling** | Bounded repairs, rollback, and stalling on failed checks | `apps/server/tests/real-world-e2e.test.ts` | **PASS** | Failing verification check (`node fail-check.js`) rejected by gate, bounded repair executed 3 attempts, rolled back attempt branch, and marked task stalled safely. |
 | **Single-Page Dashboard** | Professional developer workspace at `/` with zero separate pages | `apps/web/src/App.tsx` & Playwright multi-viewport audit | **PASS** | Restrained developer dark theme, 5-column compact status strip, 65/35 live activity/current task workspace, human steering bar, and contextual slideout drawers. |
-| **Multi-Viewport Audit** | Responsive layout across desktop, laptop, tablet, and mobile | Playwright multi-viewport audit (1440x900, 1280x720, 1024x768, 390x844) | **PASS** | 19 screenshot artifacts captured in `artifacts/ui-audit/iteration-1/`. Zero truncation or horizontal scroll defects. |
-| **Unit & Integration Suite** | Comprehensive automated regression coverage | `npm test` | **PASS** | 11 test suites (51 tests) passing 100% (3.11s). Zero skipped or failed tests. |
-| **E2E Browser Suite** | Live Chromium browser testing of all controls, IDE deck, and drawers | `npx playwright test` | **PASS** | 4 Playwright test suites (22.3s) passing 100%. |
+| **Git-Optional & Snapshot Safety** | Autonomous development loop and safety checkpoints in non-Git folders & offline | `SnapshotManager`, `GitManager`, `git-optional-and-snapshots.test.ts` | **PASS** | GitHub is completely optional. Non-Git folders use cryptographic snapshot manager for diffs and selective rollbacks. Git initialization requires explicit user consent; never creates remotes or pushes automatically. |
+| **Unit & Integration Suite** | Comprehensive automated regression coverage | `npm test` | **PASS** | 12 test suites (59 tests) passing 100% (6.14s). Zero skipped or failed tests. |
+| **E2E Browser Suite** | Live Chromium browser testing of all controls, IDE deck, and drawers | `npx playwright test` | **PASS** | 5 Playwright test suites (26.0s) passing 100%. |
 
 ---
 

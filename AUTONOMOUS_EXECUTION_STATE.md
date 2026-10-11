@@ -62,3 +62,18 @@
 - [x] **Phase 9: Final Acceptance, Reporting & Mandatory Unattended Shutdown**
   - [x] Updated `IMPLEMENTATION_STATE.md`, `TASK_CHECKLIST.md`.
   - [x] Wrote `FINAL_EXECUTION_REPORT.md`.
+- [x] **Phase 10: Git-Optional, Non-Git Snapshot Safety & Local Repository Support**
+  - [x] Made GitHub entirely optional; never require GitHub credentials, remote repositories, or internet connectivity.
+  - [x] Created `SnapshotManager` (`apps/server/src/git/snapshot-manager.ts`) for cryptographic local file snapshots in `.orchestrator/snapshots/<id>` with `manifest.json`.
+  - [x] Added non-Git unified diff computation (`formatUnifiedDiff`, `formatAddedDiff`, `formatDeletedDiff`) without Git CLI.
+  - [x] Added safe selective rollback preserving pre-existing and unrelated user files.
+  - [x] Upgraded `GitManager` (`apps/server/src/git/git-manager.ts`) with dual `git` and `local_snapshot` safety modes.
+  - [x] Implemented explicit user-consented local Git initialization (`initRepo()`), never auto-pushing or configuring remotes.
+  - [x] Upgraded `AutonomousLoop` (`apps/server/src/orchestrator/loop.ts`) to execute end-to-end planning, agent execution, verification, Critic review, gate acceptance, and bounded repairs in non-Git folders.
+  - [x] Added Git API endpoints (`GET /status`, `GET /diff`, `POST /checkpoint`, `POST /rollback`, `POST /init`).
+  - [x] Updated React UI (`GitPage.tsx` and `ProjectWizard.tsx`) with status banners, disabled remote controls with explanations, and explicit-consent `git init` buttons.
+  - [x] Added comprehensive test suite (`apps/server/tests/git-optional-and-snapshots.test.ts`) covering non-Git folders, local Git repos without remotes, GitHub remotes, diffs, checkpoints, bounded repair rollbacks, and full autonomous loop.
+  - [x] Verified full monorepo build (`npm run build`) and entire test suite (`npm test` — 12 test files, 59 tests passed).
+  - [x] Verified complete Playwright browser test suite (`npx playwright test` — 5 test files passed).
+  - [x] Updated documentation (`README.md`, `DEPLOYMENT_READINESS_REPORT.md`).
+

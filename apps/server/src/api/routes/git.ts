@@ -44,7 +44,11 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         const project = getProject(request.params.projectId);
         const git = new GitManager(project.rootPath);
         const diffSummary = await git.getDiffSummary();
-        return reply.status(200).send(diffSummary);
+        const status = await git.getStatus();
+        return reply.status(200).send({
+          ...diffSummary,
+          safetyMode: status.safetyMode,
+        });
       } catch (err: unknown) {
         return reply.status(404).send({ error: (err as Error).message });
       }
@@ -62,17 +66,20 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       const message = request.body?.message || "Manual operator checkpoint";
       const taskId = request.body?.taskId || "manual";
       const commitSha = await git.commitCheckpoint(taskId, message);
+      const status = await git.getStatus();
 
       eventStore.record(project.id, "git.checkpoint_created", {
         commitSha,
         message,
         taskId,
+        safetyMode: status.safetyMode,
       });
 
       return reply.status(200).send({
         success: true,
         commitSha,
         message,
+        safetyMode: status.safetyMode,
       });
     } catch (err: unknown) {
       return reply.status(400).send({ error: (err as Error).message });
@@ -89,21 +96,49 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       const git = new GitManager(project.rootPath);
       const { commitSha } = request.body || {};
       if (!commitSha) {
-        return reply.status(400).send({ error: "commitSha is required for rollback" });
+        return reply.status(400).send({ error: "commitSha or snapshotId is required for rollback" });
       }
 
       await git.rollbackAttempt(commitSha);
+      const status = await git.getStatus();
 
       eventStore.record(project.id, "git.rollback_completed", {
         targetCommit: commitSha,
+        safetyMode: status.safetyMode,
       });
 
       return reply.status(200).send({
         success: true,
         targetCommit: commitSha,
+        safetyMode: status.safetyMode,
       });
     } catch (err: unknown) {
       return reply.status(400).send({ error: (err as Error).message });
     }
   });
+
+  // POST /api/v1/projects/:projectId/git/init (Explicit User Consent Only)
+  fastify.post<{ Params: { projectId: string } }>(
+    "/projects/:projectId/git/init",
+    async (request, reply) => {
+      try {
+        const project = getProject(request.params.projectId);
+        const git = new GitManager(project.rootPath);
+        const res = await git.initRepo();
+
+        eventStore.record(project.id, "git.initialized", {
+          rootPath: project.rootPath,
+          message: res.message,
+        });
+
+        const status = await git.getStatus();
+        return reply.status(200).send({
+          ...res,
+          status,
+        });
+      } catch (err: unknown) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+    }
+  );
 };

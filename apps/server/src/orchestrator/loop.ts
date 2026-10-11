@@ -151,9 +151,17 @@ export class AutonomousLoop {
 
     this.eventStore.record(projectId, "task.created", { taskId: task.id, title: task.title }, runId, task.id);
 
-    // 5. Git preflight baseline & safety guard
+    // 5. Git & local safety preflight baseline
     const gitStatus = await this.gitManager.getStatus();
-    const baselineCommit = gitStatus.baselineCommit || "HEAD";
+    let baselineCommit = gitStatus.baselineCommit;
+    if (!baselineCommit) {
+      if (!gitStatus.isGitRepo) {
+        const initSnap = await this.gitManager.getSnapshotManager().takeSnapshot("baseline", "Initial project baseline");
+        baselineCommit = initSnap.id;
+      } else {
+        baselineCommit = "HEAD";
+      }
+    }
 
     if (gitStatus.isDirty && !options.allowDirtyWorkspace) {
       this.stateMachine.transition(
@@ -251,11 +259,8 @@ export class AutonomousLoop {
         attemptId: task.currentAttemptId,
       }, runId, task.id);
 
-      // Create isolated attempt branch if git available
-      let attemptBranch: string | null = null;
-      if (gitStatus.isGitRepo) {
-        attemptBranch = await this.gitManager.createAttemptBranch(projectId, task.id, attemptNumber);
-      }
+      // Create isolated attempt branch (Git) or attempt baseline snapshot (Non-Git)
+      const attemptBranch = await this.gitManager.createAttemptBranch(projectId, task.id, attemptNumber);
 
       // Persist attempt start
       this.db.prepare(`
@@ -391,11 +396,8 @@ export class AutonomousLoop {
       );
 
       if (gateDecision.accepted) {
-        // Task Accepted: Commit checkpoint
-        let acceptedCommit = baselineCommit;
-        if (gitStatus.isGitRepo) {
-          acceptedCommit = await this.gitManager.commitCheckpoint(task.id, task.title, diffSummary.filesChanged);
-        }
+        // Task Accepted: Commit safety checkpoint (Git commit or local snapshot)
+        const acceptedCommit = await this.gitManager.commitCheckpoint(task.id, task.title, diffSummary.filesChanged);
 
         this.db.prepare("UPDATE tasks SET status = 'succeeded', updated_at = ? WHERE id = ?").run(new Date().toISOString(), task.id);
         this.db.prepare("UPDATE task_attempts SET status = 'succeeded', ended_at = ?, process_exit_code = 0 WHERE id = ?").run(new Date().toISOString(), task.currentAttemptId);
@@ -404,6 +406,7 @@ export class AutonomousLoop {
         this.eventStore.record(projectId, "task.completed", {
           taskId: task.id,
           commitSha: acceptedCommit,
+          safetyMode: gitStatus.safetyMode,
           attempts: attemptNumber,
         }, runId, task.id);
 
@@ -425,8 +428,8 @@ export class AutonomousLoop {
         repairInstructions: criticReview.repair_instructions,
       }, runId, task.id);
 
-      // Rollback isolated attempt branch
-      if (gitStatus.isGitRepo && baselineCommit) {
+      // Rollback isolated attempt branch or snapshot
+      if (baselineCommit) {
         await this.gitManager.rollbackAttempt(baselineCommit, diffSummary.filesChanged);
       }
     }
