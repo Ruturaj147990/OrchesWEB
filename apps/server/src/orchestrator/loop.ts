@@ -180,7 +180,19 @@ export class AutonomousLoop {
 
     // Visible IDE connection check
     if (agentAdapter.id === "antigravity-visible" && options.ideBridge) {
-      const ideState = options.ideBridge.getState();
+      let ideState = options.ideBridge.getState();
+      if (ideState.status !== "ready") {
+        if (ideState.stages?.ready?.status === "passed") {
+          ideState = { ...ideState, status: "ready" };
+        } else {
+          // Attempt automatic connection handshake
+          const connectRes = await options.ideBridge.connect(options.workspacePath);
+          if (connectRes.status === "ready") {
+            ideState = connectRes;
+          }
+        }
+      }
+
       if (ideState.status !== "ready") {
         this.stateMachine.transition(runId, "blocked", `Visible Antigravity IDE is not ready (Status: ${ideState.status}).`);
         this.eventStore.record(

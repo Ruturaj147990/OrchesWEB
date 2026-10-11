@@ -242,130 +242,147 @@ All configuration is loaded via `apps/server/src/config/env.ts` with sensible de
 
 # 5. Complete Directory and File Inventory
 
-The repository contains exactly 94 tracked project-owned files across the root and workspaces:
+The repository contains exactly 117 tracked project-owned files across the root and workspaces:
 
-### 5.1 Root Files (12 files)
-1. `.env.example`: Template for environment variables and port settings.
-2. `.gitignore`: Git exclusion patterns for `node_modules`, dist, SQLite files, artifacts, and `.env`.
-3. `Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md`: Authoritative MVP product blueprint.
-4. `IMPLEMENTATION_STATE.md`: Real-time milestone tracker and architecture changelog.
-5. `README.md`: Project overview, quickstart instructions, and system capabilities.
-6. `SECURITY.md`: Security policies, vulnerability reporting, and loopback safety guarantees.
-7. `TASK_CHECKLIST.md`: Comprehensive engineering task checklist.
-8. `package.json`: Monorepo root manifest declaring workspaces, scripts, and devDependencies.
-9. `package-lock.json`: Dependency lockfile ensuring reproducible dependency resolution.
-10. `tsconfig.base.json`: Base TypeScript compiler options shared by all workspaces.
-11. `vitest.config.ts`: Vitest test runner configuration for monorepo unit/integration suites.
-12. `playwright.config.ts`: Playwright test runner configuration for headless E2E testing.
+### 5.1 Root Files (17 files)
+1. `.env`: Active local environment variables file with configured loopback and API keys.
+2. `.env.example`: Template for environment variables and port settings.
+3. `.gitignore`: Git exclusion patterns for `node_modules`, dist, SQLite files, artifacts, and `.env`.
+4. `Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md`: Authoritative MVP product blueprint.
+5. `AUTONOMOUS_EXECUTION_STATE.md`: Real-time state record of autonomous loop executions and task outcomes.
+6. `CLEANUP_REPORT.md`: Comprehensive audit report verifying file cleanup, dependency hygiene, and artifact removal.
+7. `COMPLETE_PROJECT_AUDIT.md`: This comprehensive forensic audit and functional specification document.
+8. `DECISIONS.md`: Architectural decision records (ADRs) documenting core technical tradeoffs.
+9. `DEPLOYMENT_READINESS_REPORT.md`: Audit checklist validating production packaging, security, and runtime constraints.
+10. `FINAL_EXECUTION_REPORT.md`: Historical verification report documenting milestone delivery.
+11. `IMPLEMENTATION_STATE.md`: Real-time milestone tracker and architecture changelog.
+12. `package.json`: Monorepo root manifest declaring workspaces, scripts, and devDependencies.
+13. `package-lock.json`: Dependency lockfile ensuring reproducible dependency resolution.
+14. `playwright.config.ts`: Playwright test runner configuration for headless E2E testing.
+15. `README.md`: Project overview, quickstart instructions, and system capabilities.
+16. `SECURITY.md`: Security policies, vulnerability reporting, and loopback safety guarantees.
+17. `TASK_CHECKLIST.md`: Comprehensive engineering task checklist.
+18. `tsconfig.base.json`: Base TypeScript compiler options shared by all workspaces.
+19. `vitest.config.ts`: Vitest test runner configuration for monorepo unit/integration suites.
 
 ### 5.2 Workspace: `packages/shared-types` (7 files)
-13. `packages/shared-types/package.json`: Package manifest (`@orchestrator/shared-types`).
-14. `packages/shared-types/tsconfig.json`: TypeScript compilation configuration.
-15. `packages/shared-types/src/index.ts`: Canonical domain models, Zod validation schemas, and types.
-16. `packages/shared-types/src/index.js`: Compiled JavaScript output (git-tracked).
-17. `packages/shared-types/src/index.d.ts`: Compiled TypeScript type definitions (git-tracked).
-18. `packages/shared-types/src/index.js.map`: Source map for compiled JS.
-19. `packages/shared-types/src/index.d.ts.map`: Source map for compiled declaration file.
+20. `packages/shared-types/package.json`: Package manifest (`@orchestrator/shared-types`).
+21. `packages/shared-types/tsconfig.json`: TypeScript compilation configuration.
+22. `packages/shared-types/src/index.ts`: Canonical domain models, Zod validation schemas, and types.
+23. `packages/shared-types/src/index.js`: Compiled JavaScript output (git-tracked).
+24. `packages/shared-types/src/index.d.ts`: Compiled TypeScript type definitions (git-tracked).
+25. `packages/shared-types/src/index.js.map`: Source map for compiled JS.
+26. `packages/shared-types/src/index.d.ts.map`: Source map for compiled declaration file.
 
 ### 5.3 Workspace: `packages/policy-schema` (4 files)
-20. `packages/policy-schema/package.json`: Package manifest (`@orchestrator/policy-schema`).
-21. `packages/policy-schema/tsconfig.json`: TypeScript compilation configuration.
-22. `packages/policy-schema/src/index.ts`: `PolicyEngine` implementation, constraint rules, and path policy evaluator.
-23. `packages/policy-schema/tests/policy.test.ts`: Vitest test suite for policy engine and path boundary evaluation.
+27. `packages/policy-schema/package.json`: Package manifest (`@orchestrator/policy-schema`).
+28. `packages/policy-schema/tsconfig.json`: TypeScript compilation configuration.
+29. `packages/policy-schema/src/index.ts`: `PolicyEngine` implementation, constraint rules, and path policy evaluator.
+30. `packages/policy-schema/tests/policy.test.ts`: Vitest test suite for policy engine and path boundary evaluation.
 
 ### 5.4 Workspace: `packages/profile-presets` (3 files)
-24. `packages/profile-presets/package.json`: Package manifest (`@orchestrator/profile-presets`).
-25. `packages/profile-presets/tsconfig.json`: TypeScript compilation configuration.
-26. `packages/profile-presets/src/index.ts`: Built-in project profile definitions (`general`, `frontend`, `backend`, `fullstack`, `ai_ml`, `cli_tool`).
+31. `packages/profile-presets/package.json`: Package manifest (`@orchestrator/profile-presets`).
+32. `packages/profile-presets/tsconfig.json`: TypeScript compilation configuration.
+33. `packages/profile-presets/src/index.ts`: Built-in project profile definitions (`general`, `frontend`, `backend`, `fullstack`, `ai_ml`, `cli_tool`).
 
-### 5.5 Workspace: `apps/server` (55 files)
-#### Configuration & Bootstrap (5 files)
-27. `apps/server/package.json`: Package manifest (`@orchestrator/server`).
-28. `apps/server/tsconfig.json`: TypeScript compilation configuration.
-29. `apps/server/src/config/env.ts`: Environment variable parser and application configuration object.
-30. `apps/server/src/server.ts`: HTTP server entry point initializing Fastify and binding to port.
-31. `apps/server/src/app.ts`: Fastify application factory, plugin registration (CORS, static artifacts), and route wiring.
+### 5.5 Workspace: `apps/server` (60 files)
+#### Configuration & Bootstrap (6 files)
+34. `apps/server/.env`: Local environment configuration for backend server workspace.
+35. `apps/server/package.json`: Package manifest (`@orchestrator/server`).
+36. `apps/server/tsconfig.json`: TypeScript compilation configuration.
+37. `apps/server/src/config/env.ts`: Environment variable parser and application configuration object.
+38. `apps/server/src/server.ts`: HTTP server entry point initializing Fastify and binding to port.
+39. `apps/server/src/app.ts`: Fastify application factory, plugin registration (CORS, static artifacts), and route wiring.
 #### Storage & Persistence (6 files)
-32. `apps/server/src/storage/schema.ts`: Initial relational database schema and SQL table definitions.
-33. `apps/server/src/storage/db.ts`: SQLite database connection lifecycle using `node:sqlite` `DatabaseSync`.
-34. `apps/server/src/storage/migrations.ts`: Schema migration runner applying versioned migrations.
-35. `apps/server/src/storage/repositories/project-repository.ts`: CRUD repository for projects in SQLite.
-36. `apps/server/src/storage/repositories/run-repository.ts`: CRUD repository for runs and iterations in SQLite.
-37. `apps/server/src/events/event-store.ts`: Durable sequence-numbered event store and SSE pub/sub dispatcher.
+40. `apps/server/src/storage/schema.ts`: Initial relational database schema and SQL table definitions.
+41. `apps/server/src/storage/db.ts`: SQLite database connection lifecycle using `node:sqlite` `DatabaseSync`.
+42. `apps/server/src/storage/migrations.ts`: Schema migration runner applying versioned migrations.
+43. `apps/server/src/storage/repositories/project-repository.ts`: CRUD repository for projects in SQLite.
+44. `apps/server/src/storage/repositories/run-repository.ts`: CRUD repository for runs and iterations in SQLite.
+45. `apps/server/src/events/event-store.ts`: Durable sequence-numbered event store and SSE pub/sub dispatcher.
 #### Platform, Git & Process Supervision (6 files)
-38. `apps/server/src/git/git-manager.ts`: Git CLI wrapper for status checks, attempt branches, diffs, commits, and rollbacks.
-39. `apps/server/src/platform/process-supervisor.ts`: Process registry terminating child processes without orphans.
-40. `apps/server/src/platform/secret-redactor.ts`: Regex-based credential scrubber for strings and nested objects.
-41. `apps/server/src/platform/settings-manager.ts`: Persistent storage for OpenAI keys and fast API key verification probe.
-42. `apps/server/src/platform/ide/ide-detector.ts`: Process and workspace scanner identifying running Antigravity IDE windows.
-43. `apps/server/src/platform/ide/ide-bridge.ts`: Handshake manager coordinating the 6-stage IDE connection pipeline.
+46. `apps/server/src/git/git-manager.ts`: Git CLI wrapper for status checks, attempt branches, diffs, commits, and rollbacks.
+47. `apps/server/src/platform/process-supervisor.ts`: Process registry terminating child processes without orphans.
+48. `apps/server/src/platform/secret-redactor.ts`: Regex-based credential scrubber for strings and nested objects.
+49. `apps/server/src/platform/settings-manager.ts`: Persistent storage for OpenAI keys and fast API key verification probe.
+50. `apps/server/src/platform/ide/ide-detector.ts`: Process and workspace scanner identifying running Antigravity IDE windows.
+51. `apps/server/src/platform/ide/ide-bridge.ts`: Handshake manager coordinating the 6-stage IDE connection pipeline.
 #### Domain Services (6 files)
-44. `apps/server/src/domain/memory/memory-manager.ts`: Workspace memory updater maintaining `TASK_HISTORY.json`, `CURRENT_STATE.md`, `REPO_MAP.md`.
-45. `apps/server/src/domain/budgets/budget-service.ts`: Token cost estimator and hard ceiling pre-flight budget enforcer.
-46. `apps/server/src/domain/blueprints/importer.ts`: Multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with SHA-256 calculation.
-47. `apps/server/src/domain/blueprints/requirement-extractor.ts`: Heuristic requirement parser extracting candidate requirements with provenance tags.
-48. `apps/server/src/domain/human-messages/inbox-service.ts`: Operator message inbox managing steering directions and safe interrupts.
-49. `apps/server/src/prompts/context-builder.ts`: Context packet builder constructing role-specific prompt contexts.
-#### Orchestrator Engine (6 files)
-50. `apps/server/src/orchestrator/state-machine.ts`: Run lifecycle state machine enforcing valid transitions.
-51. `apps/server/src/orchestrator/planner.ts`: Task planner generating structured task contracts linked to approved roadmap items.
-52. `apps/server/src/orchestrator/stagnation-detector.ts`: Loop stagnation detector identifying no-diffs, repeated failures, and edit oscillations.
-53. `apps/server/src/orchestrator/critic.ts`: Independent reviewer evaluating diffs and verification outputs against criteria.
-54. `apps/server/src/orchestrator/acceptance-gate.ts`: Deterministic gate evaluating policy rules and Critic verdicts.
-55. `apps/server/src/orchestrator/loop.ts`: Autonomous loop orchestrating planning, dispatch, verification, review, and commit/rollback.
+52. `apps/server/src/domain/memory/memory-manager.ts`: Workspace memory updater maintaining `TASK_HISTORY.json`, `CURRENT_STATE.md`, `REPO_MAP.md`.
+53. `apps/server/src/domain/budgets/budget-service.ts`: Token cost estimator and hard ceiling pre-flight budget enforcer.
+54. `apps/server/src/domain/blueprints/importer.ts`: Multi-format blueprint importer (.md, .txt, .json, .yaml, .pdf, .docx) with SHA-256 calculation.
+55. `apps/server/src/domain/blueprints/requirement-extractor.ts`: Heuristic requirement parser extracting candidate requirements with provenance tags.
+56. `apps/server/src/domain/human-messages/inbox-service.ts`: Operator message inbox managing steering directions and safe interrupts.
+57. `apps/server/src/prompts/context-builder.ts`: Context packet builder constructing role-specific prompt contexts.
+#### Orchestrator Engine (7 files)
+58. `apps/server/src/orchestrator/state-machine.ts`: Run lifecycle state machine enforcing valid transitions.
+59. `apps/server/src/orchestrator/planner.ts`: Task planner generating structured task contracts linked to approved roadmap items.
+60. `apps/server/src/orchestrator/stagnation-detector.ts`: Loop stagnation detector identifying no-diffs, repeated failures, and edit oscillations.
+61. `apps/server/src/orchestrator/critic.ts`: Independent reviewer evaluating diffs and verification outputs against criteria.
+62. `apps/server/src/orchestrator/acceptance-gate.ts`: Deterministic gate evaluating policy rules and Critic verdicts.
+63. `apps/server/src/orchestrator/loop.ts`: Autonomous loop orchestrating planning, dispatch, verification, review, and commit/rollback.
+64. `apps/server/src/orchestrator/run-execution-service.ts`: Background job supervisor triggering async task step execution without blocking HTTP.
 #### Verification Services (2 files)
-56. `apps/server/src/verification/runner.ts`: Child process runner executing configured test and build commands.
-57. `apps/server/src/verification/browser-verifier.ts`: Playwright headless browser runner capturing screenshots and UI assertions.
+65. `apps/server/src/verification/runner.ts`: Child process runner executing configured test and build commands.
+66. `apps/server/src/verification/browser-verifier.ts`: Playwright headless browser runner capturing screenshots and UI assertions.
 #### Providers (Reasoning & Coding Agents) (9 files)
-58. `apps/server/src/providers/reasoning/provider.ts`: TypeScript interfaces for reasoning providers and requests.
-59. `apps/server/src/providers/reasoning/openai/openai-provider.ts`: OpenAI Cloud API reasoning provider.
-60. `apps/server/src/providers/reasoning/openai-compatible/local-provider.ts`: Local OpenAI-compatible reasoning provider (Ollama).
-61. `apps/server/src/providers/reasoning/registry.ts`: Registry managing configured reasoning engines and defaults.
-62. `apps/server/src/providers/coding-agents/adapter.ts`: TypeScript interfaces for coding agent adapters.
-63. `apps/server/src/providers/coding-agents/antigravity/antigravity-adapter.ts`: Headless Antigravity CLI adapter (`agy`).
-64. `apps/server/src/providers/coding-agents/antigravity/visible-ide-adapter.ts`: Visible Antigravity IDE native adapter.
-65. `apps/server/src/providers/coding-agents/mock/mock-adapter.ts`: Deterministic mock coding agent adapter for testing.
-66. `apps/server/src/providers/coding-agents/registry.ts`: Registry managing active coding agent adapters.
-#### API Routes (9 files)
-67. `apps/server/src/api/routes/health.ts`: Route `GET /api/v1/health` returning server status and runtime environment.
-68. `apps/server/src/api/routes/projects.ts`: Routes for project creation, retrieval, updates, and export.
-69. `apps/server/src/api/routes/runs.ts`: Routes for run creation, pausing, stopping, and resuming.
-70. `apps/server/src/api/routes/events.ts`: Route `GET /api/v1/projects/:id/events` providing real-time SSE stream.
-71. `apps/server/src/api/routes/tasks.ts`: Routes for listing tasks and retrieving full evidence details.
-72. `apps/server/src/api/routes/blueprints.ts`: Routes for blueprint import, requirement extraction, and approval.
-73. `apps/server/src/api/routes/messages.ts`: Routes for posting and canceling operator directions.
-74. `apps/server/src/api/routes/providers.ts`: Routes for querying, testing, and switching reasoning engines.
-75. `apps/server/src/api/routes/ide.ts`: Routes for IDE discovery, connection handshake, and workspace directory sync.
-#### Test Suites (9 files)
-76. `apps/server/tests/health.test.ts`: Health route integration tests.
-77. `apps/server/tests/milestone1.test.ts`: Tests for SQLite persistence, runs, and SSE event streaming.
-78. `apps/server/tests/milestone2.test.ts`: Tests for reasoning providers, budget enforcement, and mock agent execution.
-79. `apps/server/tests/milestone3.test.ts`: Tests proving early autonomous vertical slice (repair, verifier, critic, commit).
-80. `apps/server/tests/milestone4.test.ts`: Tests for stagnation detection, memory manager, process supervisor, and budgets.
-81. `apps/server/tests/milestone5.test.ts`: Tests for project wizard, blueprint importer, and requirement extraction.
-82. `apps/server/tests/milestone6.test.ts`: Tests for operator inbox, human message priorities, and safe interrupt.
-83. `apps/server/tests/milestone7.test.ts`: Tests for secret redaction, JSON/Markdown export, and CORS loopback security.
-84. `apps/server/tests/ide-integration.test.ts`: Tests for Visible IDE detection, 6-stage handshake, and dirty workspace guard.
+67. `apps/server/src/providers/reasoning/provider.ts`: TypeScript interfaces for reasoning providers and requests.
+68. `apps/server/src/providers/reasoning/openai/openai-provider.ts`: OpenAI Cloud API reasoning provider.
+69. `apps/server/src/providers/reasoning/openai-compatible/local-provider.ts`: Local OpenAI-compatible reasoning provider (Ollama).
+70. `apps/server/src/providers/reasoning/registry.ts`: Registry managing configured reasoning engines and defaults.
+71. `apps/server/src/providers/coding-agents/adapter.ts`: TypeScript interfaces for coding agent adapters.
+72. `apps/server/src/providers/coding-agents/antigravity/antigravity-adapter.ts`: Headless Antigravity CLI adapter (`agy`).
+73. `apps/server/src/providers/coding-agents/antigravity/visible-ide-adapter.ts`: Visible Antigravity IDE native adapter.
+74. `apps/server/src/providers/coding-agents/mock/mock-adapter.ts`: Deterministic mock coding agent adapter for testing.
+75. `apps/server/src/providers/coding-agents/registry.ts`: Registry managing active coding agent adapters.
+#### API Routes (11 files)
+76. `apps/server/src/api/routes/health.ts`: Route `GET /api/v1/health` returning server status and runtime environment.
+77. `apps/server/src/api/routes/projects.ts`: Routes for project creation, retrieval, updates, and export.
+78. `apps/server/src/api/routes/runs.ts`: Routes for run creation, pausing, stopping, and resuming.
+79. `apps/server/src/api/routes/events.ts`: Route `GET /api/v1/projects/:id/events` providing real-time SSE stream.
+80. `apps/server/src/api/routes/tasks.ts`: Routes for listing tasks and retrieving full evidence details.
+81. `apps/server/src/api/routes/blueprints.ts`: Routes for blueprint import, requirement extraction, and approval.
+82. `apps/server/src/api/routes/messages.ts`: Routes for posting and canceling operator directions.
+83. `apps/server/src/api/routes/providers.ts`: Routes for querying, testing, and switching reasoning engines.
+84. `apps/server/src/api/routes/ide.ts`: Routes for IDE discovery, connection handshake, and workspace directory sync.
+85. `apps/server/src/api/routes/diagnostics.ts`: Route `GET /api/v1/diagnostics` exposing comprehensive system health, database, Git, and memory stats.
+86. `apps/server/src/api/routes/git.ts`: Routes `GET/POST /api/v1/projects/:id/git/*` for status, diff inspection, manual checkpoints, and rollbacks.
+#### Test Suites (10 files)
+87. `apps/server/tests/health.test.ts`: Health route integration tests.
+88. `apps/server/tests/milestone1.test.ts`: Tests for SQLite persistence, runs, and SSE event streaming.
+89. `apps/server/tests/milestone2.test.ts`: Tests for reasoning providers, budget enforcement, and mock agent execution.
+90. `apps/server/tests/milestone3.test.ts`: Tests proving early autonomous vertical slice (repair, verifier, critic, commit).
+91. `apps/server/tests/milestone4.test.ts`: Tests for stagnation detection, memory manager, process supervisor, and budgets.
+92. `apps/server/tests/milestone5.test.ts`: Tests for project wizard, blueprint importer, and requirement extraction.
+93. `apps/server/tests/milestone6.test.ts`: Tests for operator inbox, human message priorities, and safe interrupt.
+94. `apps/server/tests/milestone7.test.ts`: Tests for secret redaction, JSON/Markdown export, and CORS loopback security.
+95. `apps/server/tests/ide-integration.test.ts`: Tests for Visible IDE detection, 6-stage handshake, and dirty workspace guard.
+96. `apps/server/tests/real-world-e2e.test.ts`: Section 18 mandatory real-world test exercising IDE workspace matching, file generation, and git commit.
 
-### 5.6 Workspace: `apps/web` (10 files)
-85. `apps/web/package.json`: Manifest for frontend React dashboard application.
-86. `apps/web/tsconfig.json`: TypeScript configuration for React/Vite.
-87. `apps/web/vite.config.ts`: Vite build and dev server configuration with proxy to port 4317.
-88. `apps/web/index.html`: Single-page application HTML entry shell.
-89. `apps/web/src/main.tsx`: React DOM mount point.
-90. `apps/web/src/index.css`: Vanilla CSS design system (variables, glassmorphic cards, typography, animations).
-91. `apps/web/src/App.tsx`: Main control dashboard view, run controls, SSE subscriber, and layout.
-92. `apps/web/src/features/wizard/ProjectWizard.tsx`: Six-step interactive Project Creation Wizard modal.
-93. `apps/web/src/features/inbox/HumanDirectionBar.tsx`: Operator guidance and safe interrupt submission bar.
-94. `apps/web/src/features/tasks/TaskInspector.tsx`: Task evidence inspector modal (test logs, screenshots, critic verdicts).
-95. `apps/web/src/features/settings/ProviderSettingsModal.tsx`: Provider selection modal with fast OpenAI key verification.
-96. `apps/web/src/features/ide/IdeConnectionDeck.tsx`: Interactive 6-stage IDE connection stepper, workspace selector, and mismatch resolver.
+### 5.6 Workspace: `apps/web` (18 files)
+97. `apps/web/package.json`: Manifest for frontend React dashboard application.
+98. `apps/web/tsconfig.json`: TypeScript configuration for React/Vite.
+99. `apps/web/vite.config.ts`: Vite build and dev server configuration with proxy to port 4317.
+100. `apps/web/index.html`: Single-page application HTML entry shell.
+101. `apps/web/src/main.tsx`: React DOM mount point.
+102. `apps/web/src/index.css`: Vanilla CSS design system (variables, glassmorphic cards, typography, animations).
+103. `apps/web/src/types.ts`: Frontend TypeScript interface definitions for projects, runs, and drawer states.
+104. `apps/web/src/App.tsx`: Main control dashboard view, run controls, SSE subscriber, drawer manager, and layout.
+105. `apps/web/src/components/common/Drawer.tsx`: Reusable sliding drawer component with keyboard trap and animated backdrop.
+106. `apps/web/src/features/wizard/ProjectWizard.tsx`: Six-step interactive Project Creation Wizard modal.
+107. `apps/web/src/features/inbox/HumanDirectionBar.tsx`: Operator guidance and safe interrupt submission bar.
+108. `apps/web/src/features/tasks/TaskInspector.tsx`: Task evidence inspector modal (test logs, screenshots, critic verdicts).
+109. `apps/web/src/features/settings/ProviderSettingsModal.tsx`: Provider selection modal with fast OpenAI key verification.
+110. `apps/web/src/features/ide/IdeConnectionDeck.tsx`: Interactive 6-stage IDE connection stepper, workspace selector, and mismatch resolver.
+111. `apps/web/src/pages/DiagnosticsPage.tsx`: Full-screen system introspection dashboard displaying database counts, memory usage, and IDE status.
+112. `apps/web/src/pages/GitPage.tsx`: Live Git visualizer displaying branch status, modified files, diff views, manual checkpoints, and rollbacks.
+113. `apps/web/src/pages/PoliciesPage.tsx`: Interactive policy rule inspector displaying allowed paths, forbidden patterns, and autonomy permissions.
+114. `apps/web/src/pages/SettingsPage.tsx`: System settings and environment configuration drawer.
 
-### 5.7 End-to-End Tests (`e2e/`) (2 files)
-97. `e2e/smoke.spec.ts`: Playwright smoke test verifying dashboard load, run start, and baseline screenshot.
-98. `e2e/ide-integration.spec.ts`: Playwright test verifying IDE connection stepper, probe, and mode switching.
-
----
+### 5.7 End-to-End Tests (`e2e/`) (3 files)
+115. `e2e/smoke.spec.ts`: Playwright smoke test verifying dashboard load, run start, and baseline screenshot.
+116. `e2e/ide-integration.spec.ts`: Playwright test verifying IDE connection stepper, probe, and mode switching.
+117. `e2e/multi-viewport-audit.spec.ts`: Responsive audit test validating desktop, laptop, tablet, and mobile viewports plus drawer overlays.
 
 # 6. Exhaustive File-by-File Technical Audit
 
@@ -850,6 +867,15 @@ This section documents every project-owned file across all workspaces, organized
   - `runSingleTask(options)`: Executes complete task iteration. Manages bounded repair loop (`maxAttempts = 3`). Halts on dirty workspace or unready IDE connection. Commits accepted checkpoints or rolls back failed attempts.
 - **Status:** **[VERIFIED]** Verified in Milestone 3 and IDE integration tests.
 
+### 6.4.13 `apps/server/src/orchestrator/run-execution-service.ts`
+- **Exact Relative Path:** `apps/server/src/orchestrator/run-execution-service.ts`
+- **File Type & Role:** Background Autonomous Job Execution Supervisor.
+- **Why It Exists:** Bridges REST API run triggers (`POST /projects/:id/runs`, `POST /runs/:id/step`) with background loop processing without blocking the Fastify HTTP response thread.
+- **Important Methods:**
+  - `triggerRunExecution(projectId, runId, options)`: Prevents concurrent duplicate dispatches via `activeJobs` tracking. Asynchronously selects the appropriate coding agent adapter based on `ideState.activeMode` (`MockAgentAdapter` in test mode, `VisibleIdeAdapter` in `visible_ide` mode, or `AntigravityAdapter` in `headless_cli` mode). Instantiates `ContextBuilder`, `PlannerService`, `CriticService`, and `BudgetService`, then executes `AutonomousLoop.runSingleTask()`. Emits `run.step_completed` or transitions run state to `failed` upon unhandled errors.
+- **Dependencies & Consumers:** Consumed by `apps/server/src/api/routes/runs.ts` (`POST /projects/:projectId/runs`, `POST /runs/:runId/step`, `POST /runs/:runId/resume`).
+- **Status:** **[VERIFIED]** Verified in run lifecycle and background loop tests.
+
 ---
 
 ## 6.5 Backend Server — Verification & Providers
@@ -1006,66 +1032,236 @@ This section documents every project-owned file across all workspaces, organized
   - `POST /api/v1/ide/set-working-directory`: 1-click update of target project working directory to selected IDE workspace or custom path.
 - **Status:** **[VERIFIED]** Tested in `ide-integration.test.ts`.
 
+### 6.6.10 `apps/server/src/api/routes/diagnostics.ts`
+- **Exact Relative Path:** `apps/server/src/api/routes/diagnostics.ts`
+- **Endpoints:** `GET /api/v1/diagnostics`
+- **Role:** Deep System & Subsystem Diagnostics Provider.
+- **Why It Exists:** Aggregates multi-subsystem telemetry into a single introspection payload:
+  - Database row counts across 8 core tables (`projects`, `runs`, `tasks`, `task_attempts`, `verification_runs`, `critic_reviews`, `events`, `human_messages`).
+  - Active project state, working directory existence, and live Git status.
+  - Antigravity IDE connection status, detected window counts, stage statuses, and last heartbeat timestamp.
+  - Active reasoning engine provider identity, display name, privacy classification (`local` vs `cloud`), and OpenAI API key presence.
+  - OS metrics (platform, architecture, Node.js version, process uptime, RSS/Heap memory in MB).
+  - Security configuration indicators (strict loopback enforcement, CORS origin list, secret redactor activity).
+- **Status:** **[VERIFIED]** Actively queried by `DiagnosticsPage.tsx`.
+
+### 6.6.11 `apps/server/src/api/routes/git.ts`
+- **Exact Relative Path:** `apps/server/src/api/routes/git.ts`
+- **Endpoints:**
+  - `GET /api/v1/projects/:projectId/git/status`: Returns repository status (`isGitRepo`, `baselineCommit`, `isDirty`, `modifiedFiles`).
+  - `GET /api/v1/projects/:projectId/git/diff`: Returns unified git diff of unstaged and uncommitted changes.
+  - `POST /api/v1/projects/:projectId/git/checkpoint`: Creates an atomic git checkpoint commit (`message`, `taskId`) and logs `git.checkpoint_created` in `EventStore`.
+  - `POST /api/v1/projects/:projectId/git/rollback`: Restores the working tree to a specified `commitSha` and logs `git.rollback_completed` in `EventStore`.
+- **Status:** **[VERIFIED]** Actively queried and executed by `GitPage.tsx`.
+
 ---
 
-## 6.7 Frontend Dashboard Application (`apps/web/`)
+## 6.7 Backend Server — Automated Test Suites (`apps/server/tests/`)
 
-### 6.7.1 `apps/web/src/App.tsx`
+### 6.7.1 `apps/server/tests/health.test.ts`
+- **Exact Relative Path:** `apps/server/tests/health.test.ts`
+- **Role:** Health Endpoint Verification Suite.
+- **Behaviors Proved:** Injects HTTP GET request to `/api/v1/health` on Fastify app instance. Verifies HTTP 200 response, payload contains `status: "ok"`, `loopbackOnly: true`, valid uptime, and current Node version.
+- **Status:** **[VERIFIED]** 1 test passing.
+
+### 6.7.2 `apps/server/tests/milestone1.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone1.test.ts`
+- **Role:** Core Persistence, Run State Machine, and Event Sourcing Test Suite.
+- **Behaviors Proved:** Proves SQLite table creation with foreign key enforcement and WAL journal mode; verifies `ProjectRepository` and `RunRepository` CRUD operations; validates state machine transitions (`draft` -> `ready` -> `running` -> `paused` -> `completed`); validates sequence-numbered event emission and SSE replay.
+- **Status:** **[VERIFIED]** 5 tests passing.
+
+### 6.7.3 `apps/server/tests/milestone2.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone2.test.ts`
+- **Role:** Provider Abstraction, Local Privacy, and Budget Enforcement Suite.
+- **Behaviors Proved:** Proves OpenAI and Local OpenAI-compatible provider instantiation; verifies strict error thrown on unreachable local provider without cloud egress; verifies `BudgetService` pre-flight budget ceiling check (`reserveAndCheckPreflight`); proves `MockCodingAgentAdapter` deterministic task execution.
+- **Status:** **[VERIFIED]** 5 tests passing.
+
+### 6.7.4 `apps/server/tests/milestone3.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone3.test.ts`
+- **Role:** Autonomous Vertical Slice Test Suite.
+- **Behaviors Proved:** Exercises complete autonomous vertical slice: planning task contract, executor dispatch, verification runner executing child process checks, independent Critic reviewing diffs, deterministic `AcceptanceGate` evaluation, repair loop on failing checks, and git checkpoint commit.
+- **Status:** **[VERIFIED]** 5 tests passing.
+
+### 6.7.5 `apps/server/tests/milestone4.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone4.test.ts`
+- **Role:** Stagnation Detection, Memory Management, and Process Supervision Suite.
+- **Behaviors Proved:** Proves `StagnationDetector` catches repeated identical errors, zero-diff iterations, and ping-pong file edit oscillations; proves `MemoryManager` creates and updates `TASK_HISTORY.json`, `CURRENT_STATE.md`, and `REPO_MAP.md`; proves `ProcessSupervisor` tracks and terminates child process trees on timeout or cancellation.
+- **Status:** **[VERIFIED]** 5 tests passing.
+
+### 6.7.6 `apps/server/tests/milestone5.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone5.test.ts`
+- **Role:** Blueprint Ingestion, Requirement Extraction, and Preset Catalog Suite.
+- **Behaviors Proved:** Proves multi-format blueprint ingestion (.md, .txt, .json); computes SHA-256 content hashes; extracts candidate requirements with provenance citations; validates profile preset catalog (`packages/profile-presets`).
+- **Status:** **[VERIFIED]** 4 tests passing.
+
+### 6.7.7 `apps/server/tests/milestone6.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone6.test.ts`
+- **Role:** Operator Inbox and Safe Interruption Test Suite.
+- **Behaviors Proved:** Proves operator message queue ordering (`guidance`, `replan`, `safe_interrupt`); proves immediate safe halt at task boundaries when `safe_interrupt` is queued without corrupting in-flight git checkpoints.
+- **Status:** **[VERIFIED]** 4 tests passing.
+
+### 6.7.8 `apps/server/tests/milestone7.test.ts`
+- **Exact Relative Path:** `apps/server/tests/milestone7.test.ts`
+- **Role:** Security, Secret Redaction, and Project Export Test Suite.
+- **Behaviors Proved:** Proves `SecretRedactor` masks OpenAI API keys (`sk-...`), bearer tokens, and credentials in logs and database payloads; tests `GET /api/v1/projects/:id/export` generating complete sanitized JSON bundles and Markdown summaries; verifies CORS loopback protection.
+- **Status:** **[VERIFIED]** 4 tests passing.
+
+### 6.7.9 `apps/server/tests/ide-integration.test.ts`
+- **Exact Relative Path:** `apps/server/tests/ide-integration.test.ts`
+- **Role:** Visible Antigravity IDE Integration & Handshake Suite.
+- **Behaviors Proved:** Proves process detection of running Antigravity IDE windows; verifies the 6-stage connection pipeline; proves workspace mismatch protection halts execution if target folder does not match IDE window; validates dirty workspace guard and heartbeat monitoring.
+- **Status:** **[VERIFIED]** 12 tests passing.
+
+### 6.7.10 `apps/server/tests/real-world-e2e.test.ts`
+- **Exact Relative Path:** `apps/server/tests/real-world-e2e.test.ts`
+- **Role:** Section 18 Mandatory Real-World Autonomous Coding Test Suite.
+- **Behaviors Proved:** Exercises end-to-end autonomous coding on a real local directory (`C:\orchestrator-e2e-test`): detects IDE window, verifies workspace matching, dispatches real coding task writing `hello.txt`, runs independent node validator script, passes Critic review and AcceptanceGate, and creates git checkpoint. Proves failure path with failing validation command, demonstrating rejection and rollback.
+- **Status:** **[VERIFIED]** 2 comprehensive integration tests passing.
+
+---
+
+## 6.8 Frontend Web Application (`apps/web/`)
+
+### 6.8.1 Web App Foundation & Build Configurations
+- **Exact Paths:** `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/vite.config.ts`, `apps/web/index.html`, `apps/web/src/main.tsx`.
+- **Role:** Single-page React application setup.
+- **Configuration Details:** Vite dev server on port 5173 with proxy forwarding `/api` to Fastify backend on port 4317. Strict React 18 root mounting at `#root`.
+- **Status:** **[VERIFIED]** Build and development configs tested.
+
+### 6.8.2 `apps/web/src/index.css`
+- **Exact Relative Path:** `apps/web/src/index.css`
+- **Role:** Vanilla CSS Design System & Theme Engine.
+- **Why It Exists:** Complete modern styling foundation without Tailwind CSS dependencies:
+  - Curated color tokens (deep slate background `#090d16`, card surface `#111827`, emerald `#10b981`, amber `#f59e0b`, rose `#ef4444`, cyan `#06b6d4`).
+  - Dark and light theme variables toggled via `data-theme` attribute.
+  - Responsive layouts, glassmorphic card elevations, smooth button transitions, pulse indicators, and sliding drawer animations.
+- **Status:** **[VERIFIED]** High visual aesthetic presentation.
+
+### 6.8.3 `apps/web/src/types.ts`
+- **Exact Relative Path:** `apps/web/src/types.ts`
+- **Role:** Client-Side Domain Interfaces.
+- **Exported Symbols:**
+  - `ProjectData`: Represents project summary (`id`, `name`, `objective`, `rootPath`, `autonomyMode`, `status`).
+  - `RunData`: Represents run details (`id`, `projectId`, `status`, `iterationCount`, `currentTaskId`, `startedAt`, `endedAt`, `stopReason`).
+- **Status:** **[VERIFIED]** Shared across all frontend components.
+
+### 6.8.4 `apps/web/src/App.tsx`
 - **Exact Relative Path:** `apps/web/src/App.tsx`
 - **File Type & Role:** Main Control Dashboard View (React TSX).
-- **Why It Exists:** Assembles the operator interface: header with provider badges, IDE connection deck, run controls (Start/Pause/Stop), operator inbox, active task inspector, real-time SSE event log with keyword filters, and JSON/Markdown export buttons.
-- **Key State Variables:** `health`, `project`, `activeRun`, `runState`, `events`, `eventSearch`, `eventCategoryFilter`, `activeReasoningProvider`.
-- **Status:** **[VERIFIED]** Verified by Playwright smoke and E2E tests.
+- **Why It Exists:** Core operator cockpit:
+  - Header with system health, reasoning badge, and drawer triggers (Git & Diff, Diagnostics, Policies, Settings).
+  - IDE Connection Deck with live process/workspace status.
+  - Run controls: Start Run (`#btn-start`), Pause, Resume, Stop.
+  - Active Task Inspector card with live iteration counter and status badge.
+  - Human Direction submission bar for real-time guidance.
+  - Real-time Server-Sent Events log (`/api/v1/projects/:id/events`) with search filter and category chips.
+  - JSON and Markdown project export modal.
+- **Status:** **[VERIFIED]** Verified by Playwright smoke and multi-viewport tests.
 
-### 6.7.2 `apps/web/src/features/ide/IdeConnectionDeck.tsx`
+### 6.8.5 `apps/web/src/components/common/Drawer.tsx`
+- **Exact Relative Path:** `apps/web/src/components/common/Drawer.tsx`
+- **File Type & Role:** Slide-Over Contextual Drawer Shell (React TSX).
+- **Why It Exists:** Provides non-disruptive contextual panel access. Implements animated right-hand slide-over, click-outside backdrop dismissal, and `Escape` key capture.
+- **Props:** `isOpen`, `onClose`, `title`, `subtitle`, `children`, `width` (default 640px).
+- **Status:** **[VERIFIED]** Verified across 4 drawers in `multi-viewport-audit.spec.ts`.
+
+### 6.8.6 `apps/web/src/features/ide/IdeConnectionDeck.tsx`
 - **Exact Relative Path:** `apps/web/src/features/ide/IdeConnectionDeck.tsx`
 - **File Type & Role:** Interactive IDE Connection Stepper & Mismatch Resolver (React TSX).
-- **Why It Exists:** Displays the 6-stage connection pipeline with visual pass/fail indicators, workspace dropdown, process PID, live heartbeat, execution mode toggles, and direct 1-click buttons to resolve workspace mismatches.
+- **Why It Exists:** Implements the visual 6-stage Antigravity connection flow:
+  - Stage badges: Detection, Window Focus, Workspace Confirmed, Mode Selected, Bridge Probe, Ready.
+  - Workspace selector dropdown showing all detected IDE windows.
+  - Action buttons: "Scan Processes" (`POST /api/v1/ide/detect`), "Connect" (`POST /api/v1/ide/connect`), "Test Connection Probe" (`POST /api/v1/ide/test-connection`).
+  - Workspace mismatch alert with 1-click "Adopt IDE Workspace as Target" (`POST /api/v1/ide/set-working-directory`).
+  - Execution mode switcher (`visible_ide` vs `headless_cli`).
 - **Status:** **[VERIFIED]** Tested in `e2e/ide-integration.spec.ts`.
 
-### 6.7.3 `apps/web/src/features/settings/ProviderSettingsModal.tsx`
+### 6.8.7 `apps/web/src/features/settings/ProviderSettingsModal.tsx`
 - **Exact Relative Path:** `apps/web/src/features/settings/ProviderSettingsModal.tsx`
 - **File Type & Role:** Reasoning Engine & OpenAI Key Management Modal (React TSX).
-- **Why It Exists:** Allows operators to switch between Local Ollama and OpenAI Cloud, enter/edit API keys, perform instant sub-4-second verification probes ("Quick Verify Key"), and permanently persist settings to disk.
+- **Why It Exists:** Manages LLM reasoning backend:
+  - Switcher between Local Ollama and OpenAI Cloud.
+  - OpenAI API key input with instant sub-4-second verification probe (`POST /api/v1/providers/reasoning/verify-key`).
+  - Persistent settings save (`POST /api/v1/providers/reasoning/select`).
 - **Status:** **[VERIFIED]** Actively verified.
 
-### 6.7.4 `apps/web/src/features/wizard/ProjectWizard.tsx`
+### 6.8.8 `apps/web/src/features/wizard/ProjectWizard.tsx`
 - **Exact Relative Path:** `apps/web/src/features/wizard/ProjectWizard.tsx`
 - **File Type & Role:** 6-Step Project Creation Wizard Modal (React TSX).
-- **Why It Exists:** Guides users through creating a new project: Vision, Workspace path, Blueprint document import, Profile preset, Autonomy mode, and Plan review.
+- **Why It Exists:** Guides users through project initialization: Vision, Workspace path, Blueprint document import (.md, .txt, .json), Profile preset selection, Autonomy mode selection, and Plan approval.
 - **Status:** **[VERIFIED]** Actively verified.
 
-### 6.7.5 `apps/web/src/features/inbox/HumanDirectionBar.tsx`
+### 6.8.9 `apps/web/src/features/inbox/HumanDirectionBar.tsx`
 - **Exact Relative Path:** `apps/web/src/features/inbox/HumanDirectionBar.tsx`
-- **File Type & Role:** Human Direction & Safe Interrupt Bar (React TSX).
-- **Why It Exists:** Enables operators to submit steering messages (`guidance`, `replan`, `safe_interrupt`) or trigger an immediate emergency halt at safe task boundaries.
+- **File Type & Role:** Operator Steering & Safe Interrupt Bar (React TSX).
+- **Why It Exists:** Submits operator guidance messages to `/api/v1/projects/:id/messages` (`guidance`, `replan`, `safe_interrupt`) or triggers immediate halt at safe task boundaries.
 - **Status:** **[VERIFIED]** Actively verified.
 
-### 6.7.6 `apps/web/src/features/tasks/TaskInspector.tsx`
+### 6.8.10 `apps/web/src/features/tasks/TaskInspector.tsx`
 - **Exact Relative Path:** `apps/web/src/features/tasks/TaskInspector.tsx`
 - **File Type & Role:** Task Evidence & Verification Inspector Modal (React TSX).
-- **Why It Exists:** Displays granular evidence for completed/failed tasks: raw test output snippets, Playwright screenshot galleries, Critic review verdicts, and attempt histories.
+- **Why It Exists:** Displays granular evidence for completed or failed tasks: raw verification stdout/stderr logs, Playwright screenshot galleries, Critic review verdicts, and retry attempts.
 - **Status:** **[VERIFIED]** Actively verified.
 
-### 6.7.7 `apps/web/src/index.css`
-- **Exact Relative Path:** `apps/web/src/index.css`
-- **File Type & Role:** Vanilla CSS Design System.
-- **Why It Exists:** Implements sleek dark mode tokens, typography (Inter), glassmorphic card containers, status badges, pulsing indicators, and modal backdrops without Tailwind dependencies.
-- **Status:** **[VERIFIED]** High aesthetic presentation.
+### 6.8.11 `apps/web/src/pages/DiagnosticsPage.tsx`
+- **Exact Relative Path:** `apps/web/src/pages/DiagnosticsPage.tsx`
+- **File Type & Role:** System Diagnostics & Subsystem Health Drawer (React TSX).
+- **Why It Exists:** Real-time system observability:
+  - Server metrics: Binding address (127.0.0.1:4317), Node version, process uptime, memory RSS/Heap.
+  - SQLite WAL persistence: Table record counts for all 8 tables.
+  - IDE status: Status badge, mode, detected windows, and selected workspace.
+  - Reasoning engine: Provider ID, display name, privacy class, and key status.
+  - Security status: Strict loopback enforcement, CORS origin list, and secret redaction activity.
+  - "Copy Diagnostic Report" button copying full JSON payload to clipboard.
+- **Status:** **[VERIFIED]** Verified in `multi-viewport-audit.spec.ts`.
+
+### 6.8.12 `apps/web/src/pages/GitPage.tsx`
+- **Exact Relative Path:** `apps/web/src/pages/GitPage.tsx`
+- **File Type & Role:** Git Checkpoints & Version Control Drawer (React TSX).
+- **Why It Exists:** Direct version-control management:
+  - Displays repository status, baseline commit hash, and dirty status.
+  - Uncommitted diff viewer showing unified git diff.
+  - "Create Checkpoint" action committing current working tree with custom message.
+  - "Rollback Attempt" action restoring repository to a specified commit SHA with user confirmation.
+- **Status:** **[VERIFIED]** Verified in `multi-viewport-audit.spec.ts`.
+
+### 6.8.13 `apps/web/src/pages/PoliciesPage.tsx`
+- **Exact Relative Path:** `apps/web/src/pages/PoliciesPage.tsx`
+- **File Type & Role:** Autonomy Policies & Profile Presets Drawer (React TSX).
+- **Why It Exists:** Configures autonomy constraints:
+  - Autonomy mode selector: `strict_blueprint_adherence`, `creative_within_constraints`, `creative_exploration`.
+  - Profile preset catalog: Full-stack TS, Node backend, Python data, Strict blueprint.
+  - Guardrail limits: Max retries per task, cost ceiling ($ USD).
+  - Persists changes via `PATCH /api/v1/projects/:projectId`.
+- **Status:** **[VERIFIED]** Verified in `multi-viewport-audit.spec.ts`.
+
+### 6.8.14 `apps/web/src/pages/SettingsPage.tsx`
+- **Exact Relative Path:** `apps/web/src/pages/SettingsPage.tsx`
+- **File Type & Role:** Application Settings Drawer (React TSX).
+- **Why It Exists:** Operator configuration panel:
+  - Appearance: Light vs Dark color scheme toggle.
+  - Execution defaults: Default workspace directory, max task iterations, run cost ceiling.
+  - Live Secret Redaction Tester: Interactive text input demonstrating real-time API key and bearer token scrubbing.
+- **Status:** **[VERIFIED]** Verified in `multi-viewport-audit.spec.ts`.
 
 ---
 
-## 6.8 End-to-End Test Suite (`e2e/`)
+## 6.9 End-to-End Test Suite (`e2e/`)
 
-### 6.8.1 `e2e/smoke.spec.ts`
+### 6.9.1 `e2e/smoke.spec.ts`
 - **Exact Relative Path:** `e2e/smoke.spec.ts`
 - **Behaviors Proved:** Loads dashboard shell on port 5173, verifies title, validates provider badges, tests Start button state transition, confirms real-time SSE event log entry, and captures baseline screenshot.
 - **Status:** **[VERIFIED]** Passing (612ms).
 
-### 6.8.2 `e2e/ide-integration.spec.ts`
+### 6.9.2 `e2e/ide-integration.spec.ts`
 - **Exact Relative Path:** `e2e/ide-integration.spec.ts`
 - **Behaviors Proved:** Renders IDE integration deck, verifies all 6 stage indicators, clicks Detect, Connect, and Test Connection probes, toggles between Visible IDE and Headless CLI modes, and captures screenshot.
 - **Status:** **[VERIFIED]** Passing (7.1s).
+
+### 6.9.3 `e2e/multi-viewport-audit.spec.ts`
+- **Exact Relative Path:** `e2e/multi-viewport-audit.spec.ts`
+- **Behaviors Proved:** Tests responsive layouts across 4 distinct viewports: Desktop (1440x900), Laptop (1280x720), Tablet (1024x768), and Mobile (390x844). Opens and screenshots all contextual drawers and modals: Settings, Git & Diff, Diagnostics, Policies, Task Inspector, Export Modal, and Project Wizard.
+- **Status:** **[VERIFIED]** Passing.
 
 ---
 
@@ -1605,88 +1801,111 @@ The orchestrator supports two execution modes for coding agents:
 +-----------------------------------------------------------------------------------------+
 |                                Autonomous Orchestrator                                  |
 |   +-----------------------+      +--------------------+      +----------------------+   |
-|   |  AntigravityDetector  | ---> | Workspace Validator| ---> | AntigravityAgent     |   |
-|   | (PowerShell / Win32)  |      | (Canonical Match)  |      | Adapter (HTTP Bridge)|   |
+|   |      IdeDetector      | ---> |     IdeBridge      | ---> |  VisibleIdeAdapter   |   |
+|   | (Process & Storage)   |      | (6-Stage Pipeline) |      | (Task Prompt Dispatch)|  |
 |   +-----------------------+      +--------------------+      +----------------------+   |
 +---------------------------------------------|-------------------------------------------+
-                                              | HTTP loopback (port 3000-3010 / 8080)
+                                              | Local Process & Storage Inspection
                                               v
 +-----------------------------------------------------------------------------------------+
 |                        Active Visible Antigravity IDE Window                             |
-|  - Process: antigravity.exe (PID: 12480)                                                |
-|  - Native Agent Panel: Live prompt insertion, tool invocation, interactive chat          |
-|  - Open Workspace: c:\Users\limbk\OneDrive\Desktop\orches                                |
+|  - Process: antigravity.exe, code.exe, cursor.exe (PIDs tracked)                       |
+|  - Session Storage: %APPDATA%/Code/User/globalStorage/storage.json                      |
+|  - Active Workspace: c:\Users\limbk\OneDrive\Desktop\orches (or selected window)       |
 +-----------------------------------------------------------------------------------------+
 ```
 
 ---
 
 ### 14.2 The 6-Stage Stepper Connection Flow
-The Antigravity connection lifecycle follows a strict six-stage verification protocol implemented across `apps/web/src/components/AntigravityConnectionPanel.tsx` and `apps/server/src/services/antigravity-detector.ts`:
+The Antigravity connection lifecycle follows a strict six-stage verification protocol implemented across `apps/web/src/features/ide/IdeConnectionDeck.tsx` (frontend UI deck), `apps/server/src/platform/ide/ide-detector.ts` (process/storage scanner), `apps/server/src/platform/ide/ide-bridge.ts` (handshake coordinator), and `apps/server/src/api/routes/ide.ts`:
 
 ```text
-Stage 1: IDE Detected
+Stage 1: Detection (`ide_detected`)
   │
-  ├─ Query running processes via PowerShell (Get-Process antigravity, Win32_Process).
-  ├─ Identify active PIDs, window titles, executable locations, and user sessions.
-  └─ If no process found -> Status: DISCONNECTED.
+  ├─ Probe running processes via WMI / PowerShell (Get-CimInstance Win32_Process) for
+  │  "antigravity", "code", "cursor", "windsurf".
+  ├─ If processes found: status -> "passed", PIDs captured.
+  └─ If no processes found: status -> "failed", prompt user to launch IDE.
   │
-Stage 2: Workspace Identified
+Stage 2: Window Focus (`window_focus`)
   │
-  ├─ Inspect window titles and probe .antigravity/workspace-state or agentapi bridge.
-  ├─ Extract absolute workspace path (e.g., C:\Users\limbk\OneDrive\Desktop\orches).
-  └─ If multiple windows exist -> Prompt user to select target window from dropdown.
+  ├─ Inspect session state from %APPDATA%/Code/User/globalStorage/storage.json
+  │  (extracts windowsState.lastActiveWindow.folder).
+  ├─ Enumerate all workspaceStorage folder URIs and convert to local OS paths.
+  └─ Status -> "passed" once active window folder or workspace list is resolved.
   │
-Stage 3: Connection Established
+Stage 3: Workspace Confirmed (`workspace_confirmed`)
   │
-  ├─ Probe agentapi HTTP bridge on loopback ports 3000–3010 or 8080.
-  ├─ Validate HTTP 200 response from /health or /agent/status.
-  └─ Fallback to CLI bridge if agentapi port is inactive.
+  ├─ Canonicalize both target project rootPath and IDE workspace path via canonicalizePath()
+  │  (resolves realpath, standardizes separators, lowercases Windows drive letter).
+  ├─ Compare normalized paths:
+  │   - MATCH: status -> "passed", proceeding to mode selection.
+  │   - MISMATCH: status -> "failed", IdeBridge sets errorMessage:
+  │       "Workspace mismatch: Selected IDE workspace (...) does not match target project (...)".
+  │       UI renders warning banner with 1-click "Adopt IDE Workspace as Target"
+  │       calling POST /api/v1/ide/set-working-directory.
+  └─ Autonomous execution is strictly blocked while a mismatch exists.
   │
-Stage 4: Workspace Confirmed (Mismatch Prevention)
+Stage 4: Mode Selected (`mode_selected`)
   │
-  ├─ Canonicalize both paths using path.resolve() and case-normalization on Windows.
-  ├─ Compare IDE workspace path against project target directory:
-  │   - MATCH: Proceed to Stage 5.
-  │   - MISMATCH: Hault execution, display prominent Connection Alert, offer:
-  │       [Adopt IDE Workspace as Target] or [Select Different Window].
-  └─ Autonomous execution is strictly prohibited while a mismatch is active.
+  ├─ Operator selects execution mode: visible_ide (editor pairing) or headless_cli (agy binary).
+  └─ Status -> "passed" with activeMode recorded in IdeBridgeState.
   │
-Stage 5: Agent Tested
+Stage 5: Bridge Probed (`bridge_probed`)
   │
-  ├─ Dispatch lightweight synthetic verification prompt ("ping: handshake validation").
-  ├─ Verify structured response receipt, latency measurement, and permission availability.
-  └─ Confirm agent has write permissions in the active workspace.
+  ├─ POST /api/v1/ide/test-connection probes communication bridge.
+  ├─ Verifies process liveness, workspace directory access, and records latency.
+  └─ Status -> "passed" with updated lastHeartbeat timestamp.
   │
-Stage 6: Ready
+Stage 6: Ready (`ready`)
   │
-  └─ Connection state transitions to "connected". Green badge displayed. Task dispatch unlocked.
+  ├─ Validates that all prior stages (ide_detected, window_focus, workspace_confirmed,
+  │  mode_selected, bridge_probed) have passed.
+  └─ State transitions to status: "ready". Green badge displayed. Task dispatch unlocked.
 ```
 
 ---
 
-### 14.3 Workspace Mismatch Prevention Algorithm
-To prevent devastating accidental modifications across wrong codebases, `apps/server/src/services/antigravity-detector.ts` executes canonical path normalization:
+### 14.3 Workspace Mismatch Prevention & Adapter Execution
+To prevent accidental file creation or edits in an unintended folder, `apps/server/src/platform/ide/ide-detector.ts` executes canonical path normalization:
 
 ```typescript
-export function isWorkspaceMatching(idePath: string, projectPath: string): boolean {
-  if (!idePath || !projectPath) return false;
-  // Normalize Windows slashes and case-insensitivity
-  const normIde = path.resolve(idePath).toLowerCase().replace(/\\/g, "/");
-  const normProject = path.resolve(projectPath).toLowerCase().replace(/\\/g, "/");
-  return normIde === normProject;
+public canonicalizePath(p: string): string {
+  const normalized = path.normalize(path.resolve(p));
+  // On Windows, normalize drive letter to lowercase
+  if (process.platform === "win32" && /^[a-zA-Z]:/.test(normalized)) {
+    return normalized.charAt(0).toLowerCase() + normalized.slice(1);
+  }
+  return normalized;
 }
 ```
 
-If `isWorkspaceMatching()` returns `false`, `POST /api/antigravity/dispatch` returns HTTP 409 Conflict:
-```json
-{
-  "error": "WORKSPACE_MISMATCH",
-  "message": "Selected IDE workspace (C:/Users/.../test) does not match target project (C:/Users/.../orches). Task dispatch prohibited.",
-  "ideWorkspace": "C:/Users/.../test",
-  "projectWorkspace": "C:/Users/.../orches"
+In `apps/server/src/platform/ide/ide-bridge.ts`:
+```typescript
+const normTarget = this.detector.canonicalizePath(targetProjectPath);
+const normSelected = this.detector.canonicalizePath(selectedWorkspace.canonicalPath);
+
+if (normTarget !== normSelected) {
+  this.state.stages.workspace_confirmed = {
+    id: "workspace_confirmed",
+    name: "Workspace Confirmed",
+    status: "failed",
+    message: `Workspace mismatch: Selected IDE workspace (${selectedWorkspace.canonicalPath}) does not match target project (${targetProjectPath})`,
+  };
+  this.state.status = "error";
+  this.state.errorMessage = this.state.stages.workspace_confirmed.message;
 }
 ```
+
+When an autonomous task is dispatched via `VisibleIdeAdapter.executeTask()` (`apps/server/src/providers/coding-agents/antigravity/visible-ide-adapter.ts`):
+1. Verifies that `ideBridge.getState().status === "ready"`.
+2. Validates that normalized `workspacePath` strictly equals `selectedWs.canonicalPath`.
+3. Delivers prompt context and task instructions, logging progress to the run log stream.
+4. Returns an `AgentReport` record (`status: "reported_complete"`) allowing the independent verification runner (`VerificationRunner` / `BrowserVerifier`) and `CriticService` to inspect the physical filesystem and git diff.
+
+> [!NOTE]
+> Operational Characteristic: If an autonomous run is executed against an empty folder without active agent or developer code generation, `VisibleIdeAdapter` produces zero disk modifications (`files_changed: []`). Independent verifiers (`npm test`) will fail if no test framework exists, causing the AcceptanceGate to reject the attempt and trigger rollback. For headless fully autonomous execution without human-in-the-loop editing, the headless CLI adapter (`AntigravityAdapter`) or automated agent runner is utilized.
 
 ---
 
@@ -2047,60 +2266,77 @@ When the backend restarts unexpectedly (e.g., power loss, developer reboot, SIGK
 The Fastify HTTP server (`apps/server/src/server.ts`) binds strictly to loopback (`127.0.0.1:4317`) and exposes the following structured REST endpoints:
 
 ```text
-+---------------------------------------------------------------------------------------------------------+
-|                                        ORCHESTRATOR REST API MAP                                        |
-+---------------------------------------------------------------------------------------------------------+
-| METHOD | ROUTE PATH                     | REQUEST BODY                | SUCCESS RESPONSE (HTTP 200/201) |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| GET    | /health                        | None                        | { status: "ok", timestamp }     |
-| GET    | /api/system/status             | None                        | { uptime, memory, version }     |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| GET    | /api/settings                  | None                        | { defaultProviderId, providers }|
-| POST   | /api/settings                  | UpdateSettingsInput         | { ok: true, settings }          |
-| POST   | /api/settings/probe            | { providerId, baseUrl, key }| { ok, latencyMs, message }      |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| GET    | /api/projects                  | None                        | ProjectSummary[]                |
-| POST   | /api/projects                  | CreateProjectInput          | ProjectRecord (HTTP 201)        |
-| GET    | /api/projects/:id              | None                        | DetailedProjectRecord           |
-| POST   | /api/projects/:id/blueprint    | { blueprintText, filename } | BlueprintParseResult            |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| POST   | /api/projects/:id/runs         | CreateRunInput              | RunRecord (HTTP 201)            |
-| GET    | /api/runs/:id                  | None                        | DetailedRunRecord               |
-| POST   | /api/runs/:id/pause            | { reason }                  | { ok: true, state: "PAUSED" }   |
-| POST   | /api/runs/:id/resume           | None                        | { ok: true, state: "EXECUTING"} |
-| POST   | /api/runs/:id/stop             | { reason }                  | { ok: true, state: "STOPPED" }  |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| GET    | /api/runs/:id/tasks            | None                        | TaskRecord[]                    |
-| GET    | /api/tasks/:id                 | None                        | DetailedTaskRecord              |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| GET    | /api/inbox                     | None                        | OperatorInboxItem[]             |
-| POST   | /api/inbox/:id/resolve         | { action, notes }           | { ok: true, item }              |
-+--------+--------------------------------+-----------------------------+---------------------------------+
-| GET    | /api/antigravity/status        | None                        | AntigravityStatusResponse       |
-| GET    | /api/antigravity/windows       | None                        | AntigravityWindow[]             |
-| POST   | /api/antigravity/connect       | { pid, workspacePath }      | { ok: true, stage: "connected"} |
-| POST   | /api/antigravity/dispatch      | { taskId, prompt }          | AgentDispatchResponse           |
-| POST   | /api/antigravity/adopt-ws      | { projectId, newPath }      | { ok: true, updatedProject }    |
-+---------------------------------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------+
+|                                           ORCHESTRATOR REST API MAP (v1)                                              |
++-----------------------------------------------------------------------------------------------------------------------+
+| METHOD | ROUTE PATH                                          | REQUEST BODY             | SUCCESS RESPONSE            |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/health                                      | None                     | { status, uptime, loopback }|
+| GET    | /api/v1/diagnostics                                 | None                     | { system, db, ide, memory } |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/projects                                    | None                     | ProjectRecord[]             |
+| POST   | /api/v1/projects                                    | CreateProjectInput       | ProjectRecord (HTTP 201)     |
+| GET    | /api/v1/projects/:projectId                         | None                     | ProjectRecord               |
+| PATCH  | /api/v1/projects/:projectId                         | UpdateProjectInput       | ProjectRecord               |
+| GET    | /api/v1/projects/:projectId/export                  | None (?format=json|md)   | JSON bundle / Markdown text |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| POST   | /api/v1/projects/:projectId/runs                    | None / CreateRunInput    | RunRecord (HTTP 201)        |
+| GET    | /api/v1/runs/:runId                                 | None                     | RunRecord                   |
+| POST   | /api/v1/runs/:runId/pause                           | None                     | RunRecord (status: paused)  |
+| POST   | /api/v1/runs/:runId/stop                            | None                     | RunRecord (status: stopped) |
+| POST   | /api/v1/runs/:runId/resume                          | None                     | RunRecord (status: running) |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/projects/:projectId/events                  | None (?cursor=seq)       | SSE Stream (text/event-stream)
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/projects/:projectId/tasks                   | None                     | TaskSummary[]               |
+| GET    | /api/v1/tasks/:taskId                               | None                     | FullTaskWithEvidence        |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/profiles                                    | None                     | BuiltinProfile[]            |
+| POST   | /api/v1/projects/:projectId/blueprints              | { content, filename }    | { imported, requirements }  |
+| GET    | /api/v1/projects/:projectId/requirements            | None                     | CandidateRequirement[]      |
+| PATCH  | /api/v1/projects/:projectId/requirements/:reqId     | { status, text }         | CandidateRequirement        |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/projects/:projectId/messages                | None                     | HumanMessageRecord[]        |
+| POST   | /api/v1/projects/:projectId/messages                | { type, content }        | HumanMessageRecord          |
+| POST   | /api/v1/messages/:messageId/cancel                  | None                     | { success: true }           |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/providers/reasoning                         | None                     | ProviderListResponse        |
+| POST   | /api/v1/providers/reasoning/verify-key              | { apiKey }               | { valid, latencyMs }        |
+| POST   | /api/v1/providers/reasoning/select                  | { providerId, apiKey }   | { activeProviderId }        |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/ide/status                                  | None                     | IdeBridgeState              |
+| POST   | /api/v1/ide/detect                                  | None / { targetPath }    | IdeBridgeState              |
+| POST   | /api/v1/ide/connect                                 | { targetPath }           | IdeBridgeState              |
+| POST   | /api/v1/ide/select-workspace                        | { workspaceId }          | IdeBridgeState              |
+| POST   | /api/v1/ide/test-connection                         | None                     | IdeBridgeState              |
+| POST   | /api/v1/ide/disconnect                              | None                     | IdeBridgeState              |
+| POST   | /api/v1/ide/mode                                    | { mode: visible|headless}| IdeBridgeState              |
+| POST   | /api/v1/ide/set-working-directory                  | { workingDirectory }     | { success, rootPath }       |
++--------+-----------------------------------------------------+--------------------------+-----------------------------+
+| GET    | /api/v1/projects/:projectId/git/status              | None                     | GitStatusRecord             |
+| GET    | /api/v1/projects/:projectId/git/diff                | None                     | { diff: string }            |
+| POST   | /api/v1/projects/:projectId/git/checkpoint          | { message, taskId }      | { success, commitSha }      |
+| POST   | /api/v1/projects/:projectId/git/rollback            | { commitSha }            | { success, targetCommit }   |
++-----------------------------------------------------------------------------------------------------------------------+
 ```
 
 ---
 
 ### 19.2 Server-Sent Events (SSE) Protocol Specification
-Live client synchronization is handled via `GET /api/runs/:id/events`.
+Live client synchronization is handled via `GET /api/v1/projects/:projectId/events`.
 
 - **MIME Type**: `text/event-stream`
-- **Transport**: Persistent HTTP/1.1 chunked transfer on loopback.
+- **Transport**: Persistent HTTP/1.1 chunked transfer on loopback (`127.0.0.1:4317`).
 - **Wire Format**:
   ```text
   id: 142
-  event: TASK_STATE_CHANGED
-  data: {"taskId":"T-004","previousState":"EXECUTING","newState":"VERIFYING","timestamp":"2026-10-10T16:45:00Z"}
+  event: task.state_changed
+  data: {"projectId":"proj-01","taskId":"T-004","previousStatus":"in_execution","status":"verifying","timestamp":"2026-10-10T16:45:00Z"}
 
-  : keep-alive ping (sent every 15000ms)
+  : keep-alive (sent every 15000ms)
   ```
 - **Reconnection & Cursor Protocol**:
-  Clients pass the `?after=:lastEventId` query parameter upon reconnecting. The server queries the SQLite `events` table for `id > :lastEventId` and streams missing events before attaching the client to live event emitters. This prevents state desynchronization.
+  Clients pass the `?cursor=:lastSequence` query parameter or standard `Last-Event-ID` header upon reconnecting. The server queries the SQLite `events` table for `sequence_number > :cursor` and streams missing events in strict monotonically increasing sequence before attaching the client to live pub/sub emitters. This prevents state desynchronization.
 
 ---
 
@@ -2468,6 +2704,31 @@ Expected startup terminal outputs:
 - **Description**: Heavy local models (e.g. DeepSeek-R1 or Qwen-32B on Ollama) may take 90–150 seconds to load weights onto GPU memory on the very first prompt, exceeding Fastify's standard request timeout.
 - **Remediation**: Implement a configurable `initialLoadTimeoutMs` (e.g. 300000ms) for local providers.
 
+#### 4. IDE Bridge State Downgrade on Detection Ping (`ide-bridge.ts:135` & `loop.ts:183`) [DEFECT / FIXED]
+- **Severity**: High (Caused runs targeting test directories to stall immediately)
+- **Description**: When the frontend polled `POST /api/v1/ide/detect`, `IdeBridge.detect()` unconditionally overwrote `this.state.status = "connected"`. Even when all 6 handshake stages (`ready`) had successfully passed, `status` reverted from `"ready"` to `"connected"`. In `AutonomousLoop.runSingleTask()`, the guard:
+  ```typescript
+  if (ideState.status !== "ready") {
+    // Abort immediately into "blocked"
+  }
+  ```
+  aborted the run within 10ms with reason: `"Visible Antigravity IDE is not ready (Status: connected)"`. This left runs stuck in `blocked` state with the frontend idling on periodic status polls.
+- **Resolution Applied**:
+  - In `apps/server/src/platform/ide/ide-bridge.ts`: Updated `detect()` to preserve `status = "ready"` when `stages.ready.status === "passed"`.
+  - In `apps/server/src/orchestrator/loop.ts`: Enhanced `runSingleTask()` to accept `stages.ready.status === "passed"`, and attempt an automatic handshake via `await ideBridge.connect(workspacePath)` before transitioning to `blocked`.
+
+#### 5. Silent Background Execution in `RunExecutionService` [DEFECT / FIXED]
+- **Severity**: Moderate
+- **Description**: When runs were dispatched asynchronously via `POST /api/v1/projects/:projectId/runs`, `RunExecutionService.dispatchRun()` executed the loop step without diagnostic stdout logs. When a run was blocked or encountered an issue, backend logs showed only incoming HTTP pings (`/ide/status`, `/health`), masking the internal run failure from operator view.
+- **Resolution Applied**: Added structured diagnostic logs `[RunExecutionService] Dispatched run ${runId}...` and `[RunExecutionService] Run step completed: status=${result.status}...` to ensure immediate console observability.
+
+#### 6. Visible IDE Adapter Inaction on Empty Uninitialized Workspace [DEFECT / OPERATIONAL RISK]
+- **Severity**: Moderate / Operational
+- **Description**: If a user targets a newly created, empty directory (e.g. `c:\Users\limbk\OneDrive\Desktop\test` with no `git init` and no `package.json`), `VisibleIdeAdapter` functions as an editor synchronization bridge; it does not author code files autonomously without developer keystrokes or an external agent daemon. Consequently, `files_changed` remains empty (`[]`), and default project verification (`npm test`) fails, causing the `AcceptanceGate` to reject the attempt and stall the run after exhausted retries.
+- **Remediation / Guidance**: For empty repositories, users should either:
+  1. Author initial boilerplate/scaffolding or initialize `package.json` before triggering autonomous runs, or
+  2. Use the headless CLI agent mode (`AntigravityAdapter`) where the agent binary directly modifies the filesystem via shell tools.
+
 ---
 
 ### 27.2 Technical Debt & Missing Functionality
@@ -2480,7 +2741,9 @@ Expected startup terminal outputs:
 
 | Priority | Component | Issue / Task | Recommended Action |
 | :--- | :--- | :--- | :--- |
+| **P0 (Critical)** | `ide-bridge.ts` & `loop.ts` | IDE status downgrade & auto-connect | **[FIXED]** Preserved `status = "ready"` during `detect()` pings and added auto-connect fallback in `AutonomousLoop`. |
 | **P1 (High)** | `apps/server/tests` | Test harness data isolation | Inject `ORCHESTRATOR_DATA_DIR` pointing to `os.tmpdir()` in `vitest.config.ts` so tests never touch host user settings. |
+| **P1 (High)** | `run-execution-service.ts` | Background run observability | **[FIXED]** Added structured console logging for background async task dispatches and completions. |
 | **P2 (Medium)**| `antigravity-detector.ts`| PowerShell execution policy | Add `-ExecutionPolicy Bypass -NoProfile` to `child_process.spawn("powershell.exe", ...)` arguments. |
 | **P2 (Medium)**| `providers.ts` | Local model cold-load timeout | Expose `providerTimeoutMs` in local provider configuration, defaulting to 300,000ms for Ollama. |
 | **P3 (Low)** | `budget.ts` | Token pricing configurability | Allow overriding model token rates in `settings.json` via the dashboard Settings UI. |
@@ -2531,20 +2794,41 @@ The codebase represents a robust, highly extensible platform for autonomous soft
 ### Appendix B: Complete Environment Variable & Settings Key Catalog
 | Setting Key / Env Var | Location | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `PORT` | Environment | Number | `4317` | Backend HTTP listening port. |
-| `HOST` | Environment | String | `127.0.0.1` | Loopback binding address. |
-| `OPENAI_API_KEY` | Env / settings.json | String | `""` | Secret bearer key for OpenAI reasoning. |
-| `OPENAI_COMPATIBLE_BASE_URL` | Env / settings.json | String | `http://localhost:1234/v1` | URL for local OpenAI-compatible server. |
-| `OLLAMA_BASE_URL` | Env / settings.json | String | `http://127.0.0.1:11434` | URL for local Ollama server. |
-| `defaultProviderId` | settings.json | String | `"openai"` | Active default reasoning provider ID. |
+| `ORCHESTRATOR_PORT` | Environment | Number | `4317` | Backend HTTP listening port. |
+| `ORCHESTRATOR_HOST` | Environment | String | `127.0.0.1` | Loopback binding address (strict 127.0.0.1). |
+| `ORCHESTRATOR_DATA_DIR` | Environment | String | Platform AppData | OS-specific persistent SQLite database directory. |
+| `ORCHESTRATOR_ALLOWED_ORIGINS` | Environment | String | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated CORS allowed origin list. |
+| `OPENAI_API_KEY` | Env / settings.json | String | `""` | Bearer key for OpenAI Cloud reasoning API. |
+| `LOCAL_REASONING_BASE_URL` | Environment | String | `http://127.0.0.1:11434/v1` | URL for local OpenAI-compatible / Ollama endpoint. |
+| `LOCAL_REASONING_MODEL` | Environment | String | `llama3.1:8b` | Model identifier string for local LLM requests. |
+| `defaultReasoningProvider` | `settings.json` | String | `"openai-compatible-local"` | Active default reasoning provider ID. |
 
 ### Appendix C: Complete SSE Event Types Catalog
-- `RUN_STATE_CHANGED`: Emitted when macro run status changes (`PLANNING`, `EXECUTING`, `PAUSED_OPERATOR`, etc.).
-- `TASK_STATE_CHANGED`: Emitted on micro task transitions (`READY`, `IN_EXECUTION`, `VERIFYING`, `COMMITTED`, etc.).
-- `VERIFIER_OUTPUT`: Emitted during test suite execution with stdout/stderr chunk data.
-- `CRITIC_VERDICT`: Emitted when Critic review concludes with verdict and confidence score.
-- `INBOX_MESSAGE_CREATED`: Emitted when an escalation or approval request is queued for operator review.
-- `BUDGET_UPDATED`: Emitted when token consumption and run cost are recalculated.
+The durable sequence-numbered `EventStore` emits the following domain event types across the `/api/v1/projects/:projectId/events` SSE stream:
+- `run.started`: Run transitioned to running status.
+- `run.paused`: Run paused by operator or budget pause.
+- `run.resumed`: Run resumed into execution.
+- `run.stopped`: Run halted via operator safe interrupt.
+- `run.completed`: All approved roadmap items satisfied.
+- `run.failed`: Run terminated due to irrecoverable failure.
+- `run.blocked`: Run blocked pending IDE connection or approval.
+- `run.stalled`: Run halted after repeated verification failures or stagnation.
+- `task.planned`: Planner generated structured task contract.
+- `task.dispatched`: Task prompt delivered to coding agent adapter.
+- `task.verifier_passed`: Verification command exited with code 0.
+- `task.verifier_failed`: Verification command exited with non-zero exit code.
+- `task.critic_reviewed`: Critic completed evaluation of diff and test logs.
+- `task.accepted`: Deterministic AcceptanceGate approved task for commit.
+- `task.rejected`: AcceptanceGate rejected attempt and requested repair.
+- `task.state_changed`: Micro task lifecycle state transition.
+- `git.checkpoint_created`: Atomic git checkpoint commit created on working tree.
+- `git.rollback_completed`: Working tree restored to baseline or previous commit.
+- `human.message_received`: Operator steering message added to pending inbox.
+- `human.message_cancelled`: Operator cancelled pending message.
+- `budget.updated`: Token usage and estimated cost updated.
+- `budget.exhausted`: Run cost reached or exceeded cost ceiling.
+- `ide.status_changed`: IDE bridge connection state updated.
+- `ide.workspace_selected`: Active target workspace selected or switched.
 
 ### Appendix D: Complete Structured Schemas Inventory
 *(See Section 19.3 for `PlannerOutputSchema`, `VerificationResultSchema`, and `CriticVerdictSchema` contracts).*

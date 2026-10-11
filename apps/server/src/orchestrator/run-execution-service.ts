@@ -64,6 +64,8 @@ export class RunExecutionService {
 
         const loop = new AutonomousLoop(this.db, project.rootPath, planner, critic, budget);
 
+        console.log(`[RunExecutionService] Dispatched run ${runId} for project '${project.name}' (${project.rootPath}) [Mode: ${ideState.activeMode}, Adapter: ${adapter.id}]`);
+
         // Execute task step
         const result = await loop.runSingleTask({
           projectId,
@@ -74,6 +76,8 @@ export class RunExecutionService {
           ideBridge: bridge,
           allowDirtyWorkspace: options?.allowDirty ?? false,
         });
+
+        console.log(`[RunExecutionService] Run ${runId} step completed: status=${result.status}, task=${result.taskId}${result.error ? ` (reason: ${result.error})` : ""}`);
 
         this.eventStore.record(projectId, "run.step_completed", {
           runId,

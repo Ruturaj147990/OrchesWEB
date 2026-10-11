@@ -132,7 +132,12 @@ export class IdeBridge {
       updatedAt: new Date().toISOString(),
     };
 
-    this.state.status = "connected";
+    // Preserve ready status if connection was already fully verified and selected workspace is still present
+    if (this.state.stages.ready?.status === "passed" && this.state.selectedWorkspace) {
+      this.state.status = "ready";
+    } else {
+      this.state.status = "connected";
+    }
     this.state.lastHeartbeat = new Date().toISOString();
     return this.getState();
   }
