@@ -52,8 +52,12 @@ export class GitManager {
     };
   }
 
-  public async commitCheckpoint(taskId: string, message: string): Promise<string> {
-    await this.execGit(["add", "-A"]);
+  public async commitCheckpoint(taskId: string, message: string, scopedPaths?: string[]): Promise<string> {
+    if (scopedPaths && scopedPaths.length > 0) {
+      await this.execGit(["add", "--", ...scopedPaths]);
+    } else {
+      await this.execGit(["add", "-A"]);
+    }
     const commitMsg = `chore(orchestrator): checkpoint task ${taskId} — ${message}`;
     const commitRes = await this.execGit(["commit", "-m", commitMsg]);
     if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
@@ -64,9 +68,13 @@ export class GitManager {
     return rev.stdout.trim();
   }
 
-  public async rollbackAttempt(baselineCommit: string): Promise<void> {
+  public async rollbackAttempt(baselineCommit: string, filesToDiscard?: string[]): Promise<void> {
     // Return cleanly to baseline without destroying untracked pre-existing files
-    await this.execGit(["checkout", baselineCommit]);
+    if (filesToDiscard && filesToDiscard.length > 0) {
+      await this.execGit(["checkout", baselineCommit, "--", ...filesToDiscard]);
+    } else {
+      await this.execGit(["checkout", baselineCommit]);
+    }
   }
 
   private execGit(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {

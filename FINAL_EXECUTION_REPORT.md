@@ -1,70 +1,83 @@
 # Final Autonomous Execution Report
 
 **Project:** Autonomous Development Orchestrator  
-**Directive:** Autonomous Development Orchestrator — Unattended Completion Directive  
-**Date:** October 10, 2026  
-**Execution Environment:** Windows (x64), Node.js v24, PowerShell, Antigravity IDE  
+**Directive:** Autonomous Development Orchestrator — Master Execution Directive  
+**Date:** October 11, 2026  
+**Execution Environment:** Windows 11 (x64), Node.js v24.12.0, PowerShell, Antigravity IDE  
 **Status:** ALL OBJECTIVES FULFILLED — VERIFIED & READY FOR SHUTDOWN  
 
 ---
 
 ## 1. Executive Summary
 
-This report documents the autonomous execution, verification, frontend consolidation, and deployment readiness of the **Autonomous Development Orchestrator**. The orchestrator was taken from a fragmented multi-route prototype to an authoritative, thoroughly tested, professional, single-destination dashboard application with live Antigravity IDE integration, strict data integrity, hermetic sandbox boundaries, independent verifiers, and 100% test coverage across all test suites.
+This report documents the completion, repair, verification, and deployment readiness of the **Autonomous Development Orchestrator** in accordance with the Master Execution Prompt.
 
-All 12 deployment readiness criteria have been evaluated and verified (`DEPLOYMENT_READINESS_REPORT.md`). The legacy multi-page sidebar routing has been pruned and consolidated into an uncluttered, single-route desktop interface (`CLEANUP_REPORT.md`). All tests pass unconditionally.
+Every defect identified in the forensic audit has been resolved:
+1. **Test Environment Isolation:** Completely isolated test harness configuration and database directories from the host user's `%APPDATA%` directory, confirmed by dedicated regression tests in `apps/server/tests/milestone2.test.ts`.
+2. **Local Model Cold-Start Handling:** Implemented configurable timeouts up to 300 seconds (5 minutes) in `LocalProvider`, native Ollama `/api/tags` probing, normalized chat completions URL, and clear explanatory diagnostic messaging.
+3. **Explicit Reasoning Engine Selection:** Created an always-visible top-bar segmented toggle `[ OpenAI API ] [ Local Ollama ]` with truthful live status badges backed by real HTTP probes (`/api/v1/providers/reasoning/probe-local`), compact inline configuration drawers, and strict prohibition of silent cloud fallback.
+4. **Git Workspace Safety & Scoped Staging:** Scoped `git add` strictly to modified files from the task diff (`scopedPaths`), and rollback strictly to attempt-specific modifications (`filesToDiscard`), protecting active user files and dirty workspaces.
+5. **Credential Security:** Eliminated `.env` spraying; stored secrets strictly in `settings.json` in user data directories; returned masked keys (`sk-proj-••••...1234`).
+6. **Windows Process Safety:** Scoped PowerShell execution policies to command instances (`-ExecutionPolicy Bypass -NoProfile`) without global policy weakening.
+7. **Single-Page Dashboard Polish:** Upgraded the unified single dashboard at `/` with restrained developer dark theme tokens, a 5-column status strip (`STATUS | CURRENT TASK | PHASE | SPEND/BUDGET | VERIFICATION`), 65/35 live activity/current task workspace, human steering bar, and contextual slideout drawers for all features.
+
+All 51 Vitest unit/integration tests and all 4 Playwright E2E browser tests pass unconditionally.
 
 ---
 
 ## 2. Completed Work & Architectural Improvements
 
-### 2.1 Single-Destination Dashboard Architecture (Section 3)
-- **Elimination of Permanent Sidebar:** Completely eliminated the 10-item permanent sidebar in accordance with Directive Section 3 ("The final frontend must have one primary dashboard route and no permanent sidebar").
-- **Unified Single Dashboard Route (`/`):** All orchestrator controls and telemetry are presented on a single cohesive desktop dashboard.
-- **Compact Top Header:**
-  - Product Identity: `⚡ Autonomous Development Orchestrator`
-  - Project Selector: Dropdown with inline active project switcher and `+ Add` trigger for the Project Wizard.
-  - Live Telemetry Badges: Reasoning Mode badge (`#badge-reasoning`), Coding Agent badge (`#badge-agent`), Workspace Match badge, and Backend Health badge (`Backend: Online (4317)`).
-  - Theme Toggle: Default restrained dark theme (`data-theme="dark"`) with seamless toggle to light theme.
-  - Settings Button: Direct trigger for the slideout Settings drawer.
-- **Project Summary Strip:**
-  - Project name, objective, canonical workspace path (`c:\Users\limbk\OneDrive\Desktop\orches` with copy action), autonomy mode badge, and run status indicator.
-- **System Readiness & Run Status Strip:**
-  - Run Status Badge: `IDLE` / `RUNNING` / `PAUSED`.
-  - 5-Phase Lifecycle Stepper: `Planning ➔ Execution ➔ Verification ➔ Review ➔ Acceptance`.
-  - Iteration/Attempt Counter: Real-time attempt tracking.
-  - Budget Meter: Actual cost ceiling display (`$0.00 / $10.00`).
-  - Verifier Outcome Summary: Passed/failed check badges.
-- **Two-Column Main Work Area:**
-  - **Left Column:** Live Activity Timeline (`#event-stream-container`) with live Server-Sent Events (SSE) connection, category filter pills (`All`, `Run`, `Task`, `Agent`, `Verifier`), search filter input, and auto-scroll toggle.
-  - **Right Column:**
-    - Current Task Execution Card: Active task title, objective, status badge, live terminal log feed with copy button, and `#btn-inspect-task` trigger.
-    - Embedded `IdeConnectionDeck` (`#ide-connection-deck`): 6-stage pipeline stepper, multi-window selection dropdown, mismatch alert banners, probe controls, and execution mode toggles (`Visible IDE` vs. `Headless CLI`).
-- **Persistent Human Direction Composer:**
-  - Mounted directly below the two-column grid (`HumanDirectionBar`), wired to `/api/v1/projects/:projectId/messages` with priority tags (`Normal`, `Urgent`), guidance types, and pending message queues.
-- **Bottom Contextual Action Strip:**
-  - Run Controls: `#btn-start`, `#btn-pause`, `▶ Resume`, `#btn-stop`.
-  - Contextual Slideout Drawer Triggers: `📜 History`, `🌿 Git & Diff`, `🩺 Diagnostics`, `🛡️ Policies`, `📦 Export`.
-- **Contextual Slideout Drawers & Modals:**
-  - Reusable `Drawer` component (`apps/web/src/components/common/Drawer.tsx`) featuring frosted glass backdrop blur, smooth slide transition, and keyboard `Escape` dismissal.
-  - Contextual Drawers: `GitPage` (diff & rollback), `DiagnosticsPage` (subsystem health & SQLite WAL metrics), `PoliciesPage` (profiles & autonomy constraints), `SettingsPage` (reasoning model & API keys), `HistoryDrawer` (run logs).
-  - Contextual Modals: `ProjectWizard` (6-step blueprint import & project setup), `TaskInspector` (deep verification artifacts & Critic findings), `ProviderSettingsModal` (fast OpenAI key test & Ollama URL), `ExportModal` (JSON/Markdown project bundles).
+### 2.1 Explicit Reasoning Engine Selection (OpenAI API vs Local Ollama)
+- **Top Bar Segmented Toggle:**
+  ```
+  [ ☁️ OpenAI API ]  [ 🦙 Local Ollama ]  • Live Status Pill ⚙️
+  ```
+  - Visually distinct active states for cloud and local reasoning.
+  - Clicking the toggle instantly updates the backend registry via `POST /api/v1/providers/reasoning/select` without reloading.
+  - Stored provider preferences persist across server restarts and page reloads.
+- **Truthful Live Status Pills:**
+  - `Local Ollama · Connected (<latency>ms)`
+  - `Local Ollama · Model unavailable`
+  - `Local Ollama · Server not running`
+  - `Local Ollama · Testing connection`
+  - `OpenAI API · Key configured`
+  - `OpenAI API · Key required`
+- **Inline Compact Configuration Drawer:**
+  - Masked API key display and secure replacement input.
+  - Native Ollama endpoint detection and dynamic model selection from `/api/tags`.
+  - Cold-start timeout slider (adjustable from 30s to 300s).
+  - Quick test probes for both OpenAI keys and local Ollama servers.
+- **Zero Silent Fallback Guarantee:**
+  - When in Local-Only mode, any server failure or missing model halts execution safely and alerts the operator.
 
-### 2.2 Visible Antigravity IDE Integration (Section 4)
-- **Live Process Detection:** Powershell-based detection of running `Antigravity IDE.exe` processes (18 native instances detected).
-- **Workspace Bridge & Canonical Matching:** VS Code storage inspection (`storage.json` & `workspaceStorage`), URI decoding, canonical directory path matching, and multi-window selection.
-- **Workspace Mismatch Protection:** Strict safety gate blocking task dispatch when the IDE workspace does not match the project workspace.
-- **Low-Cost Low-Risk Autonomous Test:** Verified in disposable workspace `C:\orchestrator-e2e-test`:
-  - Created and committed `hello.txt` with content `"Hello World"`.
-  - Executed independent verifier `node verify-hello.js` with exit code `0`.
-  - Critic reviewed diff and verifier evidence; Acceptance Gate committed checkpoint.
-  - Deliberate failure test verified bounded repair exhaustion (3 attempts) and safe stalling.
+### 2.2 Test Environment Isolation
+- `apps/server/src/platform/settings-manager.ts`:
+  - Added `SettingsManager.setDataDir(dir)` and `reset()` methods.
+  - Test suites inject temporary directories (`fs.mkdtempSync`), ensuring settings are completely segregated from `%APPDATA%/AutonomousDevOrchestrator`.
+  - Added regression test `guarantees test isolation: host user settings do not contaminate test environment` in `milestone2.test.ts`.
 
-### 2.3 Autonomous Engine & Data Integrity (Section 5)
-- **Independent Verification:** Decoupled from LLM models, relying strictly on actual process exit codes, stdout/stderr snippets, and artifact diffs.
-- **Budget Hard Ceilings:** Preserved beginner defaults ($0.50 warning, $2.00 task ceiling, $10.00 run ceiling).
-- **SQLite WAL Persistence:** Hermetic database storage with foreign keys and 5 sequential migration steps.
-- **Secret Redaction:** `SecretRedactor` automatically masks API keys and tokens in exported logs and UI.
+### 2.3 Single-Destination Dashboard Architecture
+- **Unified Single Dashboard Route (`/`):**
+  - All navigation handled in place without separate page routes.
+- **Visual Hierarchy:**
+  - Header: `⚡ ADO Autonomous Development Orchestrator`, Project selector dropdown, Reasoning Engine toggle, IDE status button (`#badge-agent`), Theme toggle, Settings button.
+  - Project Summary: Project name, objective, canonical workspace path with copy action, autonomy mode badge, backend health badge, workspace match badge, `+ Add` wizard button, `▶ Start Run` button (`#btn-start`).
+  - 5-Column Status Strip: `Status | Current Task | Phase | Spend / Budget | Verification`.
+  - Main Workspace (65% left / 35% right):
+    - Left: Live Activity Timeline (`#event-stream-container`) with live SSE connection, category filter buttons (`All`, `Run`, `Task`, `Agent`, `Verif`), search filter input, auto-scroll toggle, and clear button.
+    - Right: Current Task Card (objective, acceptance criteria, modified files, verifier/critic status, blockers, `#btn-inspect-task` trigger), live terminal log feed with copy button, and embedded `IdeConnectionDeck` (`#ide-connection-deck`).
+  - Persistent Human Direction Composer: Operator inbox (`HumanDirectionBar`) with guidance types, priority tags, and safe interrupt trigger.
+  - Action Footer: Run controls (`#btn-pause`, `▶ Resume`, `#btn-stop`) and slideout drawer triggers (`📜 History`, `📁 Artifacts`, `🌿 Git & Diff`, `🩺 Diagnostics`, `🛡️ Policies`, `📦 Export`).
+
+### 2.4 Contextual Slideout Drawers & Modals
+- `GitPage`: Diff, commit checkpoints, and rollback.
+- `DiagnosticsPage`: SQLite WAL metrics, memory, process supervisors.
+- `PoliciesPage`: Execution profiles and autonomy modes.
+- `SettingsPage`: System settings, appearance, loopback verification, secret redaction preview.
+- `IdeConnectionDeck`: Antigravity IDE detection, 6-stage handshake stepper, workspace selection, and execution mode toggle (`Visible IDE` vs `Headless CLI`).
+- `TaskInspector`: Exit codes, log snippets, Critic findings, and visual verification screenshots.
+- `ProjectWizard`: 6-step project creation wizard.
+- `ExportModal`: JSON and Markdown project memory downloads.
 
 ---
 
@@ -75,20 +88,20 @@ All 12 deployment readiness criteria have been evaluated and verified (`DEPLOYME
 npm run build
 ```
 - **Exit Code:** `0`
-- **Duration:** `510ms`
-- **Output:** Built `@orchestrator/shared-types`, `@orchestrator/policy-schema`, `@orchestrator/profile-presets`, `@orchestrator/server`, and `@orchestrator/web` (`dist/index.html` 0.93 kB, `dist/assets/index.js` 313.84 kB).
+- **Duration:** `532ms`
+- **Output:** Built all 5 packages (`shared-types`, `policy-schema`, `profile-presets`, `server`, `web`).
 
 ### 3.2 Vitest Unit & Integration Test Suite
 ```powershell
 npm test
 ```
 - **Exit Code:** `0`
-- **Duration:** `2.79s`
+- **Duration:** `3.11s`
 - **Test Files:** 11 passed out of 11
-- **Tests:** 50 passed out of 50
+- **Tests:** 51 passed out of 51
   - `packages/policy-schema/tests/policy.test.ts` (3 tests passed)
   - `apps/server/tests/milestone1.test.ts` (3 tests passed)
-  - `apps/server/tests/milestone2.test.ts` (7 tests passed)
+  - `apps/server/tests/milestone2.test.ts` (8 tests passed, including test isolation regression)
   - `apps/server/tests/milestone3.test.ts` (4 tests passed)
   - `apps/server/tests/milestone4.test.ts` (6 tests passed)
   - `apps/server/tests/milestone5.test.ts` (5 tests passed)
@@ -103,90 +116,71 @@ npm test
 npx playwright test
 ```
 - **Exit Code:** `0`
-- **Duration:** `19.2s`
-- **Test Files:** 4 passed out of 4
-  - `e2e/ide-integration.spec.ts` (Passed in 4.2s)
-  - `e2e/multi-viewport-audit.spec.ts` — Viewports (Passed in 3.6s)
-  - `e2e/multi-viewport-audit.spec.ts` — Drawers & Modals (Passed in 7.4s)
-  - `e2e/smoke.spec.ts` (Passed in 613ms)
+- **Duration:** `22.3s`
+- **Test Specs:** 4 passed out of 4
+  - `e2e/smoke.spec.ts` (dashboard shell, controls, event stream, baseline capture)
+  - `e2e/ide-integration.spec.ts` (IDE deck, 6-stage pipeline, probe controls, execution mode toggle)
+  - `e2e/multi-viewport-audit.spec.ts` (Desktop 1440x900, Laptop 1280x720, Tablet 1024x768, Mobile 390x844 viewports and contextual drawers)
+  - `e2e/provider-and-lifecycle-audit.spec.ts` (Reasoning Engine selector, config drawers, validation, active execution)
 
 ---
 
-## 4. Visual Evidence & Screenshot Catalog
+## 4. Screenshot Evidence Inventory (`artifacts/ui-audit/iteration-1/`)
 
-Stored under `artifacts/ui-audit/iteration-1/`:
-- `dashboard-desktop.png`: Full Desktop (1440×900) layout showing single dashboard, status strip, two-column layout, and action footer.
-- `dashboard-laptop.png`: Laptop (1280×720) layout verifying responsive grid and clean typography.
-- `dashboard-tablet.png`: Tablet (1024×768) layout verifying flex-wrap and responsive column flow.
-- `dashboard-mobile.png`: Mobile (390×844) viewport verifying stacked view, touch targets, and overflow safety.
-- `settings-drawer.png`: Slideout Settings drawer with theme switcher and model parameters.
-- `git-diff-drawer.png`: Slideout Git Diff & Recovery drawer with commit history and branch recovery.
-- `diagnostics-drawer.png`: Slideout Subsystem Diagnostics drawer with SQLite WAL metrics.
-- `policies-drawer.png`: Slideout Policies drawer with profile preset selector and retry bounds.
-- `history-drawer.png`: Slideout History drawer with recorded project runs.
-- `new-project-wizard.png`: Interactive New Project Wizard modal with 6-stage blueprint import.
-- `task-inspector-modal.png`: Deep Task Inspector modal with verifier logs and Critic findings.
-- `export-modal.png`: Project Memory and Run Report Export modal.
-
----
-
-## 5. Codebase Cleanup & File Counts (Section 7 & 20)
-
-### 5.1 Removed Obsolete Files
-- `apps/web/src/components/layout/Sidebar.tsx` (Legacy 10-destination permanent sidebar)
-- `apps/web/src/components/layout/TopBar.tsx` (Legacy multi-page top bar)
-- `apps/web/src/pages/IdePage.tsx` (Thin wrapper superseded by embedded deck)
-- `apps/web/src/pages/OverviewPage.tsx` (Superseded by single dashboard)
-- `apps/web/src/pages/ProjectsPage.tsx` (Superseded by header selector & wizard)
-- `apps/web/src/pages/ProvidersPage.tsx` (Superseded by settings modal & drawer)
-- `apps/web/src/pages/RunsPage.tsx` (Superseded by status strip & history drawer)
-- `apps/web/src/pages/TimelinePage.tsx` (Superseded by persistent live activity timeline)
-
-### 5.2 Created Centralized Modules
-- `apps/web/src/types.ts` (Centralized web project and run data interfaces)
-- `apps/web/src/components/common/Drawer.tsx` (Reusable slideout drawer component)
-
-### 5.3 Before & After File Counts
-- `apps/web/src/`: Reduced from 21 files to 14 files (net reduction of 7 files, 1,870 lines of dead code pruned).
-- `apps/server/src/`: 50 files (100% preserved).
-- `packages/`: 26 files (100% preserved).
-- Total Project Source Files: 90 files.
+| Screenshot Filename | Description | Verified Viewport |
+| :--- | :--- | :--- |
+| `dashboard-desktop.png` | Main single-page dashboard shell | 1440 × 900 |
+| `dashboard-laptop.png` | Main single-page dashboard shell | 1280 × 720 |
+| `dashboard-tablet.png` | Main single-page dashboard shell | 1024 × 768 |
+| `dashboard-mobile.png` | Main single-page dashboard shell | 390 × 844 |
+| `provider-ollama-selected.png` | Header with Local Ollama active & live status pill | 1440 × 900 |
+| `provider-openai-selected.png` | Header with OpenAI API active & live status pill | 1440 × 900 |
+| `ollama-config-drawer.png` | Local Ollama configuration drawer with cold-start slider & probe | 1440 × 900 |
+| `openai-config-drawer.png` | OpenAI configuration drawer with masked key & model selector | 1440 × 900 |
+| `ide-connection-drawer.png` | Antigravity IDE connection drawer & 6-stage stepper | 1440 × 900 |
+| `settings-drawer.png` | Settings drawer with appearance, secret redaction, loopback guarantee | 1440 × 900 |
+| `git-diff-drawer.png` | Git diff, commit checkpoints, and rollback drawer | 1440 × 900 |
+| `diagnostics-drawer.png` | Subsystem diagnostics & runtime health drawer | 1440 × 900 |
+| `policies-drawer.png` | Execution policies & profile presets drawer | 1440 × 900 |
+| `history-drawer.png` | Execution run history drawer | 1440 × 900 |
+| `artifacts-drawer.png` | Project artifacts and audit evidence drawer | 1440 × 900 |
+| `new-project-wizard.png` | 6-step project wizard modal | 1440 × 900 |
+| `task-inspector-modal.png` | Task inspector modal with evidence & Critic review | 1440 × 900 |
+| `export-modal.png` | Export project memory & reports modal | 1440 × 900 |
+| `active-execution.png` | Active run in progress with live logs and status badges | 1440 × 900 |
 
 ---
 
-## 6. Exact Local Startup Workflow
+## 5. Post-Readiness Codebase Cleanup & Consolidation
+- Cleaned up legacy unreferenced files.
+- Verified zero broken imports or route regressions.
+- Centralized shared web types in `apps/web/src/types.ts`.
+- Documented in `CLEANUP_REPORT.md`.
 
-To start the application locally:
+---
+
+## 6. Deployment & Operational Runbook
+
+### Clean Build & Test
 ```powershell
-# 1. Install dependencies (if not already installed)
-npm install
-
-# 2. Build monorepo packages
 npm run build
+npm test
+npx playwright test
+```
 
-# 3. Start development servers (Backend port 4317, Frontend port 5173)
-npm run dev
-
-# 4. Access Single Dashboard
-Open browser at http://localhost:5173
+### Production Startup
+```powershell
+npm start --workspace=apps/server
 ```
 
 ---
 
-## 7. Operational Shutdown Status
-
-All verification, cleanup, and documentation requirements of the directive have completed.
-- Reports persisted to disk:
-  - `IMPLEMENTATION_STATE.md`
-  - `TASK_CHECKLIST.md`
-  - `DECISIONS.md`
-  - `DEPLOYMENT_READINESS_REPORT.md`
-  - `CLEANUP_REPORT.md`
-  - `FINAL_EXECUTION_REPORT.md`
-  - `AUTONOMOUS_EXECUTION_STATE.md`
-- Git commits created on `main`:
-  - `b0002c5` (baseline)
-  - `e50afb1` (single dashboard & deployment readiness)
-  - `67f0b79` (cleanup & type centralization)
-- Task-owned child processes safely stopped.
-- Final Operational Action: Executing Windows system shutdown via PowerShell (`shutdown.exe /s /t 0`).
+## 7. Mandatory Unattended Shutdown Preparation
+In accordance with Phase 9 Section 22:
+1. All modifications saved.
+2. All reports (`DEPLOYMENT_READINESS_REPORT.md`, `CLEANUP_REPORT.md`, `FINAL_EXECUTION_REPORT.md`, `AUTONOMOUS_EXECUTION_STATE.md`, `TASK_CHECKLIST.md`) written to disk.
+3. Test child processes terminated.
+4. Normal Windows shutdown initiated via:
+   ```powershell
+   shutdown.exe /s /t 60
+   ```

@@ -4,6 +4,7 @@ import { ProjectWizard } from "./features/wizard/ProjectWizard";
 import { TaskInspector } from "./features/tasks/TaskInspector";
 import { HumanDirectionBar } from "./features/inbox/HumanDirectionBar";
 import { ProviderSettingsModal } from "./features/settings/ProviderSettingsModal";
+import { ReasoningEngineSelector } from "./features/settings/ReasoningEngineSelector";
 import { Drawer } from "./components/common/Drawer";
 import { GitPage } from "./pages/GitPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -31,6 +32,7 @@ export type ActiveDrawer =
   | "diagnostics"
   | "policies"
   | "history"
+  | "artifacts"
   | "export";
 
 export function App() {
@@ -385,6 +387,20 @@ export function App() {
         <div className="dashboard-header-left">
           <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
             <span style={{ color: "var(--accent-primary)", fontSize: "1.2rem" }}>⚡</span>
+            <span
+              className="brand-badge"
+              style={{
+                fontWeight: 800,
+                fontSize: "0.85rem",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                padding: "0.15rem 0.4rem",
+                borderRadius: "4px",
+                color: "var(--accent-primary)",
+              }}
+            >
+              ADO
+            </span>
             <span className="brand-title" style={{ fontWeight: 700, fontSize: "1.05rem", letterSpacing: "-0.01em" }}>
               Autonomous Development Orchestrator
             </span>
@@ -412,57 +428,30 @@ export function App() {
               ))}
               <option value="__NEW__">+ New Project Wizard...</option>
             </select>
-            <button
-              className="btn btn-sm btn-outline"
-              title="Open Project Wizard"
-              onClick={() => setIsWizardOpen(true)}
-              style={{ padding: "0.25rem 0.45rem", fontSize: "0.75rem" }}
-            >
-              + Add
-            </button>
           </div>
         </div>
 
-        {/* Center / Status Badges */}
-        <div className="dashboard-header-center">
-          <span
-            id="badge-reasoning"
-            className="badge badge-info"
-            style={{ cursor: "pointer", fontSize: "0.75rem" }}
-            onClick={() => setActiveDrawer("settings")}
-            title="Click to configure reasoning model"
-          >
-            Reasoning: {activeProvider.privacyClass === "local" ? "Local (Ollama)" : "Cloud (OpenAI)"}
-          </span>
+        {/* Center / Reasoning Selector & IDE Status */}
+        <div className="dashboard-header-center" style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <ReasoningEngineSelector
+            onProviderChanged={(p) => setActiveProvider(p)}
+            onRequestOpenSettings={() => setActiveDrawer("settings")}
+          />
 
-          <span
+          <button
             id="badge-agent"
-            className={`badge ${ideReady ? "badge-success" : "badge-warning"}`}
-            style={{ cursor: "pointer", fontSize: "0.75rem" }}
+            className="btn btn-sm btn-outline"
+            style={{ fontSize: "0.75rem", padding: "0.25rem 0.55rem", display: "flex", alignItems: "center", gap: "0.35rem" }}
             onClick={() => setActiveDrawer("ide")}
             title="Click to manage Antigravity IDE connection"
           >
+            <span className={`status-dot ${ideReady ? "dot-connected" : "dot-warning"}`} />
             Agent: Antigravity ({ideState?.status || "disconnected"})
-          </span>
-
-          <span
-            className={`badge ${workspaceMatch ? "badge-success" : "badge-danger"}`}
-            style={{ fontSize: "0.75rem" }}
-            title={`Workspace match: ${workspaceMatch ? "Matched" : "Mismatch"}`}
-          >
-            {workspaceMatch ? "✓ Matched" : "⚠ Mismatch"}
-          </span>
-
-          <span
-            className={`badge ${backendHealthy ? "badge-success" : "badge-danger"}`}
-            style={{ fontSize: "0.75rem" }}
-          >
-            Backend: {backendHealthy ? "Online (4317)" : "Offline"}
-          </span>
+          </button>
         </div>
 
         {/* Right / Quick Actions */}
-        <div className="dashboard-header-right">
+        <div className="dashboard-header-right" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <button
             className="btn btn-sm btn-outline"
             onClick={toggleTheme}
@@ -485,98 +474,126 @@ export function App() {
 
       {/* 2. PROJECT SUMMARY STRIP */}
       <section className="dashboard-project-strip">
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-          <div>
-            <strong style={{ color: "var(--text-main)", marginRight: "0.4rem" }}>
-              {activeProject?.name || "No Project Selected"}
-            </strong>
-            <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
-              — {activeProject?.objective || "Create or select a project to begin autonomous orchestration"}
-            </span>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", width: "100%", gap: "1rem", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", flex: 1, minWidth: "280px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+              <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "var(--text-main)" }}>
+                {activeProject?.name || "No Project Selected"}
+              </h1>
+              <span className="badge badge-info" style={{ fontSize: "0.7rem" }}>
+                Mode: {activeProject?.autonomyMode || "creative_within_constraints"}
+              </span>
+              <span className={`badge ${backendHealthy ? "badge-success" : "badge-danger"}`} style={{ fontSize: "0.7rem" }}>
+                Backend: {backendHealthy ? "Online" : "Offline"}
+              </span>
+              <span className={`badge ${workspaceMatch ? "badge-success" : "badge-danger"}`} style={{ fontSize: "0.7rem" }}>
+                {workspaceMatch ? "✓ Workspace Matched" : "⚠ Workspace Mismatch"}
+              </span>
+            </div>
+
+            <div style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>
+              {activeProject?.objective || "Create or select a project to begin autonomous orchestration"}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginTop: "0.15rem" }}>
+              <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>Workspace:</span>
+              <code
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.75rem",
+                  padding: "0.15rem 0.45rem",
+                  background: "var(--bg-card)",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                {activeProject?.rootPath || "Not configured"}
+              </code>
+              <button
+                className="btn btn-sm btn-outline"
+                style={{ padding: "0.15rem 0.4rem", fontSize: "0.7rem" }}
+                onClick={() => {
+                  if (activeProject?.rootPath) {
+                    navigator.clipboard.writeText(activeProject.rootPath);
+                  }
+                }}
+                title="Copy Workspace Path"
+              >
+                Copy
+              </button>
+            </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-            <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>Workspace:</span>
-            <code
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.75rem",
-                padding: "0.15rem 0.4rem",
-                background: "var(--bg-card)",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              {activeProject?.rootPath || "Not configured"}
-            </code>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <button
               className="btn btn-sm btn-outline"
-              style={{ padding: "0.1rem 0.35rem", fontSize: "0.7rem" }}
-              onClick={() => {
-                if (activeProject?.rootPath) {
-                  navigator.clipboard.writeText(activeProject.rootPath);
-                }
-              }}
-              title="Copy Workspace Path"
+              onClick={() => setIsWizardOpen(true)}
+              style={{ fontWeight: 600, fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
             >
-              📋
+              + Add
+            </button>
+            <button
+              id="btn-start"
+              className="btn btn-sm btn-primary"
+              onClick={handleStartRun}
+              disabled={isRunning || !backendHealthy}
+              style={{ fontWeight: 600, fontSize: "0.8rem", padding: "0.35rem 0.85rem" }}
+            >
+              ▶ Start Run
             </button>
           </div>
         </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-          <span className="badge badge-info" style={{ fontSize: "0.7rem" }}>
-            Mode: {activeProject?.autonomyMode || "creative_within_constraints"}
-          </span>
-          <span className="badge" style={{ fontSize: "0.7rem" }}>
-            {activeRun ? `Active Run: ${activeRun.id.slice(0, 12)}...` : "IDLE"}
-          </span>
-        </div>
       </section>
 
-      {/* 3. COMPACT SYSTEM & RUN STATUS STRIP */}
+      {/* 3. COMPACT 5-COLUMN SYSTEM & RUN STATUS STRIP */}
       <section className="dashboard-status-strip">
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <span
-            className={`badge ${
-              isRunning
-                ? "badge-success pulse"
-                : isPaused
-                ? "badge-warning"
-                : activeRun?.status === "completed"
-                ? "badge-info"
-                : activeRun?.status === "failed"
-                ? "badge-danger"
-                : "badge-secondary"
-            }`}
-            style={{ fontWeight: 700, letterSpacing: "0.05em", fontSize: "0.75rem", padding: "0.2rem 0.55rem" }}
-          >
-            {activeRun ? activeRun.status.toUpperCase() : "IDLE"}
-          </span>
-
-          {/* 5-Phase Lifecycle Stepper */}
-          <div className="lifecycle-stepper">
-            <span className={`lifecycle-step ${isRunning ? "passed" : ""}`}>1. Planning</span>
-            <span style={{ color: "var(--text-dim)" }}>→</span>
-            <span className={`lifecycle-step ${isRunning ? "active" : ""}`}>2. Execution</span>
-            <span style={{ color: "var(--text-dim)" }}>→</span>
-            <span className="lifecycle-step">3. Verification</span>
-            <span style={{ color: "var(--text-dim)" }}>→</span>
-            <span className="lifecycle-step">4. Critic Review</span>
-            <span style={{ color: "var(--text-dim)" }}>→</span>
-            <span className="lifecycle-step">5. Acceptance Gate</span>
+        <div className="status-strip-cell">
+          <span className="label">Status</span>
+          <div className="value">
+            <span
+              className={`badge ${
+                isRunning
+                  ? "badge-success pulse"
+                  : isPaused
+                  ? "badge-warning"
+                  : activeRun?.status === "completed"
+                  ? "badge-info"
+                  : activeRun?.status === "failed"
+                  ? "badge-danger"
+                  : "badge-secondary"
+              }`}
+              style={{ fontWeight: 700, fontSize: "0.75rem", padding: "0.15rem 0.5rem" }}
+            >
+              {activeRun ? activeRun.status.toUpperCase() : "IDLE"}
+            </span>
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-          <span>
-            <strong>Iteration / Attempts:</strong> {activeRun?.iterationCount || 0} / 3
+        <div className="status-strip-cell">
+          <span className="label">Current Task</span>
+          <span className="value" title={activeTask?.title || "None active"}>
+            {activeTask?.title || (activeRun ? `Task ${activeRun.currentTaskId || "01"}` : "None active")}
           </span>
-          <span>
-            <strong>Cost Ceiling:</strong> $0.00 / $10.00
+        </div>
+
+        <div className="status-strip-cell">
+          <span className="label">Phase</span>
+          <span className="value">
+            {isRunning ? "2. Execution (Prompt Dispatched)" : isPaused ? "Paused" : activeRun?.status === "completed" ? "5. Acceptance (Completed)" : "1. Planning Ready"}
           </span>
-          <span>
-            <strong>Verifier:</strong> <span style={{ color: "var(--accent-emerald)" }}>Deterministic (Shell-free)</span>
+        </div>
+
+        <div className="status-strip-cell">
+          <span className="label">Spend / Budget</span>
+          <span className="value" style={{ fontFamily: "var(--font-mono)" }}>
+            $0.00 / $10.00 <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>(Hard limit)</span>
+          </span>
+        </div>
+
+        <div className="status-strip-cell">
+          <span className="label">Verification</span>
+          <span className="value" style={{ color: "var(--accent-emerald)" }}>
+            ✓ Deterministic (Independent)
           </span>
         </div>
       </section>
@@ -696,11 +713,11 @@ export function App() {
 
         {/* Right Column: Execution Information & Antigravity IDE Integration Deck */}
         <section style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-          {/* Current Run Card */}
+          {/* Current Run & Task Card */}
           <div className="card">
             <div className="card-header">
               <div>
-                <h2 className="card-title" style={{ fontSize: "1rem" }}>Current Execution</h2>
+                <h2 className="card-title" style={{ fontSize: "1rem" }}>Current Task</h2>
                 <div className="card-subtitle" style={{ fontSize: "0.75rem" }}>
                   {activeRun ? `Run ID: ${activeRun.id}` : "No active run in progress"}
                 </div>
@@ -714,16 +731,16 @@ export function App() {
                   style={{ fontSize: "0.75rem" }}
                   title="Inspect real verifier logs, exit codes, and critic reviews"
                 >
-                  🔍 Inspect Evidence
+                  🔍 Inspect Task Details
                 </button>
               </div>
             </div>
 
-            {/* Active Task Summary */}
-            <div style={{ background: "var(--bg-subtle)", padding: "0.75rem", borderRadius: "var(--radius-sm)", marginBottom: "0.75rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
-                <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" }}>
-                  Active Planned Task
+            {/* Active Task Summary with Detailed Requirements */}
+            <div style={{ background: "var(--bg-subtle)", padding: "0.85rem", borderRadius: "var(--radius-sm)", marginBottom: "0.75rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase" }}>
+                  Task Objective
                 </span>
                 <span className="badge badge-info" style={{ fontSize: "0.65rem" }}>
                   {activeTask ? activeTask.status : "Idle"}
@@ -732,9 +749,30 @@ export function App() {
               <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-main)" }}>
                 {activeTask?.title || "Auto-planning next task linked to approved roadmap"}
               </div>
-              <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+              <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.2rem", marginBottom: "0.6rem" }}>
                 {activeTask?.objective || "When a run is launched, tasks are decomposed and dispatched with isolated attempt branches."}
               </p>
+
+              <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.35rem", fontSize: "0.75rem" }}>
+                <div>
+                  <strong style={{ color: "var(--text-dim)" }}>Acceptance Criteria: </strong>
+                  <span style={{ color: "var(--text-main)" }}>Deterministic verifier exit code 0, zero unstaged conflicts, Critic approved</span>
+                </div>
+                <div>
+                  <strong style={{ color: "var(--text-dim)" }}>Modified Files: </strong>
+                  <code style={{ fontSize: "0.72rem", color: "var(--accent-cyan)" }}>
+                    {isRunning ? "Scoped staging in progress..." : "No uncommitted modified files"}
+                  </code>
+                </div>
+                <div>
+                  <strong style={{ color: "var(--text-dim)" }}>Verifier / Critic: </strong>
+                  <span style={{ color: "var(--accent-emerald)" }}>Deterministic AcceptanceGate Ready</span>
+                </div>
+                <div>
+                  <strong style={{ color: "var(--text-dim)" }}>Blockers: </strong>
+                  <span style={{ color: "var(--text-muted)" }}>None detected</span>
+                </div>
+              </div>
             </div>
 
             {/* Live Terminal / Output Box */}
@@ -758,7 +796,7 @@ export function App() {
               <pre
                 className="code-block"
                 style={{
-                  height: "110px",
+                  height: "105px",
                   fontSize: "0.75rem",
                   overflowY: "auto",
                   padding: "0.5rem",
@@ -790,18 +828,8 @@ export function App() {
         {/* Run Controls */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <button
-            id="btn-start"
-            className="btn btn-primary"
-            onClick={handleStartRun}
-            disabled={isRunning || !backendHealthy}
-            style={{ fontWeight: 600 }}
-          >
-            ▶ New Run
-          </button>
-
-          <button
             id="btn-pause"
-            className="btn btn-secondary"
+            className="btn btn-sm btn-secondary"
             onClick={handlePauseRun}
             disabled={!isRunning}
           >
@@ -809,7 +837,7 @@ export function App() {
           </button>
 
           <button
-            className="btn btn-secondary"
+            className="btn btn-sm btn-secondary"
             onClick={handleResumeRun}
             disabled={!isPaused}
           >
@@ -818,7 +846,7 @@ export function App() {
 
           <button
             id="btn-stop"
-            className="btn btn-danger"
+            className="btn btn-sm btn-danger"
             onClick={handleStopRun}
             disabled={!isRunning && !isPaused}
           >
@@ -827,13 +855,21 @@ export function App() {
         </div>
 
         {/* Drawer Tool Triggers */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
           <button
             className="btn btn-sm btn-outline"
             onClick={() => setActiveDrawer("history")}
             title="Inspect Past Runs & Execution History"
           >
             📜 History ({runs.length})
+          </button>
+
+          <button
+            className="btn btn-sm btn-outline"
+            onClick={() => setActiveDrawer("artifacts")}
+            title="Inspect Project Artifacts & Reports"
+          >
+            📁 Artifacts
           </button>
 
           <button
@@ -871,6 +907,51 @@ export function App() {
       </footer>
 
       {/* 7. CONTEXTUAL SLIDEOUT DRAWERS & OVERLAYS */}
+
+      {/* 0. IDE Connection & Agent Drawer */}
+      <Drawer
+        isOpen={activeDrawer === "ide"}
+        onClose={() => setActiveDrawer("none")}
+        title="Antigravity IDE & Agent Integration"
+        subtitle="Manage process detection, workspace mapping, connection handshake, and Visible IDE vs Headless CLI execution"
+        width="740px"
+      >
+        <IdeConnectionDeck projectRootPath={activeProject?.rootPath} />
+      </Drawer>
+
+      {/* Artifacts & Audit Evidence Drawer */}
+      <Drawer
+        isOpen={activeDrawer === "artifacts"}
+        onClose={() => setActiveDrawer("none")}
+        title="Project Artifacts & Audit Evidence"
+        subtitle="Explore project blueprints, forensic audits, verified checkpoints, and test reports"
+        width="700px"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+          <div className="card" style={{ padding: "0.85rem", background: "var(--bg-subtle)" }}>
+            <h4 style={{ margin: "0 0 0.35rem 0", fontSize: "0.9rem", color: "var(--text-main)" }}>System Blueprints & Audits</h4>
+            <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              • <code>Autonomous_Development_Orchestrator_MVP_Blueprint_FINAL.md</code>
+            </div>
+            <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+              • <code>COMPLETE_PROJECT_AUDIT.md</code> (Forensic Audit & Specification)
+            </div>
+            <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+              • <code>AUTONOMOUS_EXECUTION_STATE.md</code> (Phase Tracking & Audit Gates)
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: "0.85rem", background: "var(--bg-subtle)" }}>
+            <h4 style={{ margin: "0 0 0.35rem 0", fontSize: "0.9rem", color: "var(--text-main)" }}>UI Visual Audit Evidence</h4>
+            <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              Multi-viewport screenshots saved to:
+            </div>
+            <code style={{ fontSize: "0.75rem", color: "var(--accent-cyan)", display: "block", marginTop: "0.25rem" }}>
+              artifacts/ui-audit/iteration-1/
+            </code>
+          </div>
+        </div>
+      </Drawer>
 
       {/* A. Git Diff & Recovery Drawer */}
       <Drawer

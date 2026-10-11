@@ -196,7 +196,7 @@ export class IdeDetector {
     if (process.platform === "win32") {
       try {
         const output = execSync(
-          'powershell -NoProfile -Command "Get-Process | Where-Object { $_.ProcessName -like \'*Antigravity*\' } | Select-Object Id, ProcessName | ConvertTo-Json"',
+          'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $_.ProcessName -like \'*Antigravity*\' } | Select-Object Id, ProcessName | ConvertTo-Json"',
           { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] }
         );
         const parsed = JSON.parse(output.trim() || "[]");

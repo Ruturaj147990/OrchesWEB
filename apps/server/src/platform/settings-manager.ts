@@ -6,16 +6,34 @@ export interface PersistedSettings {
   openaiApiKey?: string;
   defaultProviderId?: string;
   defaultModel?: string;
+  localBaseUrl?: string;
+  localModel?: string;
+  localTimeoutMs?: number;
 }
 
 export class SettingsManager {
+  private static customDataDir: string | null = null;
+
+  public static setDataDir(dir: string | null): void {
+    this.customDataDir = dir;
+  }
+
+  public static reset(): void {
+    this.customDataDir = null;
+  }
+
+  private static getEffectiveDataDir(): string {
+    return this.customDataDir || config.dataDir;
+  }
+
   private static getSettingsFilePath(): string {
-    if (!fs.existsSync(config.dataDir)) {
+    const dir = this.getEffectiveDataDir();
+    if (!fs.existsSync(dir)) {
       try {
-        fs.mkdirSync(config.dataDir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true });
       } catch {}
     }
-    return path.join(config.dataDir, "settings.json");
+    return path.join(dir, "settings.json");
   }
 
   public static loadSettings(): PersistedSettings {
@@ -31,16 +49,18 @@ export class SettingsManager {
       }
     }
 
-    // Check project .env file as well
-    const envPath = path.resolve(process.cwd(), ".env");
-    if (fs.existsSync(envPath) && !fileSettings.openaiApiKey) {
-      try {
-        const content = fs.readFileSync(envPath, "utf8");
-        const match = content.match(/^OPENAI_API_KEY\s*=\s*(.+)$/m);
-        if (match && match[1].trim()) {
-          fileSettings.openaiApiKey = match[1].trim();
-        }
-      } catch {}
+    // Only inspect project .env if NOT in isolated test mode
+    if (!this.customDataDir && !fileSettings.openaiApiKey) {
+      const envPath = path.resolve(process.cwd(), ".env");
+      if (fs.existsSync(envPath)) {
+        try {
+          const content = fs.readFileSync(envPath, "utf8");
+          const match = content.match(/^OPENAI_API_KEY\s*=\s*(.+)$/m);
+          if (match && match[1].trim()) {
+            fileSettings.openaiApiKey = match[1].trim();
+          }
+        } catch {}
+      }
     }
 
     return fileSettings;
@@ -60,36 +80,17 @@ export class SettingsManager {
       console.error("Failed to save settings.json:", err);
     }
 
-    // Also persist/update OPENAI_API_KEY in .env file if key is updated
-    if (updates.openaiApiKey !== undefined) {
-      const candidates = [
-        path.resolve(process.cwd(), ".env"),
-        path.resolve(process.cwd(), "..", ".env"),
-        path.resolve(process.cwd(), "..", "..", ".env"),
-      ];
-
-      for (const envPath of candidates) {
-        const dir = path.dirname(envPath);
-        // Only touch if directory contains package.json (repo root or workspace)
-        if (fs.existsSync(path.join(dir, "package.json"))) {
-          try {
-            let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
-            if (envContent.includes("OPENAI_API_KEY=")) {
-              envContent = envContent.replace(
-                /^OPENAI_API_KEY=.*$/m,
-                `OPENAI_API_KEY=${updates.openaiApiKey}`
-              );
-            } else {
-              envContent += `\nOPENAI_API_KEY=${updates.openaiApiKey}\n`;
-            }
-            fs.writeFileSync(envPath, envContent.trim() + "\n", "utf8");
-          } catch {}
-          break;
-        }
-      }
-    }
+    // Secure local credential storage: do NOT spray API keys into arbitrary project .env files.
+    // Credentials remain safely encapsulated in settings.json within dataDir.
 
     return merged;
+  }
+
+  public static maskApiKey(key?: string): string {
+    if (!key) return "";
+    const clean = key.trim();
+    if (clean.length <= 8) return "••••••••";
+    return `${clean.slice(0, 7)}••••${clean.slice(-4)}`;
   }
 
   public static async verifyOpenAiKey(key: string): Promise<{ valid: boolean; error?: string }> {

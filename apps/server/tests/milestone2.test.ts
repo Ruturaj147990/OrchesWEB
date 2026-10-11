@@ -140,6 +140,12 @@ describe("Milestone 2 — Providers, Adapters, and Budget Enforcement", () => {
   it("supports querying and switching active reasoning provider via REST API", async () => {
     const { buildApp } = await import("../src/app.js");
     const { closeDb } = await import("../src/storage/db.js");
+    const { SettingsManager } = await import("../src/platform/settings-manager.js");
+    const { reasoningRegistry } = await import("../src/providers/reasoning/registry.js");
+
+    const testSettingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orches-m2-test-"));
+    SettingsManager.setDataDir(testSettingsDir);
+    reasoningRegistry.resetDefaults();
 
     closeDb();
     const app = await buildApp(":memory:");
@@ -170,6 +176,7 @@ describe("Milestone 2 — Providers, Adapters, and Budget Enforcement", () => {
       expect(selectData.success).toBe(true);
       expect(selectData.activeProviderId).toBe("openai");
       expect(selectData.activeProvider.privacyClass).toBe("cloud");
+      expect(selectData.maskedApiKey).toContain("••••");
 
       // 3. Switch back to local
       const switchBackRes = await app.inject({
@@ -177,13 +184,48 @@ describe("Milestone 2 — Providers, Adapters, and Budget Enforcement", () => {
         url: "/api/v1/providers/reasoning/select",
         payload: {
           providerId: "openai-compatible-local",
+          baseUrl: "http://127.0.0.1:11434",
+          model: "llama3.1:8b",
         },
       });
       expect(switchBackRes.statusCode).toBe(200);
       expect(switchBackRes.json().activeProviderId).toBe("openai-compatible-local");
+      expect(switchBackRes.json().localConfig.model).toBe("llama3.1:8b");
     } finally {
       await app.close();
       closeDb();
+      SettingsManager.reset();
+      fs.rmSync(testSettingsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("guarantees test isolation: host user settings do not contaminate test environment", async () => {
+    const { SettingsManager } = await import("../src/platform/settings-manager.js");
+    const { reasoningRegistry } = await import("../src/providers/reasoning/registry.js");
+
+    const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "orches-isolation-test-"));
+    SettingsManager.setDataDir(isolatedDir);
+
+    try {
+      // Intentionally seed the isolated test settings with custom configuration
+      SettingsManager.saveSettings({
+        defaultProviderId: "openai-compatible-local",
+        localModel: "mistral:latest",
+      });
+
+      const loaded = SettingsManager.loadSettings();
+      expect(loaded.localModel).toBe("mistral:latest");
+      expect(fs.existsSync(path.join(isolatedDir, "settings.json"))).toBe(true);
+
+      // Verify that no .env was created or mutated in the repository root
+      const repoEnv = path.resolve(process.cwd(), ".env");
+      if (fs.existsSync(repoEnv)) {
+        const envContent = fs.readFileSync(repoEnv, "utf8");
+        expect(envContent).not.toContain("mistral:latest");
+      }
+    } finally {
+      SettingsManager.reset();
+      fs.rmSync(isolatedDir, { recursive: true, force: true });
     }
   });
 });

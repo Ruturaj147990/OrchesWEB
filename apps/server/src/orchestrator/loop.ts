@@ -394,7 +394,7 @@ export class AutonomousLoop {
         // Task Accepted: Commit checkpoint
         let acceptedCommit = baselineCommit;
         if (gitStatus.isGitRepo) {
-          acceptedCommit = await this.gitManager.commitCheckpoint(task.id, task.title);
+          acceptedCommit = await this.gitManager.commitCheckpoint(task.id, task.title, diffSummary.filesChanged);
         }
 
         this.db.prepare("UPDATE tasks SET status = 'succeeded', updated_at = ? WHERE id = ?").run(new Date().toISOString(), task.id);
@@ -427,7 +427,7 @@ export class AutonomousLoop {
 
       // Rollback isolated attempt branch
       if (gitStatus.isGitRepo && baselineCommit) {
-        await this.gitManager.rollbackAttempt(baselineCommit);
+        await this.gitManager.rollbackAttempt(baselineCommit, diffSummary.filesChanged);
       }
     }
 

@@ -56,6 +56,20 @@ export class ReasoningRegistry {
     });
     this.register(cloud);
   }
+
+  public configureLocal(baseUrl?: string, model?: string, apiKey?: string, timeoutMs?: number): void {
+    const local = new OpenAICompatibleLocalProvider({
+      baseUrl: baseUrl || config.localReasoningBaseUrl,
+      model: model || config.localReasoningModel,
+      apiKey: apiKey || "local",
+      timeoutMs,
+    });
+    this.register(local);
+  }
+
+  public resetDefaults(): void {
+    this.defaultProviderId = "openai-compatible-local";
+  }
 }
 
 export const reasoningRegistry = new ReasoningRegistry();

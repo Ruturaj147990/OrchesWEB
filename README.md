@@ -57,12 +57,12 @@ flowchart TD
 npm install
 ```
 
-### 2. Run Comprehensive Test Suite (38 Vitest Tests)
+### 2. Run Comprehensive Test Suite (51 Vitest Tests)
 ```bash
 npm test
 ```
 
-### 3. Run Playwright End-to-End Browser Tests
+### 3. Run Playwright End-to-End Multi-Viewport Browser Tests
 ```bash
 npx playwright test
 ```
@@ -72,7 +72,15 @@ npx playwright test
 npm run build
 ```
 
-### 5. Start Development Servers
+### 5. Production Startup Workflow
+```bash
+# Start backend server in production mode
+npm start --workspace=apps/server
+
+# Web dashboard is built into apps/web/dist and served statically
+```
+
+### 6. Development Startup Workflow
 ```bash
 # Start Fastify backend on 127.0.0.1:4317
 npm run dev --workspace=apps/server
@@ -80,6 +88,28 @@ npm run dev --workspace=apps/server
 # Start Vite dashboard on 127.0.0.1:5173
 npm run dev --workspace=apps/web
 ```
+
+---
+
+## Explicit Reasoning Engine Selection: OpenAI API vs Local Ollama
+
+The dashboard features an always-visible top-bar segmented controller:
+```
+[ ☁️ OpenAI API ]  [ 🦙 Local Ollama ]  • Live Status Pill ⚙️
+```
+
+### Capabilities & Guarantees
+1. **Instant Switching:** Clicking between OpenAI API and Local Ollama instantly validates configuration and updates the active backend registry without page reloads.
+2. **Honest Live Status Badges:** Status pills are backed by real HTTP probes (`/api/v1/providers/reasoning/probe-local`), truthfully distinguishing:
+   - `Local Ollama · Connected (<latency>ms)`
+   - `Local Ollama · Model unavailable`
+   - `Local Ollama · Server not running`
+   - `Local Ollama · Testing connection`
+   - `OpenAI API · Key configured`
+   - `OpenAI API · Key required`
+3. **No Silent Fallback:** Local Ollama strictly forbids silent cloud fallback. If Ollama is offline or uninstalled, the loop halts and reports the failure honestly.
+4. **Cold-Start Allowance:** Configurable cold-start timeouts up to 300 seconds (5 minutes) allow heavy model weights to load onto GPU/VRAM before reasoning dispatches timeout.
+5. **Secret Protection:** API keys are stored solely in local application settings, masked on return (`sk-proj-••••...1234`), and never committed to source trees or project `.env` files.
 
 ---
 

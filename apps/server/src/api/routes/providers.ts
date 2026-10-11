@@ -3,15 +3,23 @@ import { z } from "zod";
 import { reasoningRegistry } from "../../providers/reasoning/registry.js";
 import { config } from "../../config/env.js";
 import { SettingsManager } from "../../platform/settings-manager.js";
+import { OpenAICompatibleLocalProvider } from "../../providers/reasoning/openai-compatible/local-provider.js";
 
 const SelectProviderSchema = z.object({
   providerId: z.enum(["openai", "openai-compatible-local"]),
   apiKey: z.string().optional(),
   model: z.string().optional(),
+  baseUrl: z.string().optional(),
+  timeoutMs: z.number().optional(),
 });
 
 const VerifyKeySchema = z.object({
   apiKey: z.string().min(1),
+});
+
+const ProbeLocalSchema = z.object({
+  baseUrl: z.string().optional(),
+  model: z.string().optional(),
 });
 
 export const providerRoutes: FastifyPluginAsync = async (fastify) => {
@@ -20,6 +28,14 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
   if (persisted.openaiApiKey && !config.openaiApiKey) {
     config.openaiApiKey = persisted.openaiApiKey;
     reasoningRegistry.configureOpenAI(config.openaiApiKey, persisted.defaultModel || "gpt-4o-mini");
+  }
+  if (persisted.localBaseUrl || persisted.localModel) {
+    reasoningRegistry.configureLocal(
+      persisted.localBaseUrl,
+      persisted.localModel,
+      "local",
+      persisted.localTimeoutMs
+    );
   }
   if (persisted.defaultProviderId === "openai" && config.openaiApiKey) {
     try {
@@ -52,8 +68,13 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
         privacyClass: active.privacyClass,
       },
       hasOpenAiKey: Boolean(config.openaiApiKey),
-      savedApiKey: config.openaiApiKey || "",
+      maskedApiKey: SettingsManager.maskApiKey(config.openaiApiKey),
       savedModel: currentPersisted.defaultModel || "gpt-4o-mini",
+      localConfig: {
+        baseUrl: currentPersisted.localBaseUrl || config.localReasoningBaseUrl,
+        model: currentPersisted.localModel || config.localReasoningModel,
+        timeoutMs: currentPersisted.localTimeoutMs || 180000,
+      },
       providers: allProviders,
     };
   });
@@ -72,6 +93,26 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.status(200).send(result);
   });
 
+  // Probe local Ollama / OpenAI-compatible endpoint
+  fastify.post<{ Body: unknown }>("/providers/reasoning/probe-local", async (request, reply) => {
+    const parsed = ProbeLocalSchema.safeParse(request.body || {});
+    const currentPersisted = SettingsManager.loadSettings();
+    const targetBaseUrl = parsed.success && parsed.data.baseUrl
+      ? parsed.data.baseUrl
+      : currentPersisted.localBaseUrl || config.localReasoningBaseUrl;
+    const targetModel = parsed.success && parsed.data.model
+      ? parsed.data.model
+      : currentPersisted.localModel || config.localReasoningModel;
+
+    const probe = new OpenAICompatibleLocalProvider({
+      baseUrl: targetBaseUrl,
+      model: targetModel,
+    });
+
+    const health = await probe.healthCheck();
+    return reply.status(200).send(health);
+  });
+
   // Switch or configure active reasoning provider
   fastify.post<{ Body: unknown }>("/providers/reasoning/select", async (request, reply) => {
     const parsed = SelectProviderSchema.safeParse(request.body);
@@ -79,7 +120,8 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: parsed.error.format() });
     }
 
-    const { providerId, apiKey, model } = parsed.data;
+    const { providerId, apiKey, model, baseUrl, timeoutMs } = parsed.data;
+    const currentPersisted = SettingsManager.loadSettings();
 
     if (providerId === "openai") {
       let keyToUse = config.openaiApiKey;
@@ -99,9 +141,9 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
         SettingsManager.saveSettings({
           openaiApiKey: candidateKey,
           defaultProviderId: "openai",
-          defaultModel: model || "gpt-4o-mini",
+          defaultModel: model || currentPersisted.defaultModel || "gpt-4o-mini",
         });
-        reasoningRegistry.configureOpenAI(candidateKey, model || "gpt-4o-mini");
+        reasoningRegistry.configureOpenAI(candidateKey, model || currentPersisted.defaultModel || "gpt-4o-mini");
       } else if (!keyToUse) {
         return reply.status(400).send({
           error: "OpenAI API Key is required to switch to OpenAI Cloud reasoning.",
@@ -110,20 +152,36 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
         // Update model and active provider preference
         SettingsManager.saveSettings({
           defaultProviderId: "openai",
-          defaultModel: model || "gpt-4o-mini",
+          defaultModel: model || currentPersisted.defaultModel || "gpt-4o-mini",
         });
-        reasoningRegistry.configureOpenAI(keyToUse, model || "gpt-4o-mini");
+        reasoningRegistry.configureOpenAI(keyToUse, model || currentPersisted.defaultModel || "gpt-4o-mini");
       }
 
       reasoningRegistry.setDefault("openai");
     } else {
+      const resolvedBaseUrl = baseUrl || currentPersisted.localBaseUrl || config.localReasoningBaseUrl;
+      const resolvedModel = model || currentPersisted.localModel || config.localReasoningModel;
+      const resolvedTimeout = timeoutMs || currentPersisted.localTimeoutMs || 180000;
+
       SettingsManager.saveSettings({
         defaultProviderId: "openai-compatible-local",
+        localBaseUrl: resolvedBaseUrl,
+        localModel: resolvedModel,
+        localTimeoutMs: resolvedTimeout,
       });
+
+      reasoningRegistry.configureLocal(
+        resolvedBaseUrl,
+        resolvedModel,
+        "local",
+        resolvedTimeout
+      );
       reasoningRegistry.setDefault("openai-compatible-local");
     }
 
     const newActive = reasoningRegistry.getDefault();
+    const updatedSettings = SettingsManager.loadSettings();
+
     return reply.status(200).send({
       success: true,
       activeProviderId: reasoningRegistry.getDefaultId(),
@@ -133,7 +191,12 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
         privacyClass: newActive.privacyClass,
       },
       hasOpenAiKey: Boolean(config.openaiApiKey),
-      savedApiKey: config.openaiApiKey || "",
+      maskedApiKey: SettingsManager.maskApiKey(config.openaiApiKey),
+      localConfig: {
+        baseUrl: updatedSettings.localBaseUrl || config.localReasoningBaseUrl,
+        model: updatedSettings.localModel || config.localReasoningModel,
+        timeoutMs: updatedSettings.localTimeoutMs || 180000,
+      },
     });
   });
 };

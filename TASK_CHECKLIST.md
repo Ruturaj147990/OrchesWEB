@@ -109,4 +109,11 @@
 - [x] Multi-viewport responsive audit across 4 viewports (Desktop 1440×900, Laptop 1280×720, Tablet 1024×768, Mobile 390×844) verified with visual artifacts in `artifacts/ui-audit/iteration-1/`.
 - [x] Deployment Readiness Gate: 12 release criteria evaluated and confirmed in `DEPLOYMENT_READINESS_REPORT.md`.
 - [x] Post-Readiness Codebase Cleanup: safe removal of 8 legacy multi-page sidebar views (1,870 lines of dead code pruned), extraction of centralized web types into `apps/web/src/types.ts`, verified with `CLEANUP_REPORT.md`.
-- [x] Post-cleanup regression verification: 100% passing tests (50/50 Vitest, 4/4 Playwright, monorepo build exits 0).
+- [x] Forensic Audit Resolutions & Explicit Reasoning Engine (Sections 1-22):
+  - [x] Test environment isolation: isolated `settings.json` and DB directories; zero host `%APPDATA%` pollution; regression verified in `milestone2.test.ts`.
+  - [x] Local Ollama cold-start handling: native `/api/tags` probing, normalized completions URL, configurable timeout up to 300s, clear explanatory error feedback.
+  - [x] Explicit Reasoning Engine selector: always-visible top-bar segmented toggle `[ OpenAI API ] [ Local Ollama ]` with honest live status pills, compact configuration drawer, and zero silent cloud fallback in Local mode.
+  - [x] Scoped Git staging and safe rollback: task diffs staged strictly via `scopedPaths`, rollbacks discard only attempt-specific edits via `filesToDiscard`, active workspace never force-reset.
+  - [x] Credential persistence security: `.env` mutation eliminated; API keys stored safely in `settings.json` and masked in all responses (`sk-proj-••••...1234`).
+  - [x] Windows process safety: PowerShell process detection uses scoped `-ExecutionPolicy Bypass -NoProfile` without global policy weakening.
+  - [x] Post-cleanup regression verification: 100% passing tests (51/51 Vitest, 4/4 Playwright, monorepo build exits 0).
