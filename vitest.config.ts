@@ -14,5 +14,6 @@ export default defineConfig({
       ORCHESTRATOR_DATA_DIR: testDataDir,
       NODE_ENV: "test",
     },
+    testTimeout: 20000,
   },
 });

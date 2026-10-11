@@ -9,7 +9,7 @@ import { PlannerService } from "../src/orchestrator/planner.js";
 import { CriticService } from "../src/orchestrator/critic.js";
 import { ContextBuilder } from "../src/prompts/context-builder.js";
 import { MockAgentAdapter } from "../src/providers/coding-agents/mock/mock-adapter.js";
-import { OpenAICompatibleLocalProvider } from "../src/providers/reasoning/openai-compatible/local-provider.js";
+import { MockReasoningProvider } from "../src/providers/reasoning/mock/mock-provider.js";
 import { BudgetService } from "../src/domain/budgets/budget-service.js";
 import { ProjectRepository } from "../src/storage/repositories/project-repository.js";
 import { RunRepository } from "../src/storage/repositories/run-repository.js";
@@ -92,7 +92,7 @@ process.exit(1);
     });
 
     const contextBuilder = new ContextBuilder(tempWorkspace);
-    const provider = new OpenAICompatibleLocalProvider();
+    const provider = new MockReasoningProvider();
     const planner = new PlannerService(provider, contextBuilder);
     const critic = new CriticService(provider, contextBuilder);
     const budgetService = new BudgetService();
@@ -223,7 +223,7 @@ process.exit(1);
 
   it("blocks model dispatch when budget limit is exhausted", async () => {
     const contextBuilder = new ContextBuilder(tempWorkspace);
-    const provider = new OpenAICompatibleLocalProvider();
+    const provider = new MockReasoningProvider();
     const planner = new PlannerService(provider, contextBuilder);
     const critic = new CriticService(provider, contextBuilder);
 

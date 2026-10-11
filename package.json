@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "dev:server": "npm run dev --workspace=apps/server",
     "dev:web": "npm run dev --workspace=apps/web",
-    "dev": "tsx apps/server/src/server.ts"
+    "dev": "tsx apps/server/src/server.ts",
+    "start": "node apps/server/dist/server.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",

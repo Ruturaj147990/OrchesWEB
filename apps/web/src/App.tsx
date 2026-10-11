@@ -136,6 +136,18 @@ export function App() {
     }
   };
 
+  // 3b. Poll Reasoning Usage & Spend
+  const [usageSummary, setUsageSummary] = useState<{ totalCostUsd: number; totalTokens: number } | null>(null);
+  const fetchUsage = async () => {
+    try {
+      const res = await fetch("/api/v1/providers/usage");
+      if (res.ok) {
+        const data = await res.json();
+        setUsageSummary(data);
+      }
+    } catch {}
+  };
+
   // 4. Fetch Projects
   const fetchProjects = async () => {
     try {
@@ -190,10 +202,12 @@ export function App() {
     fetchProvider();
     fetchIdeStatus();
     fetchProjects();
+    fetchUsage();
 
     const interval = setInterval(() => {
       checkHealth();
       fetchIdeStatus();
+      fetchUsage();
     }, 4000);
 
     return () => clearInterval(interval);
@@ -586,7 +600,7 @@ export function App() {
         <div className="status-strip-cell">
           <span className="label">Spend / Budget</span>
           <span className="value" style={{ fontFamily: "var(--font-mono)" }}>
-            $0.00 / $10.00 <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>(Hard limit)</span>
+            ${usageSummary ? usageSummary.totalCostUsd.toFixed(2) : "0.00"} / $10.00 <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>(Hard limit)</span>
           </span>
         </div>
 
@@ -809,9 +823,6 @@ export function App() {
               </pre>
             </div>
           </div>
-
-          {/* Embedded Antigravity IDE Connection Deck (Playwright tests locate #ide-connection-deck directly) */}
-          <IdeConnectionDeck projectRootPath={activeProject?.rootPath} />
         </section>
       </main>
 

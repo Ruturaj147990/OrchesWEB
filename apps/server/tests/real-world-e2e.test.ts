@@ -12,7 +12,7 @@ import { PlannerService } from "../src/orchestrator/planner.js";
 import { CriticService } from "../src/orchestrator/critic.js";
 import { BudgetService } from "../src/domain/budgets/budget-service.js";
 import { ContextBuilder } from "../src/prompts/context-builder.js";
-import { OpenAICompatibleLocalProvider } from "../src/providers/reasoning/openai-compatible/local-provider.js";
+import { MockReasoningProvider } from "../src/providers/reasoning/mock/mock-provider.js";
 import { initDb, closeDb } from "../src/storage/db.js";
 import { runMigrations } from "../src/storage/migrations.js";
 import { ProjectRepository } from "../src/storage/repositories/project-repository.js";
@@ -138,7 +138,7 @@ describe("Section 18: Mandatory Real-World Autonomous Coding Test", () => {
 
     // 3. Configure Planning & Reasoning Services
     const contextBuilder = new ContextBuilder(e2eWorkspace);
-    const provider = new OpenAICompatibleLocalProvider();
+    const provider = new MockReasoningProvider();
     const planner = new PlannerService(provider, contextBuilder);
 
     // Write independent validator script for verification runner

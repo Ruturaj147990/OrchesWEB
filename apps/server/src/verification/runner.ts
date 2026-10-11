@@ -55,7 +55,7 @@ export class VerificationRunner {
       try {
         child = spawn(exe, args, {
           cwd: this.workspacePath,
-          shell: false,
+          shell: process.platform === "win32",
           env: {
             ...process.env,
             CI: "true",

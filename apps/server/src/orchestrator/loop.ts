@@ -12,6 +12,7 @@ import { CodingAgentAdapter } from "../providers/coding-agents/adapter.js";
 import { BudgetService } from "../domain/budgets/budget-service.js";
 import { EventStore } from "../events/event-store.js";
 import { RunRepository } from "../storage/repositories/run-repository.js";
+import { ProjectRepository } from "../storage/repositories/project-repository.js";
 import { RunStateMachine } from "./state-machine.js";
 import { InboxService } from "../domain/human-messages/inbox-service.js";
 import { IdeBridge } from "../platform/ide/ide-bridge.js";
@@ -44,6 +45,7 @@ export class AutonomousLoop {
   private acceptanceGate: AcceptanceGate;
   private eventStore: EventStore;
   private runRepo: RunRepository;
+  private projectRepo: ProjectRepository;
   private stateMachine: RunStateMachine;
   private inboxService: InboxService;
 
@@ -61,6 +63,7 @@ export class AutonomousLoop {
     this.acceptanceGate = new AcceptanceGate();
     this.eventStore = new EventStore(db);
     this.runRepo = new RunRepository(db);
+    this.projectRepo = new ProjectRepository(db);
     this.stateMachine = new RunStateMachine(this.runRepo, this.eventStore);
     this.inboxService = new InboxService(db, this.eventStore);
   }
@@ -99,9 +102,12 @@ export class AutonomousLoop {
     }
 
     // 4. Planner plans next task linked to approved roadmap
+    const project = this.projectRepo.findById(projectId);
+    const objective = project?.objective || "Core feature implementation";
+
     const planOutput = await this.planner.planNextTask(
       projectId,
-      "Core feature implementation",
+      objective,
       "Per-task ceiling: $2.00, Run ceiling: $10.00",
       approvedRoadmapIds,
       humanDirections.length > 0 ? humanDirections : undefined

@@ -6,7 +6,10 @@ test.describe("Visible Antigravity IDE Integration E2E", () => {
   test("renders IDE integration deck, steps through connection pipeline, tests probe, and toggles execution modes", async ({ page }) => {
     await page.goto("/");
 
-    // 1. Validate Header and IDE Deck presence
+    // 1. Open the IDE Connection Drawer from the top header status control
+    await page.locator("#badge-agent").click();
+    await page.waitForTimeout(300);
+
     const deck = page.locator("#ide-connection-deck");
     await expect(deck.locator("h2:has-text('Antigravity IDE Integration')")).toBeVisible();
 
@@ -52,11 +55,15 @@ test.describe("Visible Antigravity IDE Integration E2E", () => {
 
     // 8. Capture screenshot artifact of the live deck
     const artifactsDir = path.resolve(process.cwd(), "artifacts");
-    if (!fs.existsSync(artifactsDir)) {
-      fs.mkdirSync(artifactsDir, { recursive: true });
-    }
+    const finalDir = path.resolve(process.cwd(), "artifacts", "ui-audit", "final");
+    if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+    if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+
     const screenshotPath = path.join(artifactsDir, "visible-ide-deck.png");
+    const finalShotPath = path.join(finalDir, "visible-ide-deck.png");
     await page.screenshot({ path: screenshotPath, fullPage: true });
+    await page.screenshot({ path: finalShotPath, fullPage: true });
     expect(fs.existsSync(screenshotPath)).toBe(true);
+    expect(fs.existsSync(finalShotPath)).toBe(true);
   });
 });

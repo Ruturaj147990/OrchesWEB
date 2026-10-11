@@ -1,6 +1,7 @@
 import { CriticReview, CriticReviewSchema, Task, VerificationResult, AgentReport } from "@orchestrator/shared-types";
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
 import { ContextBuilder } from "../prompts/context-builder.js";
+import { extractJsonFromText } from "../prompts/json-extractor.js";
 
 const CRITIC_SYSTEM_INSTRUCTION = `
 You are the Independent Critic in an autonomous development orchestrator.
@@ -71,11 +72,7 @@ Respond with JSON matching schema:
 
       let parsed = result.parsed;
       if (!parsed && result.text) {
-        try {
-          parsed = JSON.parse(result.text);
-        } catch {
-          // Fallback to deterministic evaluation
-        }
+        parsed = extractJsonFromText(result.text);
       }
 
       if (parsed) {

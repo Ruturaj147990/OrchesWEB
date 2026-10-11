@@ -5,6 +5,8 @@ import { config } from "../../config/env.js";
 import { SettingsManager } from "../../platform/settings-manager.js";
 import { OpenAICompatibleLocalProvider } from "../../providers/reasoning/openai-compatible/local-provider.js";
 
+import { ReasoningUsageLedger } from "../../domain/budgets/usage-ledger.js";
+
 const SelectProviderSchema = z.object({
   providerId: z.enum(["openai", "openai-compatible-local"]),
   apiKey: z.string().optional(),
@@ -19,6 +21,12 @@ const VerifyKeySchema = z.object({
 
 const ProbeLocalSchema = z.object({
   baseUrl: z.string().optional(),
+  model: z.string().optional(),
+});
+
+const TestGenerationSchema = z.object({
+  providerId: z.enum(["openai", "openai-compatible-local"]).optional(),
+  prompt: z.string().optional(),
   model: z.string().optional(),
 });
 
@@ -43,7 +51,7 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
     } catch {}
   }
 
-  // Get available reasoning providers and active provider
+  // Get available reasoning providers and active provider with live probe
   fastify.get("/providers/reasoning", async () => {
     const currentPersisted = SettingsManager.loadSettings();
     if (currentPersisted.openaiApiKey && !config.openaiApiKey) {
@@ -60,6 +68,18 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
       configured: p.id === "openai" ? Boolean(config.openaiApiKey) : true,
     }));
 
+    // Probe live health of active provider
+    let activeHealth: any = null;
+    try {
+      activeHealth = await active.healthCheck();
+    } catch (err: unknown) {
+      activeHealth = {
+        ok: false,
+        status: "server_unreachable",
+        message: (err as Error).message,
+      };
+    }
+
     return {
       activeProviderId: activeId,
       activeProvider: {
@@ -67,6 +87,7 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
         displayName: active.displayName,
         privacyClass: active.privacyClass,
       },
+      activeHealth,
       hasOpenAiKey: Boolean(config.openaiApiKey),
       maskedApiKey: SettingsManager.maskApiKey(config.openaiApiKey),
       savedModel: currentPersisted.defaultModel || "gpt-4o-mini",
@@ -111,6 +132,82 @@ export const providerRoutes: FastifyPluginAsync = async (fastify) => {
 
     const health = await probe.healthCheck();
     return reply.status(200).send(health);
+  });
+
+  // Send Test Generation: minimal controlled inference request proving live reasoning
+  fastify.post<{ Body: unknown }>("/providers/reasoning/test-generation", async (request, reply) => {
+    const parsed = TestGenerationSchema.safeParse(request.body || {});
+    const currentPersisted = SettingsManager.loadSettings();
+    const targetProviderId = (parsed.success && parsed.data.providerId)
+      ? parsed.data.providerId
+      : reasoningRegistry.getDefaultId();
+
+    const promptText = (parsed.success && parsed.data.prompt) || "Reply with 'PONG' and a brief 3-word greeting.";
+
+    try {
+      if (targetProviderId === "openai") {
+        const key = config.openaiApiKey || currentPersisted.openaiApiKey;
+        if (!key) {
+          return reply.status(400).send({
+            ok: false,
+            error: "OpenAI API Key is not configured. Please configure an API key to test OpenAI Cloud inference.",
+          });
+        }
+        const openAiProvider = reasoningRegistry.get("openai");
+        if (!openAiProvider) {
+          return reply.status(400).send({ ok: false, error: "OpenAI provider is not registered." });
+        }
+        const result = await openAiProvider.generate({
+          operation: "project_analysis",
+          systemInstruction: "You are a concise test assistant. Keep response under 15 words.",
+          messages: [{ role: "user", content: promptText }],
+          maxOutputTokens: 30,
+          dataClassification: "internal",
+          projectId: "test-probe",
+        });
+
+        return reply.status(200).send({
+          ok: true,
+          providerId: "openai",
+          modelId: result.modelId,
+          output: result.text.trim(),
+          usage: result.usage,
+          durationMs: result.durationMs,
+        });
+      } else {
+        const localProvider = reasoningRegistry.get("openai-compatible-local");
+        if (!localProvider) {
+          return reply.status(400).send({ ok: false, error: "Local provider is not registered." });
+        }
+        const result = await localProvider.generate({
+          operation: "project_analysis",
+          systemInstruction: "You are a concise test assistant. Keep response under 15 words.",
+          messages: [{ role: "user", content: promptText }],
+          maxOutputTokens: 30,
+          dataClassification: "internal",
+          projectId: "test-probe",
+        });
+
+        return reply.status(200).send({
+          ok: true,
+          providerId: "openai-compatible-local",
+          modelId: result.modelId,
+          output: result.text.trim(),
+          usage: result.usage,
+          durationMs: result.durationMs,
+        });
+      }
+    } catch (err: unknown) {
+      return reply.status(500).send({
+        ok: false,
+        error: (err as Error).message,
+      });
+    }
+  });
+
+  // Get Reasoning Usage Ledger Summary & Recent Requests
+  fastify.get<{ Querystring: { projectId?: string } }>("/providers/usage", async (request) => {
+    return ReasoningUsageLedger.getShared().getSummary(request.query?.projectId);
   });
 
   // Switch or configure active reasoning provider

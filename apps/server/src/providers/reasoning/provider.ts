@@ -31,11 +31,27 @@ export interface ReasoningResult {
   warnings: string[];
 }
 
+export type ProviderConnectionStatus =
+  | "not_detected"
+  | "server_unreachable"
+  | "server_responding"
+  | "model_installed"
+  | "model_unavailable"
+  | "model_loading"
+  | "warming_up"
+  | "request_succeeded"
+  | "request_failed"
+  | "ready";
+
 export interface ProviderHealth {
   ok: boolean;
+  status?: ProviderConnectionStatus;
   latencyMs?: number;
   message?: string;
   discoveredModels?: string[];
+  serverVersion?: string;
+  installCommand?: string;
+  normalizedOrigin?: string;
 }
 
 export interface ReasoningProvider {

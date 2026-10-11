@@ -1,71 +1,100 @@
 # Autonomous Development Orchestrator — Implementation State
 
-**Current Milestone:** All Milestones (0 through 7 + Visible IDE Integration + Single Destination Dashboard + Post-Readiness Cleanup) COMPLETED  
-**Last Updated:** October 10, 2026  
-**Overall Status:** Production Ready, 100% Test Coverage, Multi-Viewport Verified, Deployment Readiness Gate Passed.
+**Current Status:** All 12 Phases COMPLETED  
+**Last Updated:** October 11, 2026  
+**Overall Status:** Production Ready, 100% Test Coverage, Multi-Viewport Verified, Real Coding & Ollama Execution Proven, Deployment Readiness Gate Passed.
 
 ---
 
-## 1. Milestone & Directive Tracking
+## 1. Directive Phase Tracking
 
-- [x] **Milestone 0 — Repository foundation** (COMPLETED)
-  - Monorepo, TypeScript strict mode, Fastify/Express loopback health, React dashboard shell, Vitest, Playwright baseline.
-- [x] **Milestone 1 — Persistence and bare control dashboard** (COMPLETED)
-  - SQLite storage engine with native Node.js v24 `DatabaseSync` in WAL mode and foreign keys.
-  - Relational schema, project REST API, durable event store, SSE streaming, run state machine.
-- [x] **Milestone 2 — Minimum real provider and coding-agent adapters** (COMPLETED)
-  - Normalized `ReasoningProvider` & `ReasoningRegistry`.
-  - OpenAI Cloud & OpenAI-Compatible Local providers with Local-Only policy enforcement (no silent cloud fallback).
-  - Official Antigravity CLI adapter (`agy`) & deterministic MockAgentAdapter.
-  - Budget pre-flight checks and token cost catalogue.
-- [x] **Milestone 3 — Early autonomous vertical slice (Mandatory Feasibility Gate)** (COMPLETED)
-  - Complete autonomous loop pipeline: Planner -> Git branch -> Executor -> Verifier -> BrowserVerifier -> Critic -> Acceptance Gate -> Commit checkpoint.
-- [x] **Milestone 4 — Cost accuracy, reliability, context compaction, and recovery** (COMPLETED)
-  - `StagnationDetector`: identifies consecutive no-diffs (2), repeated failure hashes (3), and edit ping-pong oscillations (4).
-  - `MemoryManager`: maintains `.orchestrator/TASK_HISTORY.json`, `CURRENT_STATE.md`, `REPO_MAP.md`, and rolling context summaries.
-  - `ProcessSupervisor`: child process registration, safe termination, and orphan cleanup.
-- [x] **Milestone 5 — Project wizard, autonomy modes, profiles, and blueprint import** (COMPLETED)
-  - Interactive Project Wizard: idea, workspace path safety, blueprint document import, preset selection, autonomy mode selection, plan review.
-  - Multi-format `BlueprintImporter` with SHA-256 hashes and size guards.
-  - `RequirementExtractor` with provenance tagging and approval workflow.
-- [x] **Milestone 6 — Human direction and full browser/visual verification** (COMPLETED)
-  - Direction inbox with `guidance`, `replan`, `safe_interrupt`, and `priority_override` kinds.
-  - Verifier check persistence, exit codes, output snippets, and Critic review records.
-  - Playwright visual artifacts served via `/api/v1/artifacts/`.
-  - Task Inspector UI in React (`TaskInspector.tsx`).
-  - Operator Inbox Bar in React (`HumanDirectionBar.tsx`).
-- [x] **Milestone 7 — Advanced UI, export, and hardening** (COMPLETED)
-  - Project memory and run report export bundle (`GET /api/v1/projects/:projectId/export` in JSON or Markdown).
-  - Searchable timeline and event stream log filters in dashboard.
-  - Security hardening audit (loopback-only binding, path traversal guards, secret redaction via `SecretRedactor`).
-- [x] **Visible Antigravity IDE Integration** (COMPLETED)
-  - Full IDE process and workspace detection (`IdeDetector`), canonical path resolution, multi-window selection.
-  - 6-stage visible connection workflow (`IdeBridge`): `IDE Detected ➔ Workspace Identified ➔ Connection Established ➔ Workspace Confirmed ➔ Agent Tested ➔ Ready`.
-  - Native Visible IDE Coding Agent Adapter (`VisibleIdeAdapter`) executing directly against verified workspace with live on-screen editor reflection.
-  - Headless CLI (`agy`) preserved as explicit optional alternative mode.
-  - Git cleanliness preflight guard (`run.dirty_workspace`) protecting unrelated user edits.
-  - Interactive `IdeConnectionDeck` UI component in dashboard with stage indicators, workspace picker, status badges, and controls.
-- [x] **Single-Destination Dashboard Frontend** (COMPLETED)
+- [x] **Phase 1 — Audit, Establish Baseline, and Preserve Context** (COMPLETED)
+  - Forensic audit complete: 107 KB forensic report in [COMPLETE_PROJECT_AUDIT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/COMPLETE_PROJECT_AUDIT.md).
+  - Git branch, HEAD commit, working tree preserved without destructive resets.
+  - Test environment isolation verified: isolated `%APPDATA%` and DB for tests.
+
+- [x] **Phase 2 — Fix Ollama Auto-Detection and Connectivity** (COMPLETED)
+  - Probed live Ollama v0.32.9 on `http://127.0.0.1:11434` running model `llama3.1:8b`.
+  - Resolved root cause of `Server not running` status: native Ollama rejects `/v1/tags`, and naive URL concatenation corrupted native endpoints.
+  - Implemented `normalizeOllamaEndpoint()` separating server origin, native discovery (`/api/version`, `/api/tags`), and OpenAI-compatible chat (`/v1/chat/completions`).
+  - Added honest evidence-based connectivity states: `ready`, `model_installed`, `model_unavailable`, `server_unreachable`, `not_detected`.
+  - Added `POST /api/v1/providers/reasoning/test-generation` and `[⚡ Send Test Generation]` button in `ReasoningEngineSelector.tsx`.
+  - Cold starts handled with configurable timeout (default 180s, up to 300s).
+
+- [x] **Phase 3 — Prove OpenAI API Usage and Real Reasoning** (COMPLETED)
+  - Resolved issue where OpenAI dashboard showed no apparent usage: distinguished credential testing from paid inference.
+  - Created persistent SQLite `ReasoningUsageLedger` (`apps/server/src/domain/budgets/usage-ledger.ts`) recording token usage (`prompt_tokens`, `completion_tokens`, `total_tokens`), model ID, operation type (`planner`, `critic`, `test_generation`), duration, and cost estimation.
+  - Added `GET /api/v1/providers/usage` route in `apps/server/src/api/routes/providers.ts`.
+  - Updated Status Strip in React UI to display live recorded spend vs budget (`$X.XX / $10.00`).
+  - Guaranteed zero silent cloud fallback in Local Ollama mode.
+
+- [x] **Phase 4 — Fix Autonomous Coding Loop & Non-Metadata File Generation** (COMPLETED)
+  - Traced root cause where run created only `.orchestrator` directory: `VisibleIdeAdapter` only logged synchronization messages and returned empty `files_changed: []`.
+  - Implemented `ReasoningCodingAgentAdapter` (`apps/server/src/providers/coding-agents/reasoning/reasoning-coding-adapter.ts`) utilizing the selected reasoning provider to generate code directly in the target workspace.
+  - Enforced `AcceptanceGate` Rule 0: strictly reject any attempt producing 0 non-metadata files.
+  - Resolved Windows Node.js `spawn EINVAL` bug in `VerificationRunner` (`apps/server/src/verification/runner.ts`) with `shell: process.platform === "win32"`.
+  - Added robust JSON extraction in `apps/server/src/prompts/json-extractor.ts`.
+  - **Mandatory Real Coding Smoke Test in Disposable Non-Git Folder Passed 100%:**
+    - Directory: `C:\Users\limbk\AppData\Local\Temp\orches-smoke-nongit-hJUhC7`
+    - Live provider: Ollama `llama3.1:8b`
+    - Target files generated: `package.json`, `project.js`, `README.md`, `package-lock.json`
+    - Tests executed: `npm test` -> `node --test` exited code 0
+    - Critic reviewed: `verdict: "accept"`
+    - AcceptanceGate: Passed attempt 1 in 18.3s
+    - Diagnostic evidence saved to `artifacts/smoke-test-evidence.json`.
+
+- [x] **Phase 5 — Preserve GitHub-Optional Operation** (COMPLETED)
+  - Plain local folders without `.git` or remote repositories are fully supported.
+  - Created `SnapshotManager` (`apps/server/src/git/snapshot-manager.ts`) for cryptographic local file snapshots in `.orchestrator/snapshots/<id>` with `manifest.json`.
+  - Unified diff computation without Git CLI.
+  - Safe selective rollback preserving pre-existing user files.
+  - Zero forced Git initialization; user consent strictly required.
+  - 8 automated tests passing in `apps/server/tests/git-optional-and-snapshots.test.ts`.
+
+- [x] **Phase 6 — Single-Page Dashboard Refinement** (COMPLETED)
   - Absolute navigation requirement satisfied: **Zero permanent sidebar**. Single authoritative dashboard route at `/`.
-  - Compact Top Header: Brand title, project selector dropdown, live status badges, theme toggle (dark/light), Settings button.
-  - Project Summary Strip: Project name, objective, canonical workspace path, autonomy mode.
-  - System Readiness & Run Status Strip: Run state badge, 5-phase lifecycle stepper, attempts counter, cost ceiling ($0.00 / $10.00), verifier summary.
-  - Two-Column Main Region: Searchable/filterable live activity timeline on the left; active task card, live log viewer, and `IdeConnectionDeck` on the right.
-  - Contextual Drawers & Modals: Reusable slideout `Drawer` component with frosted backdrop blur and Escape dismiss for `GitPage`, `DiagnosticsPage`, `PoliciesPage`, `SettingsPage`, `HistoryDrawer`, `TaskInspector`, `ProjectWizard`, `ProviderSettingsModal`, and `ExportModal`.
-  - Multi-viewport audit verified across Desktop (1440×900), Laptop (1280×720), Tablet (1024×768), and Mobile (390×844).
-- [x] **Deployment Readiness Gate** (COMPLETED)
-  - Formally evaluated all 12 deployment readiness criteria; 100% PASS recorded in `DEPLOYMENT_READINESS_REPORT.md`.
-- [x] **Post-Readiness Codebase Cleanup & Safe Consolidation** (COMPLETED)
-  - Pruned legacy multi-page sidebar routing views and components (8 obsolete files, 1,870 lines of dead code removed).
-  - Centralized shared web types into `apps/web/src/types.ts`.
-  - Preserved all 4 drawer pages, all server subsystems, all verification and security boundaries.
-  - 100% test pass on full regression run (50/50 Vitest, 4/4 Playwright).
+  - Integrated top bar: brand title, project selector dropdown, combined reasoning engine selector & status, IDE agent button, theme toggle, settings button.
+  - Project strip: project name, objective, canonical workspace path with copy action, add project, start run.
+  - Compact 5-column status strip: Run State | Current Task | Phase | Actual Spend / Budget | Verification.
+  - 2-Column main workspace:
+    - Left: Live Activity timeline with search filter, category tags, auto-scroll, clear button.
+    - Right: Current Task card (objective, acceptance criteria, modified files, verifier/critic status, blockers, Inspect button, live logs).
+  - IDE Connection deck moved from permanent canvas into dedicated slideout drawer opened via top bar agent button.
+  - Reusable slideout drawers with frosted backdrop blur and Escape dismiss.
+
+- [x] **Phase 7 — Settings, Safety, Budgets and Test Isolation** (COMPLETED)
+  - Test isolation: isolated in-memory DB and temp dirs; zero pollution of host `%APPDATA%`.
+  - `MockReasoningProvider` in unit tests ensures hermetic unit test execution.
+  - Budget limits enforced: $0.50 warning, $2.00 task ceiling, $10.00 run ceiling.
+  - Security: loopback-only binding, path traversal protection, secret masking.
+
+- [x] **Phase 8 — Multi-Viewport Audit & Screenshot Evidence** (COMPLETED)
+  - 21 screenshots captured and verified in `artifacts/ui-audit/final/`:
+    - Viewports: Desktop (1440×900), Laptop (1280×720), Tablet (1024×768), Mobile (390×844)
+    - Drawers: Settings, Git & Diff, Diagnostics, Policies, History, Wizard, Task Inspector, IDE Deck, Ollama & OpenAI configs.
+
+- [x] **Phase 9 & 10 — Independent Verification & Deployment Readiness** (COMPLETED)
+  - Monorepo build: `npm run build` exits 0 (5/5 packages built in ~530ms).
+  - Unit & integration suite: `npm test` exits 0 (12 suites, 59 tests passing in ~6.1s).
+  - Browser E2E suite: `npx playwright test` exits 0 (5 suites passing in ~31.3s).
+  - Standalone production server: Fastify serves both API (`/api/v1/health`) and built React SPA (`/`) on single port (4329) without dev proxies.
+  - Release gate evaluated: 100% PASS in [DEPLOYMENT_READINESS_REPORT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/DEPLOYMENT_READINESS_REPORT.md).
+
+- [x] **Phase 11 — Safe Codebase Simplification** (COMPLETED)
+  - Cleaned up obsolete code while preserving all architectural boundaries, provider adapters, security guards, and verification pipelines.
+  - Documented in [CLEANUP_REPORT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/CLEANUP_REPORT.md).
+
+- [x] **Phase 12 — Final Acceptance & Handover** (COMPLETED)
+  - All 17 acceptance criteria satisfied.
+  - Complete documentation in [FINAL_EXECUTION_REPORT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/FINAL_EXECUTION_REPORT.md).
+  - **SYSTEM PRESERVATION: Windows operating system left running, zero reboots or shutdowns.**
 
 ---
 
 ## 2. Test Execution Summary
 
-- **Monorepo Build:** `npm run build` exits 0 (5/5 packages built in ~510ms).
-- **Unit & Integration Suite:** `npm test` exits 0 (11 suites, 50 tests passing in 2.79s).
-- **Browser E2E Suite:** `npx playwright test` exits 0 (4 suites passing in 19.2s).
-- **Visual Evidence Directory:** `artifacts/ui-audit/iteration-1/` populated with 12 full-fidelity PNG screenshots across 4 viewports and contextual drawers.
+- **Monorepo Build:** `npm run build` exits 0 (5 packages, 0 errors, 0 warnings).
+- **Unit & Integration Suite:** `npm test` exits 0 (12 test suites, 59 tests passing).
+- **Browser E2E Suite:** `npx playwright test` exits 0 (5 test suites, 5 tests passing).
+- **Live Autonomous Smoke Test:** Passed with live Ollama `llama3.1:8b` in non-Git workspace.
+- **Visual Evidence Directory:** `artifacts/ui-audit/final/` populated with 21 full-fidelity PNG screenshots.

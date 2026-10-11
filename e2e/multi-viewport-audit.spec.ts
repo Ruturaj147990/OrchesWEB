@@ -3,8 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 
 const auditDir = path.resolve(process.cwd(), "artifacts", "ui-audit", "iteration-1");
-if (!fs.existsSync(auditDir)) {
-  fs.mkdirSync(auditDir, { recursive: true });
+const finalDir = path.resolve(process.cwd(), "artifacts", "ui-audit", "final");
+if (!fs.existsSync(auditDir)) fs.mkdirSync(auditDir, { recursive: true });
+if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+
+async function saveScreenshot(page: any, filename: string) {
+  const p1 = path.join(auditDir, filename);
+  const p2 = path.join(finalDir, filename);
+  await page.screenshot({ path: p1, fullPage: true });
+  await page.screenshot({ path: p2, fullPage: true });
+  expect(fs.existsSync(p1)).toBe(true);
+  expect(fs.existsSync(p2)).toBe(true);
 }
 
 test.describe("Multi-Viewport Responsive and Contextual Drawer UI Audit", () => {
@@ -24,9 +33,7 @@ test.describe("Multi-Viewport Responsive and Contextual Drawer UI Audit", () => 
       await page.goto("/");
       await page.waitForTimeout(600);
 
-      const shotPath = path.join(auditDir, vp.name);
-      await page.screenshot({ path: shotPath, fullPage: true });
-      expect(fs.existsSync(shotPath)).toBe(true);
+      await saveScreenshot(page, vp.name);
       await context.close();
     }
   });
@@ -39,72 +46,56 @@ test.describe("Multi-Viewport Responsive and Contextual Drawer UI Audit", () => 
     // 1. Settings Drawer
     await page.locator("button:has-text('⚙️ Settings')").click();
     await page.waitForTimeout(400);
-    const settingsShot = path.join(auditDir, "settings-drawer.png");
-    await page.screenshot({ path: settingsShot, fullPage: true });
-    expect(fs.existsSync(settingsShot)).toBe(true);
+    await saveScreenshot(page, "settings-drawer.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 2. Git & Diff Drawer
     await page.locator("button:has-text('🌿 Git & Diff')").click();
     await page.waitForTimeout(400);
-    const gitShot = path.join(auditDir, "git-diff-drawer.png");
-    await page.screenshot({ path: gitShot, fullPage: true });
-    expect(fs.existsSync(gitShot)).toBe(true);
+    await saveScreenshot(page, "git-diff-drawer.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 3. Diagnostics Drawer
     await page.locator("button:has-text('🩺 Diagnostics')").click();
     await page.waitForTimeout(400);
-    const diagShot = path.join(auditDir, "diagnostics-drawer.png");
-    await page.screenshot({ path: diagShot, fullPage: true });
-    expect(fs.existsSync(diagShot)).toBe(true);
+    await saveScreenshot(page, "diagnostics-drawer.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 4. Policies Drawer
     await page.locator("button:has-text('🛡️ Policies')").click();
     await page.waitForTimeout(400);
-    const polShot = path.join(auditDir, "policies-drawer.png");
-    await page.screenshot({ path: polShot, fullPage: true });
-    expect(fs.existsSync(polShot)).toBe(true);
+    await saveScreenshot(page, "policies-drawer.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 5. History Drawer
     await page.locator("button:has-text('📜 History')").click();
     await page.waitForTimeout(400);
-    const histShot = path.join(auditDir, "history-drawer.png");
-    await page.screenshot({ path: histShot, fullPage: true });
-    expect(fs.existsSync(histShot)).toBe(true);
+    await saveScreenshot(page, "history-drawer.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 6. Project Wizard Modal
     await page.locator("button:has-text('+ Add')").click();
     await page.waitForTimeout(400);
-    const wizardShot = path.join(auditDir, "new-project-wizard.png");
-    await page.screenshot({ path: wizardShot, fullPage: true });
-    expect(fs.existsSync(wizardShot)).toBe(true);
+    await saveScreenshot(page, "new-project-wizard.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 7. Task Inspector Modal
     await page.locator("#btn-inspect-task").click();
     await page.waitForTimeout(400);
-    const taskShot = path.join(auditDir, "task-inspector-modal.png");
-    await page.screenshot({ path: taskShot, fullPage: true });
-    expect(fs.existsSync(taskShot)).toBe(true);
+    await saveScreenshot(page, "task-inspector-modal.png");
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
 
     // 8. Export Modal
     await page.locator("button:has-text('📦 Export')").click();
     await page.waitForTimeout(400);
-    const exportShot = path.join(auditDir, "export-modal.png");
-    await page.screenshot({ path: exportShot, fullPage: true });
-    expect(fs.existsSync(exportShot)).toBe(true);
+    await saveScreenshot(page, "export-modal.png");
     await page.keyboard.press("Escape");
   });
 });

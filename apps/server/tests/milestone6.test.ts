@@ -13,7 +13,7 @@ import { PlannerService } from "../src/orchestrator/planner.js";
 import { CriticService } from "../src/orchestrator/critic.js";
 import { BudgetService } from "../src/domain/budgets/budget-service.js";
 import { ContextBuilder } from "../src/prompts/context-builder.js";
-import { OpenAICompatibleLocalProvider } from "../src/providers/reasoning/openai-compatible/local-provider.js";
+import { MockReasoningProvider } from "../src/providers/reasoning/mock/mock-provider.js";
 import { MockAgentAdapter } from "../src/providers/coding-agents/mock/mock-adapter.js";
 import { config } from "../src/config/env.js";
 
@@ -148,7 +148,7 @@ describe("Milestone 6 — Human Direction, Operator Inbox, and Visual Verificati
       VALUES ('run-interrupt', 'proj-interrupt', 'running', 0, datetime('now'))
     `).run();
 
-    const plannerMock = new OpenAICompatibleLocalProvider();
+    const plannerMock = new MockReasoningProvider();
     const contextBuilder = new ContextBuilder(testWorkspace);
     const planner = new PlannerService(plannerMock, contextBuilder);
     const critic = new CriticService(plannerMock, contextBuilder);

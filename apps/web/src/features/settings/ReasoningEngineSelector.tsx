@@ -61,24 +61,77 @@ export function ReasoningEngineSelector({
       if (data.localConfig?.model) setLocalModel(data.localConfig.model);
       if (data.localConfig?.timeoutMs) setLocalTimeoutMs(data.localConfig.timeoutMs);
 
-      // Probe live status of the active provider
+      // Inspect active health returned from backend
       if (currentId === "openai") {
         if (!data.hasOpenAiKey) {
           setStatusText("OpenAI API · Key required");
           setStatusState("warning");
+        } else if (data.activeHealth?.ok) {
+          setStatusText(`OpenAI API · Connected (${data.activeHealth.latencyMs || 0}ms)`);
+          setStatusState("connected");
+        } else if (data.activeHealth && !data.activeHealth.ok) {
+          setStatusText("OpenAI API · Auth failed");
+          setStatusState("error");
         } else {
           setStatusText("OpenAI API · Key configured");
           setStatusState("connected");
         }
       } else {
-        // Probe Ollama liveness
-        probeOllama(data.localConfig?.baseUrl, data.localConfig?.model);
+        if (data.activeHealth) {
+          applyOllamaHealth(data.activeHealth, data.localConfig?.model || localModel);
+        } else {
+          probeOllama(data.localConfig?.baseUrl, data.localConfig?.model);
+        }
       }
     } catch (err) {
       setStatusText("Reasoning · Disconnected");
       setStatusState("error");
     }
   }, []);
+
+  const applyOllamaHealth = (data: any, targetModel: string) => {
+    if (data.ok) {
+      const models: string[] = data.discoveredModels || [];
+      setDiscoveredModels(models);
+
+      const target = targetModel || localModel;
+      const modelPresent = models.length === 0 || models.some(
+        (m) => m === target || m.startsWith(`${target}:`) || `${m}:latest` === target
+      );
+
+      if (modelPresent) {
+        setStatusText(`Local Ollama · Ready (${data.latencyMs}ms)`);
+        setStatusState("connected");
+        setOllamaNotice({
+          ok: true,
+          message: `✓ Ollama server online${data.serverVersion ? ` (v${data.serverVersion})` : ""} (${data.latencyMs}ms). Model '${target}' is installed and ready for reasoning.`,
+        });
+      } else {
+        setStatusText("Local Ollama · Model unavailable");
+        setStatusState("warning");
+        setOllamaNotice({
+          ok: false,
+          message: `⚠ Ollama online, but model '${target}' is not installed (${models.join(", ")}). Run '${data.installCommand || `ollama pull ${target}`}'.`,
+        });
+      }
+    } else if (data.status === "model_unavailable") {
+      const models: string[] = data.discoveredModels || [];
+      setDiscoveredModels(models);
+      setStatusText("Local Ollama · Model unavailable");
+      setStatusState("warning");
+      setOllamaNotice({
+        ok: false,
+        message: `⚠ ${data.message || `Model '${targetModel}' not in installed list.`}`,
+      });
+    } else {
+      setStatusText("Local Ollama · Server unreachable");
+      setStatusState("error");
+      setOllamaNotice({
+        ok: false,
+        message: `✕ ${data.message || "Ollama server unreachable at " + localBaseUrl}`,
+      });
+    }
+  };
 
   const probeOllama = async (url?: string, model?: string) => {
     setStatusText("Local Ollama · Testing connection");
@@ -96,38 +149,58 @@ export function ReasoningEngineSelector({
       });
       const data = await res.json();
       setOllamaProbing(false);
+      applyOllamaHealth(data, model || localModel);
+    } catch (err: unknown) {
+      setOllamaProbing(false);
+      setStatusText("Local Ollama · Server unreachable");
+      setStatusState("error");
+      setOllamaNotice({ ok: false, message: `✕ Network error: ${(err as Error).message}` });
+    }
+  };
 
-      if (data.ok) {
-        const models: string[] = data.discoveredModels || [];
-        setDiscoveredModels(models);
+  const [testGenerating, setTestGenerating] = useState<boolean>(false);
 
-        const target = model || localModel;
-        const modelPresent = models.length === 0 || models.some(
-          (m) => m === target || m.startsWith(`${target}:`) || `${m}:latest` === target
-        );
-
-        if (modelPresent) {
-          setStatusText(`Local Ollama · Connected (${data.latencyMs}ms)`);
-          setStatusState("connected");
-          setOllamaNotice({ ok: true, message: `✓ Ollama server online (${data.latencyMs}ms). Model '${target}' ready.` });
+  const handleTestGeneration = async (targetId: ProviderId) => {
+    setTestGenerating(true);
+    try {
+      const res = await fetch("/api/v1/providers/reasoning/test-generation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          providerId: targetId,
+          model: targetId === "openai" ? openAiModel : localModel,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        if (targetId === "openai") {
+          setOpenAiNotice({
+            ok: true,
+            message: `✓ Live inference verified (${data.durationMs}ms): "${data.output}" [Usage: ${data.usage?.totalTokens || 0} tokens]`,
+          });
         } else {
-          setStatusText("Local Ollama · Model unavailable");
-          setStatusState("warning");
           setOllamaNotice({
-            ok: false,
-            message: `⚠ Ollama running, but model '${target}' is not in installed list: [${models.join(", ")}].`,
+            ok: true,
+            message: `✓ Live local inference verified (${data.durationMs}ms): "${data.output}" [Usage: ${data.usage?.totalTokens || 0} tokens]`,
           });
         }
       } else {
-        setStatusText("Local Ollama · Server not running");
-        setStatusState("error");
-        setOllamaNotice({ ok: false, message: `✕ ${data.message || "Could not connect to Ollama server."}` });
+        const errMsg = data.error || "Model test generation failed.";
+        if (targetId === "openai") {
+          setOpenAiNotice({ ok: false, message: `✕ Inference failed: ${errMsg}` });
+        } else {
+          setOllamaNotice({ ok: false, message: `✕ Inference failed: ${errMsg}` });
+        }
       }
     } catch (err: unknown) {
-      setOllamaProbing(false);
-      setStatusText("Local Ollama · Server not running");
-      setStatusState("error");
-      setOllamaNotice({ ok: false, message: `✕ Network error: ${(err as Error).message}` });
+      const errMsg = (err as Error).message;
+      if (targetId === "openai") {
+        setOpenAiNotice({ ok: false, message: `✕ Network error: ${errMsg}` });
+      } else {
+        setOllamaNotice({ ok: false, message: `✕ Network error: ${errMsg}` });
+      }
+    } finally {
+      setTestGenerating(false);
     }
   };
 
@@ -431,14 +504,23 @@ export function ReasoningEngineSelector({
                         </select>
                       </div>
 
-                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
                         <button
                           type="button"
                           className="btn btn-sm btn-secondary"
                           onClick={handleVerifyOpenAiKey}
                           disabled={openAiVerifying || !inputApiKey.trim()}
                         >
-                          {openAiVerifying ? "Testing..." : "⚡ Quick Test Key"}
+                          {openAiVerifying ? "Validating..." : "🔍 Validate Credential"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline"
+                          onClick={() => handleTestGeneration("openai")}
+                          disabled={testGenerating || (!hasOpenAiKey && !inputApiKey.trim())}
+                          title="Makes one minimal live model inference request and records usage"
+                        >
+                          {testGenerating ? "Generating..." : "⚡ Send Test Generation"}
                         </button>
                       </div>
 
@@ -541,14 +623,23 @@ export function ReasoningEngineSelector({
                         </span>
                       </div>
 
-                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
                         <button
                           type="button"
                           className="btn btn-sm btn-secondary"
                           onClick={() => probeOllama(localBaseUrl, localModel)}
                           disabled={ollamaProbing}
                         >
-                          {ollamaProbing ? "Probing..." : "🔍 Test Ollama Connection"}
+                          {ollamaProbing ? "Probing..." : "🔍 Test Connection"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline"
+                          onClick={() => handleTestGeneration("openai-compatible-local")}
+                          disabled={testGenerating}
+                          title="Makes one minimal live model inference request to Ollama and measures latency/tokens"
+                        >
+                          {testGenerating ? "Generating..." : "⚡ Send Test Generation"}
                         </button>
                       </div>
 

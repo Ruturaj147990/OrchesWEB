@@ -70,5 +70,26 @@ export async function buildApp(dbPath?: string): Promise<FastifyInstance> {
   await app.register(gitRoutes, { prefix: "/api/v1" });
   await app.register(diagnosticsRoutes, { prefix: "/api/v1" });
 
+  // Production Frontend Serving: Deliver production SPA bundle at /
+  const candidateWebDists = [
+    path.resolve(process.cwd(), "apps/web/dist"),
+    path.resolve(process.cwd(), "../web/dist"),
+  ];
+  const webDist = candidateWebDists.find((d) => fs.existsSync(d));
+  if (webDist) {
+    await app.register(fastifyStatic, {
+      root: webDist,
+      prefix: "/",
+      decorateReply: false,
+    });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith("/api/")) {
+        reply.code(404).send({ error: "API route not found" });
+      } else {
+        reply.sendFile("index.html");
+      }
+    });
+  }
+
   return app;
 }

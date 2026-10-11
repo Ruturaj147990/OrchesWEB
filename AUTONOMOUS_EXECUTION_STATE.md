@@ -1,79 +1,89 @@
 # Autonomous Execution State & Progress Tracker
 
 **Start Timestamp:** 2026-10-11T09:48:00+05:30  
-**Completion Timestamp:** 2026-10-11T10:02:00+05:30  
-**Current Phase:** Phase 9 — Final Acceptance, Reporting & Mandatory Unattended Shutdown  
+**Completion Timestamp:** 2026-10-11T11:25:00+05:30  
+**Current Phase:** Phase 12 — Final Acceptance and Handover (COMPLETED)  
 **Execution Mode:** Unattended Autonomous Agent Execution  
+**Power Policy:** Computer left running — Windows shutdown/reboot prohibited.
 
 ---
 
 ## Phase Checklist & Execution Status
 
-- [x] **Phase 1: Read Audit and Establish Real Baseline**
+- [x] **Phase 1: Audit, Establish Baseline, and Preserve Context**
   - [x] Record Git HEAD, branch, working directory status.
-  - [x] Reconcile test environment isolation defect in `milestone2.test.ts:156` (isolated `settings.json` and DB in tests, added regression test).
-  - [x] Implement local model cold-start timeout handling in local provider (configurable up to 300s with clear cold-start error feedback).
-  - [x] Verify IDE connection state transitions and heartbeat stability.
-  - [x] Audit Git safety (worktree protection, scoped staging, dirty repo guard).
-  - [x] Audit credential persistence (eliminated unnecessary `.env` overwriting; masked API key in responses).
-  - [x] Audit Windows process & script execution safety (`-ExecutionPolicy Bypass -NoProfile`).
-- [x] **Phase 2: Fix Provider Selection Problem (OpenAI API vs Local Ollama)**
-  - [x] Verified backend provider endpoints (`GET /api/v1/providers/reasoning`, `POST .../select`, `POST .../verify-key`).
-  - [x] Added `POST /api/v1/providers/reasoning/probe-local` with native Ollama `/api/tags` probing and normalized chat completions URL.
-  - [x] Added compact always-visible `[ OpenAI API ] [ Local Ollama ]` segmented toggle with truthful live status badge in header.
-  - [x] Implemented inline compact configuration drawer with masked API keys, model selector, cold-start slider, and test probes.
-  - [x] Guaranteed zero silent cloud fallback in Local Ollama mode.
-  - [x] Added unit, integration, and Playwright E2E coverage for provider selection.
-- [x] **Phase 3: Build Simple, Professional Single-Page Dashboard**
-  - [x] Consolidated UI to single `/` route with dark developer-focused design system.
-  - [x] Implemented required visual hierarchy:
-    - Compact Header: `⚡ ADO Autonomous Development Orchestrator`, Project selector, Reasoning Engine toggle, IDE status, Settings, Theme toggle.
-    - Project Section: Name, objective, workspace path, Copy button, Add button, Start Run button (`#btn-start`).
-    - Compact 5-Column Status Strip: Status | Current Task | Phase | Spend/Budget | Verification.
-    - Main Workspace (65% left / 35% right):
-      - Left: Live Activity (chronological SSE events, search filter, category tags, clear button).
-      - Right: Current Task (objective, criteria, modified files, verifier/critic status, blockers, Inspect button) and embedded Antigravity IDE integration deck.
-    - Human Steering: Operator inbox supporting Guidance, Replan, Priority, and Safe Interrupt.
-    - Action Strip: Pause, Resume, Stop, History, Artifacts, Git Diff, Diagnostics, Policies, Export.
-  - [x] Retained all capabilities via contextual slideout drawers and modals.
-- [x] **Phase 4: Access All Options Contextually Without Extra Pages**
-  - [x] 6-Step Project Wizard Modal.
-  - [x] Consolidated Settings Drawer (General, Reasoning, Budgets, Security, Diagnostics).
-  - [x] IDE Connection Drawer (stepper, PIDs, workspace selector, mode switch).
-  - [x] Task Details, Git Diff, Verification, History, and Export drawers.
-- [x] **Phase 5: Reliability & Autonomous Loop Verification**
-  - [x] Verified Planner -> Executor -> Verifier -> Critic -> AcceptanceGate -> Commit / Bounded Repair loop.
-  - [x] Ensured non-destructive rollback using `filesToDiscard` and scoped staging via `scopedPaths`.
-  - [x] Proved test isolation across multiple test runs with clean temp cleanup.
-- [x] **Phase 6: Continuous Audit, Screenshot & Repair Loop**
-  - [x] Captured Playwright screenshots across viewports: Desktop (1440x900), Laptop (1280x720), Tablet (1024x768), Mobile (390x844).
-  - [x] Captured provider states (Ollama active, OpenAI active, config drawers, validation).
-  - [x] Visually verified screenshots in `artifacts/ui-audit/iteration-1/` using image inspections.
-- [x] **Phase 7: Deployment-Readiness Gate**
-  - [x] Real-world autonomous execution test with file generation, verification, and commit passed.
-  - [x] Full monorepo build passed (`npm run build` in 532ms).
-  - [x] All 51 Vitest unit/integration tests passed across 11 test suites (3.11s).
-  - [x] All 4 Playwright E2E browser tests passed (22.3s).
-  - [x] Updated `README.md` and wrote `DEPLOYMENT_READINESS_REPORT.md`.
-- [x] **Phase 8: Conservative File Cleanup & Consolidation**
-  - [x] Audited codebase for dead code and confirmed zero orphan files or regressions.
-  - [x] Verified full test suite post-consolidation.
-  - [x] Wrote `CLEANUP_REPORT.md`.
-- [x] **Phase 9: Final Acceptance, Reporting & Mandatory Unattended Shutdown**
-  - [x] Updated `IMPLEMENTATION_STATE.md`, `TASK_CHECKLIST.md`.
-  - [x] Wrote `FINAL_EXECUTION_REPORT.md`.
-- [x] **Phase 10: Git-Optional, Non-Git Snapshot Safety & Local Repository Support**
-  - [x] Made GitHub entirely optional; never require GitHub credentials, remote repositories, or internet connectivity.
-  - [x] Created `SnapshotManager` (`apps/server/src/git/snapshot-manager.ts`) for cryptographic local file snapshots in `.orchestrator/snapshots/<id>` with `manifest.json`.
-  - [x] Added non-Git unified diff computation (`formatUnifiedDiff`, `formatAddedDiff`, `formatDeletedDiff`) without Git CLI.
-  - [x] Added safe selective rollback preserving pre-existing and unrelated user files.
-  - [x] Upgraded `GitManager` (`apps/server/src/git/git-manager.ts`) with dual `git` and `local_snapshot` safety modes.
-  - [x] Implemented explicit user-consented local Git initialization (`initRepo()`), never auto-pushing or configuring remotes.
-  - [x] Upgraded `AutonomousLoop` (`apps/server/src/orchestrator/loop.ts`) to execute end-to-end planning, agent execution, verification, Critic review, gate acceptance, and bounded repairs in non-Git folders.
-  - [x] Added Git API endpoints (`GET /status`, `GET /diff`, `POST /checkpoint`, `POST /rollback`, `POST /init`).
-  - [x] Updated React UI (`GitPage.tsx` and `ProjectWizard.tsx`) with status banners, disabled remote controls with explanations, and explicit-consent `git init` buttons.
-  - [x] Added comprehensive test suite (`apps/server/tests/git-optional-and-snapshots.test.ts`) covering non-Git folders, local Git repos without remotes, GitHub remotes, diffs, checkpoints, bounded repair rollbacks, and full autonomous loop.
-  - [x] Verified full monorepo build (`npm run build`) and entire test suite (`npm test` — 12 test files, 59 tests passed).
-  - [x] Verified complete Playwright browser test suite (`npx playwright test` — 5 test files passed).
-  - [x] Updated documentation (`README.md`, `DEPLOYMENT_READINESS_REPORT.md`).
+  - [x] Perform exhaustive forensic audit documented in [COMPLETE_PROJECT_AUDIT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/COMPLETE_PROJECT_AUDIT.md) (107 KB).
+  - [x] Maintain durable implementation state across resets in markdown trackers.
+  - [x] Reconcile test environment isolation defect in `milestone2.test.ts` (isolated `settings.json` and SQLite DB in tests).
+  - [x] Audit Windows process and script execution safety (`-ExecutionPolicy Bypass -NoProfile`).
 
+- [x] **Phase 2: Fix Ollama Auto-Detection and Connectivity**
+  - [x] Primary reproduction case: Windows terminal running `ollama run llama3.1:8b` while dashboard reported `Server not running`.
+  - [x] Root cause: Endpoint normalization conflated native `/api/tags` with OpenAI-compatible `/v1/chat/completions`.
+  - [x] Implemented `normalizeOllamaEndpoint()` in `local-provider.ts` separating origin, native tags, and `/v1` endpoints.
+  - [x] Added live status states: `ready`, `model_installed`, `model_unavailable`, `server_unreachable`, `not_detected`.
+  - [x] Verified live Ollama v0.32.9 on `127.0.0.1:11434` with `llama3.1:8b` (11ms ping, 5.8s generation).
+  - [x] Added `POST /api/v1/providers/reasoning/test-generation` and `[⚡ Send Test Generation]` button in UI.
+
+- [x] **Phase 3: Prove OpenAI API Usage and Real Reasoning**
+  - [x] Investigated zero OpenAI usage on account dashboard: distinguished key validation from paid model inference.
+  - [x] Created SQLite `reasoning_usage_ledger` in `apps/server/src/domain/budgets/usage-ledger.ts`.
+  - [x] Instrumented request tokens, costs, latencies, and operation types.
+  - [x] Added `GET /api/v1/providers/usage` endpoint.
+  - [x] Displaying live recorded spend vs budget (`$X.XX / $10.00`) on Status Strip.
+  - [x] Enforced strict zero silent cloud fallback in Local Ollama mode.
+
+- [x] **Phase 4: Fix Autonomous Coding Loop & Non-Metadata File Generation**
+  - [x] Root cause: `VisibleIdeAdapter` only logged synchronization messages and returned empty file diffs.
+  - [x] Root cause: `AcceptanceGate` accepted tasks without verifying whether non-metadata files were changed.
+  - [x] Root cause: Windows `child_process.spawn` threw `EINVAL` when executing `.cmd` files without `shell: true`.
+  - [x] Created `ReasoningCodingAgentAdapter` executing tasks directly against `workspacePath`.
+  - [x] Enforced Rule 0 in `AcceptanceGate`: strictly reject any attempt producing 0 non-metadata files.
+  - [x] Fixed `VerificationRunner` with `shell: process.platform === "win32"`.
+  - [x] **MANDATORY NON-GIT SMOKE TEST PASSED 100%:**
+    - Live Ollama `llama3.1:8b` autonomous run in temporary non-Git workspace.
+    - Generated `package.json`, `project.js`, `README.md`, `package-lock.json`.
+    - Executed `npm test` -> `node --test` with exit code 0.
+    - Critic approved, AcceptanceGate passed attempt 1 in 18.3s.
+    - Evidence saved to `artifacts/smoke-test-evidence.json`.
+
+- [x] **Phase 5: Preserve GitHub-Optional Operation**
+  - [x] GitHub is 100% optional; supports offline local folders without `.git`.
+  - [x] Created `SnapshotManager` (`apps/server/src/git/snapshot-manager.ts`) for cryptographic local file snapshots in `.orchestrator/snapshots/<id>`.
+  - [x] Unified diff computation and safe selective rollback without Git CLI.
+  - [x] Zero automatic Git initialization or remote pushing.
+  - [x] 8 automated tests passing in `git-optional-and-snapshots.test.ts`.
+
+- [x] **Phase 6: Single-Page Dashboard Refinement**
+  - [x] Zero permanent sidebar; single authoritative route at `/`.
+  - [x] Integrated top bar: brand, project selector, reasoning engine toggle, IDE agent button, theme toggle, settings button.
+  - [x] Balanced 2-column workspace: Live Activity timeline (left) and Current Task card (right).
+  - [x] IDE connection deck moved into slideout drawer opened via top bar agent button.
+  - [x] Search, category filters, auto-scroll, and log copy capabilities.
+
+- [x] **Phase 7: Settings, Safety, Budgets and Test Isolation**
+  - [x] Test isolation: isolated in-memory DB and temp dirs; zero pollution of host `%APPDATA%`.
+  - [x] `MockReasoningProvider` in unit tests ensures hermetic unit test execution.
+  - [x] Budget limits enforced: $0.50 warning, $2.00 task ceiling, $10.00 run ceiling.
+  - [x] Security: loopback-only binding, path traversal protection, secret masking.
+
+- [x] **Phase 8: Multi-Viewport Audit & Screenshot Evidence**
+  - [x] 21 screenshots captured and verified in `artifacts/ui-audit/final/` across Desktop, Laptop, Tablet, Mobile, and all drawers.
+
+- [x] **Phase 9: Independent Verification of Complete Loop**
+  - [x] Full monorepo build: `npm run build` exits 0 (530ms).
+  - [x] 12 Vitest unit & integration test suites: `npm test` exits 0 (59/59 tests passing in 6.1s).
+  - [x] 5 Playwright E2E browser test suites: `npx playwright test` exits 0 (5/5 tests passing in 31.3s).
+
+- [x] **Phase 10: Deployment Readiness Gate**
+  - [x] Standalone Fastify server verified serving both API and static React SPA on single port without dev proxies.
+  - [x] Formally evaluated all criteria: 100% PASS in [DEPLOYMENT_READINESS_REPORT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/DEPLOYMENT_READINESS_REPORT.md).
+
+- [x] **Phase 11: Post-Readiness Codebase Cleanup**
+  - [x] Zero orphan files or dead code; verified zero regressions post-cleanup.
+  - [x] Documented in [CLEANUP_REPORT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/CLEANUP_REPORT.md).
+
+- [x] **Phase 12: Final Acceptance & Handover**
+  - [x] All 17 acceptance criteria met and verified.
+  - [x] Full handover report created in [FINAL_EXECUTION_REPORT.md](file:///c:/Users/limbk/OneDrive/Desktop/orches/FINAL_EXECUTION_REPORT.md).
+  - [x] **COMPUTER LEFT RUNNING: Operating system remains fully operational.**

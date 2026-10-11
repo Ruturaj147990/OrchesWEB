@@ -38,11 +38,15 @@ test.describe("Orchestrator Control Dashboard Smoke Test", () => {
 
     // 6. Capture Baseline Screenshot Artifact
     const artifactsDir = path.resolve(process.cwd(), "artifacts");
-    if (!fs.existsSync(artifactsDir)) {
-      fs.mkdirSync(artifactsDir, { recursive: true });
-    }
+    const finalDir = path.resolve(process.cwd(), "artifacts", "ui-audit", "final");
+    if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+    if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+
     const screenshotPath = path.join(artifactsDir, "baseline-dashboard.png");
+    const finalShotPath = path.join(finalDir, "baseline-dashboard.png");
     await page.screenshot({ path: screenshotPath, fullPage: true });
+    await page.screenshot({ path: finalShotPath, fullPage: true });
     expect(fs.existsSync(screenshotPath)).toBe(true);
+    expect(fs.existsSync(finalShotPath)).toBe(true);
   });
 });

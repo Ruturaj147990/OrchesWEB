@@ -394,9 +394,9 @@ describe("Visible Antigravity IDE Integration", () => {
     });
 
     const { ContextBuilder } = await import("../src/prompts/context-builder.js");
-    const { OpenAICompatibleLocalProvider } = await import("../src/providers/reasoning/openai-compatible/local-provider.js");
+    const { MockReasoningProvider } = await import("../src/providers/reasoning/mock/mock-provider.js");
     const contextBuilder = new ContextBuilder(gitWs);
-    const provider = new OpenAICompatibleLocalProvider();
+    const provider = new MockReasoningProvider();
     const planner = new PlannerService(provider, contextBuilder);
     const critic = new CriticService(provider, contextBuilder);
     const budgetService = new BudgetService();
@@ -489,9 +489,9 @@ process.exit(1);
     });
 
     const { ContextBuilder } = await import("../src/prompts/context-builder.js");
-    const { OpenAICompatibleLocalProvider } = await import("../src/providers/reasoning/openai-compatible/local-provider.js");
+    const { MockReasoningProvider } = await import("../src/providers/reasoning/mock/mock-provider.js");
     const contextBuilder = new ContextBuilder(gitWs);
-    const provider = new OpenAICompatibleLocalProvider();
+    const provider = new MockReasoningProvider();
     const planner = new PlannerService(provider, contextBuilder);
     planner.planNextTask = async () => ({
       schema_version: 1,

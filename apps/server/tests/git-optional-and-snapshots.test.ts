@@ -11,7 +11,7 @@ import { PlannerService } from "../src/orchestrator/planner.js";
 import { CriticService } from "../src/orchestrator/critic.js";
 import { BudgetService } from "../src/domain/budgets/budget-service.js";
 import { ContextBuilder } from "../src/prompts/context-builder.js";
-import { OpenAICompatibleLocalProvider } from "../src/providers/reasoning/openai-compatible/local-provider.js";
+import { MockReasoningProvider } from "../src/providers/reasoning/mock/mock-provider.js";
 import { MockAgentAdapter } from "../src/providers/coding-agents/mock/mock-adapter.js";
 import { initDb, closeDb } from "../src/storage/db.js";
 import { runMigrations } from "../src/storage/migrations.js";
@@ -244,10 +244,7 @@ describe("Git-Optional, Non-Git Snapshot Safety & Local Repository Support", () 
       });
 
       const contextBuilder = new ContextBuilder(nonGitWorkspace);
-      const localProvider = new OpenAICompatibleLocalProvider({
-        baseUrl: "http://127.0.0.1:11434",
-        model: "llama3.1:8b",
-      });
+      const localProvider = new MockReasoningProvider();
       const planner = new PlannerService(localProvider, contextBuilder);
       const critic = new CriticService(localProvider, contextBuilder);
       const budgetService = new BudgetService();
@@ -355,10 +352,7 @@ describe("Git-Optional, Non-Git Snapshot Safety & Local Repository Support", () 
       });
 
       const contextBuilder = new ContextBuilder(nonGitWorkspace);
-      const localProvider = new OpenAICompatibleLocalProvider({
-        baseUrl: "http://127.0.0.1:11434",
-        model: "llama3.1:8b",
-      });
+      const localProvider = new MockReasoningProvider();
       const planner = new PlannerService(localProvider, contextBuilder);
       const critic = new CriticService(localProvider, contextBuilder);
       const budgetService = new BudgetService();

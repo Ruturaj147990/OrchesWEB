@@ -23,6 +23,20 @@ export class AcceptanceGate {
     const reasons: string[] = [];
     const blockers: string[] = [];
 
+    // 0. Non-metadata file changes check: A coding task must produce observable project file changes
+    const projectFiles = changedFiles.filter(
+      (f) => !f.startsWith(".orchestrator") && !f.startsWith(".git") && f !== ""
+    );
+    if (projectFiles.length === 0) {
+      blockers.push(
+        "Coding task produced zero project file changes (only metadata or no files modified). A coding task cannot be accepted without actual project source code changes."
+      );
+    } else {
+      reasons.push(
+        `Task produced ${projectFiles.length} project file modification(s): ${projectFiles.slice(0, 3).join(", ")}`
+      );
+    }
+
     // 1. Mandatory verification checks must pass
     const verificationViolations = this.policyEngine.evaluateVerificationPolicy(verificationResults);
     if (verificationViolations.length > 0) {

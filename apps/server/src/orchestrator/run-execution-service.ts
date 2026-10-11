@@ -15,6 +15,9 @@ import { AntigravityAdapter } from "../providers/coding-agents/antigravity/antig
 import { MockAgentAdapter } from "../providers/coding-agents/mock/mock-adapter.js";
 import { CodingAgentAdapter } from "../providers/coding-agents/adapter.js";
 
+import { ReasoningCodingAgentAdapter } from "../providers/coding-agents/reasoning/reasoning-coding-adapter.js";
+import { SettingsManager } from "../platform/settings-manager.js";
+
 export class RunExecutionService {
   private activeJobs = new Map<string, boolean>();
 
@@ -45,26 +48,38 @@ export class RunExecutionService {
         const bridge = getSharedIdeBridge();
         const ideState = bridge.getState();
 
+        // 1. Resolve active reasoning provider from persisted settings
+        const persisted = SettingsManager.loadSettings();
+        const activeProviderId = persisted.defaultProviderId || reasoningRegistry.getDefaultId();
+        const activeProvider = reasoningRegistry.get(activeProviderId) || reasoningRegistry.getDefault();
+
+        // 2. Select appropriate coding agent adapter
         let adapter: CodingAgentAdapter;
         if (process.env.NODE_ENV === "test") {
           adapter = new MockAgentAdapter();
-        } else if (ideState.activeMode === "visible_ide") {
+        } else if (ideState.activeMode === "headless_cli") {
+          const cliAdapter = new AntigravityAdapter();
+          const detection = await cliAdapter.detectInstallation();
+          if (detection.installed) {
+            adapter = cliAdapter;
+          } else {
+            adapter = new ReasoningCodingAgentAdapter(activeProvider);
+          }
+        } else if (ideState.activeMode === "visible_ide" && ideState.status === "ready") {
           adapter = new VisibleIdeAdapter(bridge);
         } else {
-          adapter = new AntigravityAdapter();
+          // Default autonomous coding execution: uses active reasoning provider
+          adapter = new ReasoningCodingAgentAdapter(activeProvider);
         }
 
         const contextBuilder = new ContextBuilder(project.rootPath);
-        const planner = new PlannerService(
-          reasoningRegistry.getDefault(),
-          contextBuilder
-        );
-        const critic = new CriticService(reasoningRegistry.getDefault(), contextBuilder);
+        const planner = new PlannerService(activeProvider, contextBuilder);
+        const critic = new CriticService(activeProvider, contextBuilder);
         const budget = new BudgetService();
 
         const loop = new AutonomousLoop(this.db, project.rootPath, planner, critic, budget);
 
-        console.log(`[RunExecutionService] Dispatched run ${runId} for project '${project.name}' (${project.rootPath}) [Mode: ${ideState.activeMode}, Adapter: ${adapter.id}]`);
+        console.log(`[RunExecutionService] Dispatched run ${runId} for project '${project.name}' (${project.rootPath}) [Mode: ${ideState.activeMode}, Provider: ${activeProvider.displayName}, Adapter: ${adapter.displayName}]`);
 
         // Execute task step
         const result = await loop.runSingleTask({
@@ -72,7 +87,7 @@ export class RunExecutionService {
           runId,
           workspacePath: project.rootPath,
           agentAdapter: adapter,
-          approvedRoadmapIds: ["ROADMAP-001"],
+          approvedRoadmapIds: ["ROADMAP-001", "rm-001", "ROADMAP-1"],
           ideBridge: bridge,
           allowDirtyWorkspace: options?.allowDirty ?? false,
         });
