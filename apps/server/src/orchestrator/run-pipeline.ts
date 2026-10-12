@@ -242,7 +242,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     const external = !agent.usesReasoningProvider;
     for (let attempt = 1; attempt <= ctx.maxAttempts; attempt++) {
       ensureNotCancelled();
-      if (provider.privacyClass === "cloud") {
+      if (provider.privacyClass === "cloud" && provider.id !== "chatgpt-web") {
         const usage = ReasoningUsageLedger.getShared().getRunUsage(run.id);
         if (usage.costUsd >= CLOUD_RUN_COST_CEILING_USD) {
           const rb = rollbackActive("budget");
@@ -696,25 +696,32 @@ function isProviderOutageOrConfigError(error?: string): boolean {
   return (
     lower.includes("404") ||
     lower.includes("not found") ||
-    lower.includes("econnrefused") ||
+    lower.includes("500") ||
+    lower.includes("503") ||
+    lower.includes("browser") ||
+    lower.includes("login") ||
+    lower.includes("auth") ||
     lower.includes("unreachable") ||
-    lower.includes("401") ||
-    lower.includes("403") ||
-    lower.includes("unauthorized") ||
-    lower.includes("model_unavailable")
+    lower.includes("econnrefused") ||
+    lower.includes("timeout") ||
+    lower.includes("crash") ||
+    lower.includes("closed") ||
+    lower.includes("connection") ||
+    lower.includes("network") ||
+    lower.includes("provider error")
   );
 }
 
 function diagnoseProviderError(error: string, provider: ReasoningProvider): string {
   const lower = error.toLowerCase();
-  if (lower.includes("404") || lower.includes("not found")) {
-    return `Model '${provider.getModel()}' not found on local model server (HTTP 404). Run 'ollama pull ${provider.getModel()}' or select an available model in Settings.`;
+  if (lower.includes("login") || lower.includes("auth") || lower.includes("unauthorized")) {
+    return `ChatGPT Web session is not authenticated. Please sign in to chatgpt.com in the open browser window.`;
   }
-  if (lower.includes("econnrefused") || lower.includes("unreachable")) {
-    return `Local reasoning model server is unreachable at ${provider.displayName}. Ensure Ollama or local model server is running.`;
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return `ChatGPT Web response timed out. Check browser connection or generation status.`;
   }
-  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized")) {
-    return `Authentication failed for reasoning provider '${provider.displayName}'. Check your API key.`;
+  if (lower.includes("browser") || lower.includes("crash") || lower.includes("closed")) {
+    return `ChatGPT Web browser connection lost. Safe recovery will be attempted on next request.`;
   }
   return error;
 }

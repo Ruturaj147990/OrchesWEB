@@ -57,16 +57,14 @@ test("Run is disabled until a task is described; dialogs are keyboard accessible
   await expect(settings).toBeHidden();
 });
 
-test("selecting OpenAI without a key is refused with a clear message", async ({ page }) => {
+test("settings dialog displays ChatGPT Web browser configuration and controls", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByText("OpenAI API").click();
+  await expect(settings).toContainText("ChatGPT Web (Browser)");
+  await expect(settings).toContainText("Open ChatGPT Browser");
   await settings.getByRole("button", { name: "Save" }).click();
-  await expect(settings.getByRole("alert")).toContainText("Add an OpenAI API key");
-  await settings.getByText("Local (Ollama)").click();
-  await settings.getByRole("button", { name: "Save" }).click();
-  await expect(settings.getByRole("alert")).toHaveCount(0);
+  await expect(settings).toBeHidden();
 });
 
 test("the dashboard works at phone width without horizontal scrolling", async ({ page }) => {

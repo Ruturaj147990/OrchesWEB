@@ -45,7 +45,7 @@ describe("run pipeline (real coder, scripted model)", () => {
     provider.enqueue("code_generation", () => fileBlocks({ "package.json": NODE_TEST_PKG, "math.js": GOOD_MATH, "math.test.js": MATH_TEST }));
 
     const detail = await runTask(app, project.id, "Create math.js with add(a, b) and node:test tests");
-    expect(detail.run).toMatchObject({ status: "completed", outcome: "verified", providerId: "openai-compatible-local", modelId: "scripted-model", agentId: "builtin" });
+    expect(detail.run).toMatchObject({ status: "completed", outcome: "verified", providerId: "chatgpt-web", modelId: "scripted-model", agentId: "builtin" });
     expect(fs.readFileSync(path.join(ws, "math.js"), "utf8")).toBe(GOOD_MATH);
     const checks = detail.attempts[0].checks.map((c: any) => `${c.phase}:${c.label}:${c.status}`);
     expect(checks).toContain("attempt:npm test:passed");

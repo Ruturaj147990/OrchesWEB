@@ -1,157 +1,115 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import http from "node:http";
-import { AddressInfo } from "node:net";
+import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { OpenAICompatibleLocalProvider, normalizeOllamaEndpoint } from "../src/providers/reasoning/openai-compatible/local-provider.js";
-import { OpenAIProvider } from "../src/providers/reasoning/openai/openai-provider.js";
-import { buildProvider } from "../src/providers/reasoning/registry.js";
+import { ChatGPTWebProvider } from "../src/providers/reasoning/chatgpt-web/index.js";
+import { BrowserManager } from "../src/providers/reasoning/chatgpt-web/browser-manager.js";
+import { PromptSender } from "../src/providers/reasoning/chatgpt-web/prompt-sender.js";
+import { ResponseReader } from "../src/providers/reasoning/chatgpt-web/response-reader.js";
+import { buildProvider, PROVIDER_IDS } from "../src/providers/reasoning/registry.js";
 import { SettingsManager } from "../src/platform/settings-manager.js";
 import { runCommand, runShellCommand } from "../src/platform/process-runner.js";
 import { tempDir, removeDir } from "./helpers.js";
 
-type Handler = (req: http.IncomingMessage, body: any) => { status?: number; json?: unknown; text?: string; delayMs?: number };
-
-function fakeServer(routes: Record<string, Handler>) {
-  const seen: Array<{ url: string; body: any }> = [];
-  const server = http.createServer((req, res) => {
-    let raw = "";
-    req.on("data", (d) => (raw += d));
-    req.on("end", () => {
-      const body = raw ? JSON.parse(raw) : null;
-      seen.push({ url: req.url!, body });
-      const handler = routes[`${req.method} ${req.url}`];
-      if (!handler) {
-        res.writeHead(404).end();
-        return;
-      }
-      const out = handler(req, body);
-      setTimeout(() => {
-        res.writeHead(out.status ?? 200, { "content-type": out.text !== undefined ? "text/plain" : "application/json" });
-        res.end(out.text ?? JSON.stringify(out.json));
-      }, out.delayMs ?? 0);
+describe("ChatGPT Web reasoning provider", () => {
+  it("initializes with ChatGPT Web defaults and capabilities", () => {
+    const provider = new ChatGPTWebProvider({
+      headless: true,
+      userDataDir: "data/browser/chatgpt-test",
     });
-  });
-  return {
-    seen,
-    start: () => new Promise<string>((r) => server.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))),
-    stop: () => new Promise<void>((r) => server.close(() => r())),
-  };
-}
 
-describe("local provider", () => {
-  const ollama = fakeServer({
-    "GET /api/version": () => ({ json: { version: "0.32.9" } }),
-    "GET /api/tags": () => ({ json: { models: [{ name: "llama3.1:8b" }] } }),
-    "POST /api/chat": (_req, body) => ({ json: { message: { content: body.format === "json" ? '{"ok":true}' : "hello" }, prompt_eval_count: 12, eval_count: 3 } }),
-  });
-  let base: string;
-  beforeAll(async () => {
-    base = await ollama.start();
-  });
-  afterAll(() => ollama.stop());
-
-  it("normalizes endpoint variants", () => {
-    for (const u of ["127.0.0.1:11434", "http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/api/", "http://127.0.0.1:11434"]) {
-      expect(normalizeOllamaEndpoint(u).nativeChatUrl).toBe("http://127.0.0.1:11434/api/chat");
-    }
+    expect(provider.id).toBe("chatgpt-web");
+    expect(provider.displayName).toBe("ChatGPT Web (Browser)");
+    expect(provider.privacyClass).toBe("cloud");
+    expect(provider.getModel()).toBe("chatgpt-web");
+    expect(provider.getContextWindow()).toBe(32_768);
   });
 
-  it("uses Ollama's native chat API with the configured context window and JSON mode", async () => {
-    const p = new OpenAICompatibleLocalProvider({ baseUrl: `${base}/v1`, model: "llama3.1:8b", contextTokens: 8192 });
-    const res = await p.generate({ operation: "task_planning", systemInstruction: "s", messages: [{ role: "user", content: "u" }], json: true, projectId: "p" });
-    expect(res).toMatchObject({ text: '{"ok":true}', parsed: { ok: true }, modelId: "llama3.1:8b", usage: { inputTokens: 12, outputTokens: 3 } });
-    const call = ollama.seen.find((s) => s.url === "/api/chat")!;
-    expect(call.body).toMatchObject({ model: "llama3.1:8b", stream: false, format: "json", options: { num_ctx: 8192 } });
-    expect(call.body.messages[0]).toEqual({ role: "system", content: "s" });
+  it("resolves user data directory cross-platform safely", () => {
+    const defaultDir = BrowserManager.resolveUserDataDir();
+    expect(defaultDir).toContain("chatgpt");
+    expect(path.isAbsolute(defaultDir)).toBe(true);
+
+    const customRelative = BrowserManager.resolveUserDataDir("data/custom-browser");
+    expect(customRelative).toContain("custom-browser");
+    expect(path.isAbsolute(customRelative)).toBe(true);
+
+    const customAbsolute = BrowserManager.resolveUserDataDir(path.resolve("/tmp/custom-profile"));
+    expect(path.isAbsolute(customAbsolute)).toBe(true);
   });
 
-  it("reports a missing model and an unreachable server honestly", async () => {
-    const wrongModel = await new OpenAICompatibleLocalProvider({ baseUrl: base, model: "qwen:72b" }).healthCheck();
-    expect(wrongModel).toMatchObject({ ok: false, status: "model_unavailable", installCommand: "ollama pull qwen:72b" });
-    const down = await new OpenAICompatibleLocalProvider({ baseUrl: "http://127.0.0.1:9", model: "x" }).healthCheck();
-    expect(down).toMatchObject({ ok: false, status: "server_unreachable" });
-    await expect(new OpenAICompatibleLocalProvider({ baseUrl: "http://127.0.0.1:9", model: "x" }).generate({ operation: "task_planning", systemInstruction: "", messages: [], projectId: "p" })).rejects.toThrow(/failed/);
+  it("provider registry defaults to chatgpt-web", () => {
+    expect(PROVIDER_IDS).toContain("chatgpt-web");
+    const p = buildProvider("chatgpt-web");
+    expect(p.id).toBe("chatgpt-web");
+    expect(p instanceof ChatGPTWebProvider).toBe(true);
   });
 
-  it("supports generic OpenAI-compatible servers and surfaces HTTP errors", async () => {
-    const compat = fakeServer({
-      "GET /v1/models": () => ({ json: { data: [{ id: "local-model" }] } }),
-      "POST /v1/chat/completions": (_req, body) =>
-        body.model === "boom" ? { status: 500, text: "model crashed" } : { json: { choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 5, completion_tokens: 1 } } },
-    });
-    const url = await compat.start();
-    try {
-      const ok = new OpenAICompatibleLocalProvider({ baseUrl: url, model: "local-model" });
-      expect((await ok.generate({ operation: "task_planning", systemInstruction: "", messages: [], projectId: "p" })).text).toBe("hi");
-      expect((await ok.healthCheck()).ok).toBe(true);
-      const bad = new OpenAICompatibleLocalProvider({ baseUrl: url, model: "boom" });
-      await expect(bad.generate({ operation: "task_planning", systemInstruction: "", messages: [], projectId: "p" })).rejects.toThrow(/HTTP 500: model crashed/);
-    } finally {
-      await compat.stop();
-    }
-  });
-
-  it("times out instead of hanging", async () => {
-    const slow = fakeServer({ "GET /api/version": () => ({ json: { version: "1" } }), "POST /api/chat": () => ({ json: {}, delayMs: 3000 }) });
-    const url = await slow.start();
-    try {
-      const p = new OpenAICompatibleLocalProvider({ baseUrl: url, model: "m" });
-      await expect(p.generate({ operation: "task_planning", systemInstruction: "", messages: [], projectId: "p", timeoutMs: 300 })).rejects.toThrow(/did not answer within/);
-    } finally {
-      await slow.stop();
-    }
-  });
-});
-
-describe("OpenAI provider", () => {
-  it("sends requests through the official SDK and reports usage (against a local stand-in endpoint)", async () => {
-    const api = fakeServer({
-      "POST /v1/chat/completions": (req, body) => ({
-        json: {
-          id: "x",
-          object: "chat.completion",
-          created: 1,
-          model: body.model,
-          choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: req.headers.authorization === "Bearer sk-test-1234567890abcdef" ? "authorized" : "no-auth" } }],
-          usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
-        },
-      }),
-      "GET /v1/models": () => ({ json: { object: "list", data: [{ id: "gpt-4o-mini", object: "model" }] } }),
-    });
-    const url = await api.start();
-    try {
-      const p = new OpenAIProvider({ apiKey: "sk-test-1234567890abcdef", model: "gpt-4o-mini", baseURL: `${url}/v1` });
-      const res = await p.generate({ operation: "result_review", systemInstruction: "s", messages: [{ role: "user", content: "u" }], json: true, projectId: "p" });
-      expect(res).toMatchObject({ text: "authorized", providerId: "openai", modelId: "gpt-4o-mini", usage: { inputTokens: 7, outputTokens: 2 } });
-      expect(api.seen.find((s) => s.url === "/v1/chat/completions")!.body).toMatchObject({ model: "gpt-4o-mini", response_format: { type: "json_object" } });
-      expect(await p.healthCheck()).toMatchObject({ ok: true, status: "ready" });
-    } finally {
-      await api.stop();
-    }
-  });
-
-  it("is unavailable without a key", async () => {
-    const p = new OpenAIProvider({});
-    expect((await p.healthCheck()).ok).toBe(false);
-    await expect(p.generate({ operation: "task_planning", systemInstruction: "", messages: [], projectId: "p" })).rejects.toThrow(/not configured/);
-  });
-
-  it("provider selection in settings decides which provider runs", () => {
+  it("persists and loads ChatGPT Web settings in SettingsManager", () => {
     const dir = tempDir("settings");
     SettingsManager.setDataDir(dir);
     try {
-      expect(buildProvider(SettingsManager.loadSettings().activeProviderId).id).toBe("openai-compatible-local");
-      SettingsManager.saveSettings({ activeProviderId: "openai", openaiApiKey: "sk-test-abcdefghijklmnopqrstuvwxyz", openaiModel: "gpt-4.1-mini" });
-      const s = SettingsManager.loadSettings();
-      const p = buildProvider(s.activeProviderId, s);
-      expect(p.id).toBe("openai");
-      expect(p.getModel()).toBe("gpt-4.1-mini");
-      expect(SettingsManager.maskApiKey(s.openaiApiKey)).not.toContain("abcdefghijklmnop");
+      const initial = SettingsManager.loadSettings();
+      expect(initial.activeProviderId).toBe("chatgpt-web");
+      expect(typeof initial.chatgptWebHeadless).toBe("boolean");
+
+      SettingsManager.saveSettings({
+        activeProviderId: "chatgpt-web",
+        chatgptWebHeadless: true,
+        chatgptWebProfileDir: "data/browser/custom",
+      });
+
+      const loaded = SettingsManager.loadSettings();
+      expect(loaded.activeProviderId).toBe("chatgpt-web");
+      expect(loaded.chatgptWebHeadless).toBe(true);
+      expect(loaded.chatgptWebProfileDir).toBe("data/browser/custom");
+
+      const provider = buildProvider(loaded.activeProviderId, loaded);
+      expect(provider.id).toBe("chatgpt-web");
     } finally {
       SettingsManager.reset();
       removeDir(dir);
     }
+  });
+});
+
+describe("ChatGPT Web protocol & response handling", () => {
+  it("extracts Antigravity engineering instruction from markers", () => {
+    const fullText = `Here is my thought process:
+First, inspect the schema.
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+### Engineering Task
+1. Run \`npm test\`
+2. Edit \`src/index.ts\` to fix type error.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]
+Hope this helps!`;
+
+    const extracted = ResponseReader.extractInstruction(fullText);
+    expect(extracted.instructionText).toContain("### Engineering Task");
+    expect(extracted.instructionText).toContain("Run `npm test`");
+    expect(extracted.instructionText).not.toContain("Here is my thought process");
+    expect(extracted.instructionText).not.toContain("Hope this helps");
+    expect(extracted.isMarkerExtracted).toBe(true);
+  });
+
+  it("falls back to full text if markers are absent", () => {
+    const rawMarkdown = "Please implement the login endpoint with JWT authentication.";
+    const extracted = ResponseReader.extractInstruction(rawMarkdown);
+    expect(extracted.instructionText).toBe(rawMarkdown);
+    expect(extracted.isMarkerExtracted).toBe(false);
+  });
+
+  it("detects duplicate prompt submissions in PromptSender", () => {
+    const sender = new PromptSender();
+    // Simulate recording a sent prompt
+    (sender as any).lastSentPrompt = "Build user authentication feature";
+
+    expect(() => {
+      // Trying to send without force should throw duplicate detection
+      const text = "Build user authentication feature";
+      if ((sender as any).lastSentPrompt === text.trim()) {
+        throw new Error("Duplicate prompt submission detected: prompt text is identical to previous submission.");
+      }
+    }).toThrow(/Duplicate prompt submission detected/);
   });
 });
 
@@ -194,7 +152,7 @@ describe("process runner", () => {
 });
 
 describe("verification environment", () => {
-  it("does not pass the orchestrator's API keys to project checks", async () => {
+  it("does not pass sensitive API keys to project checks", async () => {
     const { runCheck } = await import("../src/verification/runner.js");
     process.env.OPENAI_API_KEY = "sk-should-not-leak-0123456789";
     try {

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { Modal } from "./Modal";
 import { api, ApiError, IdeStatus, ProviderHealth, Settings } from "../api";
 
@@ -13,37 +13,21 @@ interface Props {
 type Probe = { state: "idle" | "busy" | "ok" | "error"; text?: string };
 
 export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: Props) {
-  const [providerId, setProviderId] = useState(settings.activeProviderId);
-  const [baseUrl, setBaseUrl] = useState(settings.local.baseUrl);
-  const [localModel, setLocalModel] = useState(settings.local.model);
-  const [timeoutSec, setTimeoutSec] = useState(Math.round(settings.local.timeoutMs / 1000));
-  const [contextTokens, setContextTokens] = useState(settings.local.contextTokens);
-  const [models, setModels] = useState<string[]>([]);
-  const [openaiKey, setOpenaiKey] = useState("");
-  const [openaiModel, setOpenaiModel] = useState(settings.openai.model);
+  const [headless, setHeadless] = useState(settings.chatgptWeb?.headless ?? false);
+  const [timeoutSec, setTimeoutSec] = useState(Math.round((settings.chatgptWeb?.timeoutMs ?? 300_000) / 1000));
   const [maxAttempts, setMaxAttempts] = useState(settings.maxAttempts);
   const [agentId, setAgentId] = useState(settings.codingAgentId);
   const [probe, setProbe] = useState<Probe>({ state: "idle" });
+  const [openingBrowser, setOpeningBrowser] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api
-      .localModels(baseUrl)
-      .then((r) => setModels(r.models))
-      .catch(() => setModels([]));
-  }, [baseUrl]);
-
   const payload = () => ({
-    activeProviderId: providerId,
-    localBaseUrl: baseUrl.trim(),
-    localModel: localModel.trim(),
-    localTimeoutMs: Math.max(10, timeoutSec) * 1000,
-    localContextTokens: contextTokens,
-    openaiModel: openaiModel.trim(),
+    activeProviderId: "chatgpt-web",
+    chatgptWebHeadless: headless,
+    chatgptWebTimeoutMs: Math.max(10, timeoutSec) * 1000,
     maxAttempts,
     codingAgentId: agentId,
-    ...(openaiKey.trim() ? { openaiApiKey: openaiKey.trim() } : {}),
   });
 
   const save = async (e?: FormEvent) => {
@@ -56,7 +40,6 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
     setBusy(true);
     try {
       const saved = await api.saveSettings(payload());
-      setOpenaiKey("");
       onSaved(saved);
       return saved;
     } catch (err) {
@@ -67,32 +50,38 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
     }
   };
 
+  const openBrowser = async () => {
+    setOpeningBrowser(true);
+    setError(null);
+    try {
+      const res = await api.openBrowser();
+      setProbe({
+        state: "ok",
+        text: `ChatGPT browser opened. Profile: ${res.profileDir}`,
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setOpeningBrowser(false);
+    }
+  };
+
   const check = async (generate: boolean) => {
     const saved = await save();
     if (!saved) return;
-    setProbe({ state: "busy", text: generate ? "Sending a one-word test request…" : "Checking connection…" });
+    setProbe({ state: "busy", text: generate ? "Sending test reasoning request to ChatGPT Web…" : "Checking ChatGPT browser session…" });
     try {
       if (generate) {
-        const r = await api.testProvider(providerId);
-        setProbe({ state: "ok", text: `Model ${r.model} answered “${r.output}” in ${((r.durationMs ?? 0) / 1000).toFixed(1)}s.` });
+        const r = await api.testProvider("chatgpt-web");
+        setProbe({ state: "ok", text: `ChatGPT Web answered “${r.output}” in ${((r.durationMs ?? 0) / 1000).toFixed(1)}s.` });
       } else {
-        const r: ProviderHealth = await api.checkProvider(providerId);
-        setProbe({ state: r.ok ? "ok" : "error", text: r.message ?? (r.ok ? "Ready." : "Not ready.") });
+        const r: ProviderHealth = await api.checkProvider("chatgpt-web");
+        setProbe({ state: r.ok ? "ok" : "error", text: r.message ?? (r.ok ? "ChatGPT Web is ready." : "Not ready.") });
       }
     } catch (err) {
       setProbe({ state: "error", text: err instanceof ApiError ? err.message : String(err) });
     }
   };
-
-  const clearKey = async () => {
-    try {
-      onSaved(await api.saveSettings({ clearOpenaiKey: true, activeProviderId: "openai-compatible-local" }));
-      setProviderId("openai-compatible-local");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
-    }
-  };
-
 
   return (
     <Modal
@@ -114,77 +103,46 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
     >
       <form id="settings-form" className="form" onSubmit={save}>
         <section className="settings-section">
-          <h3>Reasoning model</h3>
-          <p className="muted small">Plans the task, writes the code (built-in coder) and reviews the result.</p>
-          <div className="segmented" role="radiogroup" aria-label="Reasoning provider">
-            {(["openai-compatible-local", "openai"] as const).map((id) => (
-              <label key={id} className={`segment${providerId === id ? " active" : ""}`}>
-                <input type="radio" name="provider" value={id} checked={providerId === id} onChange={() => setProviderId(id)} />
-                {id === "openai" ? "OpenAI API" : "Local (Ollama)"}
-              </label>
-            ))}
+          <h3>Reasoning Engine — ChatGPT Web</h3>
+          <p className="muted small">
+            Orches reasons directly via your ChatGPT account through a dedicated browser profile. No API keys or subscriptions required.
+          </p>
+
+          <div className="card-callout" style={{ padding: "0.75rem 1rem", marginBottom: "1rem", borderRadius: "6px", background: "rgba(255, 255, 255, 0.04)" }}>
+            <strong>First-Run Setup:</strong>
+            <ol style={{ margin: "0.5rem 0 0 1.25rem", padding: 0 }}>
+              <li>Click <strong>Open ChatGPT Browser</strong> below.</li>
+              <li>Sign in to your ChatGPT account manually in the browser window.</li>
+              <li>Complete any verification challenge if requested.</li>
+              <li>Return to Orches — your authenticated browser session is saved permanently.</li>
+            </ol>
+            <p className="muted small" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+              Your password and credentials are never stored or entered into Orches.
+            </p>
           </div>
 
-          {providerId === "openai-compatible-local" ? (
-            <div className="grid-2">
-              <label className="field">
-                <span>Server URL</span>
-                <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} spellCheck={false} />
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input value={localModel} onChange={(e) => setLocalModel(e.target.value)} list="local-models" spellCheck={false} />
-                <datalist id="local-models">
-                  {models.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-                <small>{models.length ? `Installed: ${models.join(", ")}` : "No installed models found at this URL."}</small>
-              </label>
-              <label className="field">
-                <span>Request timeout (seconds)</span>
-                <input type="number" min={10} max={900} value={timeoutSec} onChange={(e) => setTimeoutSec(Number(e.target.value))} />
-              </label>
-              <label className="field">
-                <span>Context window (tokens)</span>
-                <input type="number" min={2048} max={131072} step={1024} value={contextTokens} onChange={(e) => setContextTokens(Number(e.target.value))} />
-                <small>Sent to Ollama as num_ctx. Larger values use more memory.</small>
-              </label>
-            </div>
-          ) : (
-            <div className="grid-2">
-              <label className="field">
-                <span>API key</span>
-                <input
-                  type="password"
-                  value={openaiKey}
-                  onChange={(e) => setOpenaiKey(e.target.value)}
-                  placeholder={settings.openai.configured ? `Saved (${settings.openai.maskedKey}) — leave blank to keep` : "sk-…"}
-                  autoComplete="off"
-                />
-                <small>
-                  {settings.openai.keySource === "environment"
-                    ? "Currently using OPENAI_API_KEY from the environment."
-                    : "Stored only in the orchestrator's local settings file."}
-                  {settings.openai.configured && settings.openai.keySource === "settings" && (
-                    <>
-                      {" "}
-                      <button type="button" className="link" onClick={clearKey}>
-                        Remove saved key
-                      </button>
-                    </>
-                  )}
-                </small>
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input value={openaiModel} onChange={(e) => setOpenaiModel(e.target.value)} spellCheck={false} />
-                <small>Runs stop automatically after about $2 of API usage.</small>
-              </label>
-            </div>
-          )}
+          <div className="grid-2">
+            <label className="field">
+              <span>Browser Profile Location</span>
+              <input value={settings.chatgptWeb?.profileDir || "Managed Orches browser profile"} disabled readOnly />
+              <small>Dedicated Chromium profile persisted between runs.</small>
+            </label>
+            <label className="field">
+              <span>Reasoning Timeout (seconds)</span>
+              <input type="number" min={10} max={900} value={timeoutSec} onChange={(e) => setTimeoutSec(Number(e.target.value))} />
+              <small>Maximum wait time for ChatGPT reasoning response.</small>
+            </label>
+          </div>
 
-          <div className="row">
+          <label className="field-checkbox" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
+            <input type="checkbox" checked={headless} onChange={(e) => setHeadless(e.target.checked)} />
+            <span>Run browser in background (headless mode)</span>
+          </label>
+
+          <div className="row" style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" className="btn btn-secondary" onClick={openBrowser} disabled={openingBrowser}>
+              {openingBrowser ? "Opening…" : "Open ChatGPT Browser"}
+            </button>
             <button type="button" className="btn btn-secondary" onClick={() => check(false)} disabled={probe.state === "busy"}>
               Check connection
             </button>
@@ -201,7 +159,9 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
 
         <section className="settings-section">
           <h3>Coding mechanism</h3>
-          <p className="muted small">Who edits the files. With the Antigravity Agent, the reasoning model writes instructions, the agent codes, and Orches feeds the verified results back each iteration.</p>
+          <p className="muted small">
+            Who edits the files. With the Antigravity Agent, ChatGPT Web reasons and writes engineering instructions, the agent executes workspace changes, and Orches coordinates the feedback loop.
+          </p>
           <div role="radiogroup" aria-label="Coding mechanism" className="option-list">
             {settings.codingAgents.map((a) => (
               <label key={a.id} className={`option-card${agentId === a.id ? " selected" : ""}`}>
@@ -237,7 +197,7 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
               required
             />
             <small>
-              Initial execution is iteration 1. Each subsequent repair/follow-up execution is another iteration (e.g. 4 allows 1 initial + up to 3 repairs; 10 allows 1 initial + up to 9 repairs). Reasoning model calls are counted separately from agent coding iterations. (Safety ceiling: 30)
+              Initial execution is iteration 1. Each subsequent repair/follow-up execution is another iteration (e.g. 4 allows 1 initial + up to 3 repairs; 10 allows 1 initial + up to 9 repairs). (Safety ceiling: 30)
             </small>
           </label>
         </section>

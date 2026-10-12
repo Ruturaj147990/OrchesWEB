@@ -26,6 +26,9 @@ artifacts/
 coverage/
 playwright-report/
 test-results/
+data/browser/
+*.browser/
+data/
 
 # OS / Editor
 .DS_Store

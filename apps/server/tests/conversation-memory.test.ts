@@ -9,10 +9,7 @@ import { ConversationMemoryService } from "../src/domain/memory/conversation-mem
 import { ContextCompactor } from "../src/domain/memory/context-compactor.js";
 import { ContextReconstructor } from "../src/domain/memory/context-reconstructor.js";
 import { calculateContextBudget, shouldTriggerCompaction, estimateTokens } from "../src/domain/memory/context-budget.js";
-import { ReasoningProvider, ReasoningRequest, ReasoningResult } from "../src/providers/reasoning/provider.js";
-import { OpenAICompatibleLocalProvider } from "../src/providers/reasoning/openai-compatible/local-provider.js";
-import { OpenAIProvider } from "../src/providers/reasoning/openai/openai-provider.js";
-import { RequirementInventory } from "../src/domain/requirements/requirement-inventory.js";
+import { ChatGPTWebProvider } from "../src/providers/reasoning/chatgpt-web/index.js";
 import { SettingsManager } from "../src/platform/settings-manager.js";
 import { buildApp } from "../src/app.js";
 import { ProjectRepository } from "../src/storage/repositories/project-repository.js";
@@ -32,7 +29,7 @@ function createTestDb(): DatabaseSync {
 }
 
 class MockReasoningProvider implements ReasoningProvider {
-  public id = "openai-compatible-local";
+  public id = "mock";
   public displayName = "Mock Reasoning Provider";
   public privacyClass = "local" as const;
   public generateCalls: ReasoningRequest[] = [];
@@ -227,32 +224,29 @@ describe("Section 1 & 6: Persistent Conversation History across Restarts & Stora
   });
 });
 
-describe("Section 2 & 8: Context Budgeting across Ollama and OpenAI Providers", () => {
-  it("computes model-aware context budget for local Ollama without hardcoding cloud limits", () => {
-    const localProvider = new OpenAICompatibleLocalProvider({
-      model: "qwen3:30b",
-      contextTokens: 16_384,
+describe("Section 2 & 8: Context Budgeting across Providers", () => {
+  it("computes model-aware context budget for ChatGPTWebProvider without hardcoding limits", () => {
+    const chatgptProvider = new ChatGPTWebProvider({
+      headless: true,
+      userDataDir: "data/browser/chatgpt-test",
     });
 
-    const budget = calculateContextBudget(localProvider);
-    expect(budget.providerId).toBe("openai-compatible-local");
-    expect(budget.modelId).toBe("qwen3:30b");
-    expect(budget.totalContextTokens).toBe(16_384);
-    // Reserve scales for 16k window: 55% of 16384 = ~9011
+    const budget = calculateContextBudget(chatgptProvider);
+    expect(budget.providerId).toBe("chatgpt-web");
+    expect(budget.modelId).toBe("chatgpt-web");
+    expect(budget.totalContextTokens).toBe(32_768);
     expect(budget.reserveTokens).toBeLessThan(budget.totalContextTokens);
     expect(budget.availableHistoryBudget).toBeGreaterThan(3000);
     expect(budget.compactionThresholdTokens).toBe(Math.floor(budget.availableHistoryBudget * 0.70));
   });
 
-  it("computes model-aware context budget for external OpenAI API models", () => {
-    const openaiProvider = new OpenAIProvider({
-      apiKey: "dummy-key-for-budget-test",
-      model: "gpt-4o-mini",
-    });
+  it("computes model-aware context budget for custom/large context models", () => {
+    const largeProvider = new MockReasoningProvider("custom-large");
+    largeProvider.customContextWindow = 128_000;
 
-    const budget = calculateContextBudget(openaiProvider);
-    expect(budget.providerId).toBe("openai");
-    expect(budget.modelId).toBe("gpt-4o-mini");
+    const budget = calculateContextBudget(largeProvider);
+    expect(budget.providerId).toBe("mock");
+    expect(budget.modelId).toBe("custom-large");
     expect(budget.totalContextTokens).toBe(128_000);
     expect(budget.reserveTokens).toBe(11500);
     expect(budget.availableHistoryBudget).toBe(128_000 - 11500);
@@ -260,17 +254,19 @@ describe("Section 2 & 8: Context Budgeting across Ollama and OpenAI Providers", 
   });
 
   it("triggers compaction only when approaching model-specific budget threshold", () => {
-    const localProvider = new OpenAICompatibleLocalProvider({ contextTokens: 8192 });
-    const localBudget = calculateContextBudget(localProvider);
+    const smallProvider = new MockReasoningProvider("small");
+    smallProvider.customContextWindow = 8192;
+    const smallBudget = calculateContextBudget(smallProvider);
 
-    expect(shouldTriggerCompaction(100, localBudget)).toBe(false);
-    expect(shouldTriggerCompaction(localBudget.compactionThresholdTokens + 10, localBudget)).toBe(true);
+    expect(shouldTriggerCompaction(100, smallBudget)).toBe(false);
+    expect(shouldTriggerCompaction(smallBudget.compactionThresholdTokens + 10, smallBudget)).toBe(true);
 
-    const openaiProvider = new OpenAIProvider({ apiKey: "dummy", model: "gpt-4o" });
-    const openaiBudget = calculateContextBudget(openaiProvider);
+    const largeProvider = new MockReasoningProvider("large");
+    largeProvider.customContextWindow = 128_000;
+    const largeBudget = calculateContextBudget(largeProvider);
 
-    // Tokens that would exceed local threshold do not prematurely trigger cloud OpenAI compaction
-    expect(shouldTriggerCompaction(localBudget.compactionThresholdTokens + 10, openaiBudget)).toBe(false);
+    // Tokens that would exceed small threshold do not prematurely trigger large compaction
+    expect(shouldTriggerCompaction(smallBudget.compactionThresholdTokens + 10, largeBudget)).toBe(false);
   });
 });
 
@@ -605,29 +601,26 @@ describe("Section 4, 5 & 8: Dashboard Chat History API & Backend Deletion", () =
     expect(recon.promptSection).toContain("Redis session store selected");
   });
 
-  it("verifies context management works with both local Ollama and external OpenAI providers", () => {
-    // 1. Local Ollama Provider setup
-    const ollamaProvider = new OpenAICompatibleLocalProvider({
-      baseUrl: "http://127.0.0.1:11434",
-      model: "qwen3:30b",
-      contextTokens: 16_384,
+  it("verifies context management works with ChatGPTWebProvider and custom window providers", () => {
+    // 1. ChatGPT Web Provider setup
+    const chatgptProvider = new ChatGPTWebProvider({
+      headless: true,
+      userDataDir: "data/browser/chatgpt-test",
     });
-    expect(ollamaProvider.getContextWindow()).toBe(16_384);
-    const ollamaBudget = calculateContextBudget(ollamaProvider);
-    expect(ollamaBudget.totalContextTokens).toBe(16_384);
-    expect(ollamaBudget.availableHistoryBudget).toBeGreaterThan(0);
-    expect(ollamaBudget.compactionThresholdTokens).toBeGreaterThan(2000);
+    expect(chatgptProvider.getContextWindow()).toBe(32_768);
+    const chatgptBudget = calculateContextBudget(chatgptProvider);
+    expect(chatgptBudget.totalContextTokens).toBe(32_768);
+    expect(chatgptBudget.availableHistoryBudget).toBeGreaterThan(0);
+    expect(chatgptBudget.compactionThresholdTokens).toBeGreaterThan(2000);
 
-    // 2. External OpenAI API Provider setup
-    const openaiProvider = new OpenAIProvider({
-      apiKey: "test-openai-api-key",
-      model: "gpt-4o",
-    });
-    expect(openaiProvider.getContextWindow()).toBe(128_000);
-    const openaiBudget = calculateContextBudget(openaiProvider);
-    expect(openaiBudget.totalContextTokens).toBe(128_000);
-    expect(openaiBudget.reserveTokens).toBe(11500);
-    expect(openaiBudget.availableHistoryBudget).toBe(128_000 - 11500);
+    // 2. Custom window mock provider setup
+    const customProvider = new MockReasoningProvider("custom-model");
+    customProvider.customContextWindow = 128_000;
+    expect(customProvider.getContextWindow()).toBe(128_000);
+    const customBudget = calculateContextBudget(customProvider);
+    expect(customBudget.totalContextTokens).toBe(128_000);
+    expect(customBudget.reserveTokens).toBe(11500);
+    expect(customBudget.availableHistoryBudget).toBe(128_000 - 11500);
 
     // 3. Both providers evaluate budget and token estimation deterministically
     const samplePrompt = "Implement a high-performance Redis cache layer with 10k RPS throughput";
@@ -635,12 +628,12 @@ describe("Section 4, 5 & 8: Dashboard Chat History API & Backend Deletion", () =
     expect(sampleTokens).toBe(Math.ceil(samplePrompt.length / 4));
 
     // Neither triggers premature compaction for short prompts
-    expect(shouldTriggerCompaction(sampleTokens, ollamaBudget)).toBe(false);
-    expect(shouldTriggerCompaction(sampleTokens, openaiBudget)).toBe(false);
+    expect(shouldTriggerCompaction(sampleTokens, chatgptBudget)).toBe(false);
+    expect(shouldTriggerCompaction(sampleTokens, customBudget)).toBe(false);
 
-    // A large transcript of 10,000 tokens triggers compaction on Ollama (16k) but not on OpenAI (128k)
-    expect(shouldTriggerCompaction(10_000, ollamaBudget)).toBe(true);
-    expect(shouldTriggerCompaction(10_000, openaiBudget)).toBe(false);
+    // A large transcript of 25,000 tokens triggers compaction on ChatGPT Web (32k) but not on 128k
+    expect(shouldTriggerCompaction(25_000, chatgptBudget)).toBe(true);
+    expect(shouldTriggerCompaction(25_000, customBudget)).toBe(false);
   });
 });
 

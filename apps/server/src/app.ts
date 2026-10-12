@@ -4,7 +4,7 @@ import fastifyStatic from "@fastify/static";
 import path from "node:path";
 import fs from "node:fs";
 import { config, ORCHESTRATOR_ROOT } from "./config/env.js";
-import { initDb } from "./storage/db.js";
+import { initDb, closeDb } from "./storage/db.js";
 import { runMigrations } from "./storage/migrations.js";
 import { EventStore } from "./events/event-store.js";
 import { ReasoningUsageLedger } from "./domain/budgets/usage-ledger.js";
@@ -94,6 +94,7 @@ export async function buildApp(options: BuildAppOptions | string = {}): Promise<
 
   app.addHook("onClose", async () => {
     await runManager.shutdown();
+    closeDb();
   });
   return app;
 }

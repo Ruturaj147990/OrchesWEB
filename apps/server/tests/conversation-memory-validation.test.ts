@@ -16,8 +16,7 @@ import {
 } from "../src/domain/memory/context-budget.js";
 import { composeInstruction, type InstructionContext } from "../src/orchestrator/instructor.js";
 import { ReasoningProvider, ReasoningRequest, ReasoningResult } from "../src/providers/reasoning/provider.js";
-import { OpenAICompatibleLocalProvider } from "../src/providers/reasoning/openai-compatible/local-provider.js";
-import { OpenAIProvider } from "../src/providers/reasoning/openai/openai-provider.js";
+
 import { buildRequirementInventory, RequirementInventory } from "../src/domain/requirements/requirement-inventory.js";
 import { SettingsManager } from "../src/platform/settings-manager.js";
 import { ProjectRepository } from "../src/storage/repositories/project-repository.js";
@@ -36,7 +35,7 @@ function createTestProject(db: DatabaseSync, id: string, name = "Test Project"):
 }
 
 class ScriptedProvider implements ReasoningProvider {
-  public id = "openai-compatible-local";
+  public id = "mock";
   public displayName = "Scripted Provider";
   public privacyClass = "local" as const;
   public generateCalls: ReasoningRequest[] = [];
@@ -300,27 +299,10 @@ describe("Section 1: Complete Long-Running Conversation Lifecycle across DB Rest
     reopenedDb.close();
   });
 
-  it("exercises live Ollama qwen3:30b model generation and compaction when provider daemon is reachable", async () => {
-    // Check if Ollama is online on port 11434
-    let ollamaOnline = false;
-    try {
-      const resp = await fetch("http://127.0.0.1:11434/api/tags", { signal: AbortSignal.timeout(2000) });
-      if (resp.ok) {
-        const body = (await resp.json()) as { models?: Array<{ name: string }> };
-        ollamaOnline = Boolean(body.models?.some((m) => m.name.includes("qwen3:30b")));
-      }
-    } catch {
-      ollamaOnline = false;
-    }
-
-    if (!ollamaOnline) {
-      console.log("[Test Notice] Ollama daemon is offline or qwen3:30b not found; test validates using local provider contract.");
-      return;
-    }
-
+  it("exercises model compaction with model provider contract", async () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
-    createTestProject(db, "proj-live-1", "Live Ollama Test");
+    createTestProject(db, "proj-live-1", "Provider Compaction Test");
 
     const memoryService = new ConversationMemoryService(db);
     const convo = memoryService.getOrCreateConversation({
@@ -339,16 +321,12 @@ describe("Section 1: Complete Long-Running Conversation Lifecycle across DB Rest
       filesChanged: ["src/queue/log_segment.ts"],
     });
 
-    const realProvider = new OpenAICompatibleLocalProvider({
-      baseUrl: "http://127.0.0.1:11434",
-      model: "qwen3:30b",
-      timeoutMs: 60000,
-      contextTokens: 16384,
-    });
+    const realProvider = new ScriptedProvider(16384);
+    realProvider.customModel = "chatgpt-web";
 
     expect(realProvider.getContextWindow()).toBe(16384);
 
-    // Run substantive compaction with REAL model
+    // Run substantive compaction with model
     const compactionResult = await memoryService.maybeCompact(convo.id, realProvider, {
       force: true,
     });
@@ -361,8 +339,8 @@ describe("Section 1: Complete Long-Running Conversation Lifecycle across DB Rest
     // Verify snapshot was persisted in DB
     const latestSnapshot = memoryService.getRepository().getLatestSnapshot(convo.id);
     expect(latestSnapshot).not.toBeNull();
-    expect(latestSnapshot?.meta.modelId).toBe("qwen3:30b");
-  }, 90000);
+    expect(latestSnapshot?.meta.modelId).toBe("chatgpt-web");
+  });
 });
 
 describe("Section 2 & 3: Context Compaction, Fallback & Requirement Preservation Checklist", () => {
@@ -552,13 +530,9 @@ describe("Section 2 & 3: Context Compaction, Fallback & Requirement Preservation
 });
 
 describe("Section 4: Context Budget Calculations & Request Assembly Boundary Conditions", () => {
-  it("computes internally consistent context budgets for local Ollama and OpenAI models", () => {
-    // 1. Local Ollama (16,384 tokens)
-    const localProvider = new OpenAICompatibleLocalProvider({
-      baseUrl: "http://127.0.0.1:11434",
-      model: "qwen3:30b",
-      contextTokens: 16_384,
-    });
+  it("computes internally consistent context budgets for reasoning models", () => {
+    // 1. Standard 16k context window
+    const localProvider = new ScriptedProvider(16_384);
     const localBudget = calculateContextBudget(localProvider);
 
     expect(localBudget.totalContextTokens).toBe(16_384);
@@ -567,11 +541,10 @@ describe("Section 4: Context Budget Calculations & Request Assembly Boundary Con
     expect(localBudget.compactionThresholdTokens).toBe(Math.floor(localBudget.availableHistoryBudget * 0.70));
     expect(localBudget.reserveTokens + localBudget.availableHistoryBudget).toBe(16_384);
 
-    // 2. OpenAI GPT-4o (128,000 tokens)
-    const gpt4oProvider = new OpenAIProvider({
-      apiKey: "sk-test",
-      model: "gpt-4o",
-    });
+    // 2. Large context model (128,000 tokens)
+    const gpt4oProvider = new ScriptedProvider(128_000);
+    gpt4oProvider.id = "mock";
+    gpt4oProvider.customModel = "mock-128k";
     const gpt4oBudget = calculateContextBudget(gpt4oProvider);
 
     expect(gpt4oBudget.totalContextTokens).toBe(128_000);
@@ -775,7 +748,8 @@ describe("Section 6: Backend Conversation Deletion Data Lifecycle", () => {
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "orches-del-test-"));
     SettingsManager.setDataDir(tmpDir);
-    app = await buildApp();
+    const dbPath = path.join(tmpDir, "del-test.sqlite");
+    app = await buildApp({ dbPath });
     db = getDb();
   });
 

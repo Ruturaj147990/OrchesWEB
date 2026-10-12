@@ -8,8 +8,9 @@ export interface AppConfig {
   env: "development" | "production" | "test";
   dataDir: string;
   allowedOrigins: string[];
-  localReasoningBaseUrl: string;
-  localReasoningModel: string;
+  chatgptWebHeadless: boolean;
+  chatgptWebProfileDir: string;
+  chatgptWebTimeoutMs: number;
 }
 
 /** Repository root of this orchestrator installation (src/ and dist/ are both three levels deep). */
@@ -17,7 +18,9 @@ export const ORCHESTRATOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.
 
 const defaultDataDir = path.join(
   process.env.APPDATA ||
-    (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Application Support") : path.join(os.homedir(), ".config")),
+    (process.platform === "darwin"
+      ? path.join(os.homedir(), "Library", "Application Support")
+      : (process.env.XDG_DATA_HOME || path.join(os.homedir(), ".config"))),
   "AutonomousDevOrchestrator"
 );
 
@@ -30,6 +33,7 @@ export const config: AppConfig = {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
-  localReasoningBaseUrl: process.env.LOCAL_REASONING_BASE_URL || "http://127.0.0.1:11434",
-  localReasoningModel: process.env.LOCAL_REASONING_MODEL || "qwen3:30b",
+  chatgptWebHeadless: process.env.CHATGPT_WEB_HEADLESS === "true",
+  chatgptWebProfileDir: process.env.CHATGPT_WEB_PROFILE_DIR || path.join(process.env.ORCHESTRATOR_DATA_DIR || defaultDataDir, "browser", "chatgpt"),
+  chatgptWebTimeoutMs: parseInt(process.env.CHATGPT_WEB_TIMEOUT_MS || "300000", 10),
 };

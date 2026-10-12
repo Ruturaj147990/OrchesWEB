@@ -152,5 +152,44 @@ export function runMigrations(db: DatabaseSync): void {
     }
     mark("0005_conversation_memory");
   }
+
+  if (!applied("0006_chatgpt_web_and_source_manifest")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_chatgpt_conversations (
+        project_id TEXT PRIMARY KEY,
+        conversation_url TEXT,
+        chat_title TEXT,
+        mapping_status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        last_verified_at TEXT,
+        last_successful_request_at TEXT,
+        last_error TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS source_manifest_items (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        extension TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        extraction_status TEXT NOT NULL DEFAULT 'EXTRACTED',
+        delivery_status TEXT NOT NULL DEFAULT 'DISCOVERED',
+        delivery_method TEXT NOT NULL DEFAULT 'browser_upload',
+        redaction_completed INTEGER NOT NULL DEFAULT 1,
+        sanitized_path TEXT,
+        superseded_by_id TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        delivered_at TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_source_manifest_project_id ON source_manifest_items(project_id);
+    `);
+    mark("0006_chatgpt_web_and_source_manifest");
+  }
 }
 

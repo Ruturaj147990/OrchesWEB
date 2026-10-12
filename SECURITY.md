@@ -32,10 +32,8 @@ and keeps the blast radius to one folder you chose. This document describes what
 - Commands run with argument vectors; `cmd.exe` is used only for `.cmd` shims, with metacharacters rejected.
 - Every process has a timeout and is killed with its whole process tree on timeout or Stop.
 
-## Secrets
-- The OpenAI key is read from `OPENAI_API_KEY` or stored in `settings.json` inside the data directory
-  (plain text, protected only by your user account's file permissions). It is never returned by the API
-  (only a masked form) and is not passed to verification processes.
-- Event payloads (logs shown in the dashboard and stored in the database) pass through a secret redactor.
-- Local providers never fall back to a cloud provider. When OpenAI is selected, task text, project file
-  excerpts and diffs are sent to OpenAI.
+## Secrets & Browser Isolation
+- Zero API keys are stored or needed. Reasoning operates through a real browser session via Playwright Chromium.
+- The ChatGPT Web session is completely isolated in a dedicated persistent browser profile directory (`data/browser/chatgpt`), separate from your personal browser and never checked into source control or exported.
+- All prompts, instructions, and source manifest attachments pass through the `SecretRedactor` before delivery to the browser, ensuring credentials and sensitive tokens are not sent to ChatGPT Web.
+- Event payloads and logs pass through secret redaction before being stored in SQLite or broadcasted via SSE.

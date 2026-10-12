@@ -343,7 +343,7 @@ export type PrivacyClass = z.infer<typeof PrivacyClassSchema>;
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   displayName: z.string(),
-  type: z.enum(["openai", "openai_compatible_local", "mock"]),
+  type: z.enum(["chatgpt_web", "mock"]),
   endpoint: z.string(),
   modelId: z.string(),
   privacyClass: PrivacyClassSchema,
@@ -352,6 +352,55 @@ export const ProviderProfileSchema = z.object({
   enabled: z.boolean().default(true),
 });
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
+
+// --- ChatGPT Web Mapping & Source Material Manifest ---
+export const ProjectChatGptMappingSchema = z.object({
+  projectId: z.string(),
+  conversationUrl: z.string().nullable().default(null),
+  chatTitle: z.string().nullable().default(null),
+  mappingStatus: z.enum(["active", "recovering", "unverified", "error"]).default("active"),
+  createdAt: z.string(),
+  lastVerifiedAt: z.string().nullable().default(null),
+  lastSuccessfulRequestAt: z.string().nullable().default(null),
+  lastError: z.string().nullable().default(null),
+});
+export type ProjectChatGptMapping = z.infer<typeof ProjectChatGptMappingSchema>;
+
+export const SourceManifestStatusSchema = z.enum([
+  "DISCOVERED",
+  "INSPECTING",
+  "EXTRACTED",
+  "REDACTION_REQUIRED",
+  "READY_TO_DELIVER",
+  "ATTACHMENT_QUEUED",
+  "ATTACHED_IN_COMPOSER",
+  "SENT_IN_MAPPED_CONVERSATION",
+  "DELIVERY_FAILED",
+  "UNSUPPORTED",
+  "NEEDS_USER_ACTION",
+  "SUPERSEDED",
+]);
+export type SourceManifestStatus = z.infer<typeof SourceManifestStatusSchema>;
+
+export const SourceManifestItemSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  originalFilename: z.string(),
+  extension: z.string(),
+  byteSize: z.number(),
+  sha256: z.string(),
+  extractionStatus: z.string().default("EXTRACTED"),
+  deliveryStatus: SourceManifestStatusSchema.default("DISCOVERED"),
+  deliveryMethod: z.enum(["browser_upload", "chunked_text"]).default("browser_upload"),
+  redactionCompleted: z.boolean().default(true),
+  sanitizedPath: z.string().nullable().default(null),
+  supersededById: z.string().nullable().default(null),
+  errorMessage: z.string().nullable().default(null),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  deliveredAt: z.string().nullable().default(null),
+});
+export type SourceManifestItem = z.infer<typeof SourceManifestItemSchema>;
 
 // --- Human Messages / Directions ---
 export const HumanMessageKindSchema = z.enum([

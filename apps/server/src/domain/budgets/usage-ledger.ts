@@ -84,8 +84,11 @@ export class ReasoningUsageLedger {
     costUsd: number;
     costState: "measured" | "estimated" | "local_no_api_charge" | "unknown";
   } {
+    if (providerId === "chatgpt-web" || modelId === "chatgpt-web") {
+      return { costUsd: 0, costState: "local_no_api_charge" };
+    }
     const pricing = DEFAULT_PRICING_CATALOGUE[modelId];
-    if (providerId === "openai-compatible-local" || pricing?.provider === "local") {
+    if (pricing?.provider === "local") {
       return { costUsd: 0, costState: "local_no_api_charge" };
     }
     if (!pricing) {

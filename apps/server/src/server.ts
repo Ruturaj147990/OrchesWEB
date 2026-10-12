@@ -14,6 +14,13 @@ for (const candidate of [path.resolve(process.cwd(), ".env"), path.join(repoRoot
   }
 }
 
+// Validate runtime version (requires built-in node:sqlite in Node.js 22.5+)
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 5)) {
+  console.error(`[orchestrator] Node.js 22.5.0 or higher is required (current: ${process.version}). Orches relies on built-in node:sqlite.`);
+  process.exit(1);
+}
+
 const { buildApp } = await import("./app.js");
 const { config } = await import("./config/env.js");
 
@@ -22,7 +29,12 @@ try {
   const address = await app.listen({ host: config.host, port: config.port });
   console.log(`[orchestrator] Listening on ${address} (data: ${config.dataDir})`);
 } catch (err) {
-  console.error(`[orchestrator] Failed to start: ${(err as Error).message}`);
+  const error = err as NodeJS.ErrnoException;
+  if (error.code === "EADDRINUSE") {
+    console.error(`[orchestrator] Port ${config.port} is already in use by another process. Stop the existing instance or set ORCHESTRATOR_PORT in .env.`);
+  } else {
+    console.error(`[orchestrator] Failed to start: ${error.message}`);
+  }
   process.exit(1);
 }
 

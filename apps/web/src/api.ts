@@ -143,10 +143,14 @@ export interface RunDetail {
 }
 
 export interface Settings {
-  activeProviderId: "openai-compatible-local" | "openai";
+  activeProviderId: "chatgpt-web";
   activeModel: string;
-  local: { baseUrl: string; model: string; timeoutMs: number; contextTokens: number };
-  openai: { configured: boolean; maskedKey: string; model: string; keySource: "environment" | "settings" | null };
+  chatgptWeb: {
+    headless: boolean;
+    profileDir: string;
+    timeoutMs: number;
+    browserState?: string;
+  };
   codingAgentId: string;
   codingAgents: Array<{ id: string; name: string; description: string; usesReasoningProvider: boolean; available: boolean; detail: string }>;
   maxAttempts: number;
@@ -222,9 +226,10 @@ export const api = {
   sendGuidance: (projectId: string, content: string) => request("POST", `/projects/${projectId}/messages`, { kind: "guidance", content }),
   settings: () => request<Settings>("GET", "/settings"),
   saveSettings: (body: Record<string, unknown>) => request<Settings>("PUT", "/settings", body),
-  checkProvider: (id: string) => request<ProviderHealth>("POST", `/settings/providers/${id}/check`),
-  testProvider: (id: string) => request<{ ok: boolean; output?: string; durationMs?: number; model?: string }>("POST", `/settings/providers/${id}/test`),
-  localModels: (baseUrl?: string) => request<{ models: string[] }>("GET", `/settings/local-models${baseUrl ? `?baseUrl=${encodeURIComponent(baseUrl)}` : ""}`),
+  checkProvider: (id: string = "chatgpt-web") => request<ProviderHealth>("POST", `/settings/providers/${id}/check`),
+  testProvider: (id: string = "chatgpt-web") => request<{ ok: boolean; output?: string; durationMs?: number; model?: string }>("POST", `/settings/providers/${id}/test`),
+  openBrowser: () => request<{ ok: boolean; url: string; state: string; profileDir: string }>("POST", "/settings/browser/open"),
+  localModels: (_baseUrl?: string) => Promise.resolve({ models: [] }),
   ideStatus: (projectId?: string) => request<IdeStatus>("GET", `/ide/status${projectId ? `?projectId=${projectId}` : ""}`),
   openInIde: (projectId: string) => request<{ message: string }>("POST", `/projects/${projectId}/open-in-ide`),
   profiles: () => request<ProjectProfileDefinition[]>("GET", "/profiles"),
@@ -311,8 +316,7 @@ export const AUTONOMY_MODE_LABELS: Record<AutonomyMode, { label: string; descrip
 };
 
 export const PROVIDER_LABELS: Record<string, string> = {
-  "openai-compatible-local": "Local model",
-  openai: "OpenAI",
+  "chatgpt-web": "ChatGPT Web",
 };
 
 export const AGENT_LABELS: Record<string, string> = {

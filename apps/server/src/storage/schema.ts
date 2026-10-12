@@ -234,6 +234,38 @@ CREATE TABLE IF NOT EXISTS conversation_memory_snapshots (
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS project_chatgpt_conversations (
+  project_id TEXT PRIMARY KEY,
+  conversation_url TEXT,
+  chat_title TEXT,
+  mapping_status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  last_verified_at TEXT,
+  last_successful_request_at TEXT,
+  last_error TEXT,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS source_manifest_items (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  original_filename TEXT NOT NULL,
+  extension TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  extraction_status TEXT NOT NULL DEFAULT 'EXTRACTED',
+  delivery_status TEXT NOT NULL DEFAULT 'DISCOVERED',
+  delivery_method TEXT NOT NULL DEFAULT 'browser_upload',
+  redaction_completed INTEGER NOT NULL DEFAULT 1,
+  sanitized_path TEXT,
+  superseded_by_id TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  delivered_at TEXT,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_project_id ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_run_events_project_id_seq ON run_events(project_id, event_seq);
@@ -241,5 +273,6 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_project_id ON artifacts(project_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_convo_id ON conversation_messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_conversation_snapshots_convo_id ON conversation_memory_snapshots(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_source_manifest_project_id ON source_manifest_items(project_id);
 `;
 

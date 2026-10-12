@@ -9,8 +9,20 @@ const vsix = execFileSync(process.execPath, [path.join(here, "package-vsix.mjs")
 
 const candidates =
   process.platform === "win32"
-    ? [path.join(process.env.LOCALAPPDATA || "", "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd")]
-    : ["/usr/local/bin/antigravity-ide", "/usr/bin/antigravity-ide", "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"];
+    ? [
+        path.join(process.env.LOCALAPPDATA || "", "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+        path.join(process.env.ProgramFiles || "", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+        path.join(process.env["ProgramFiles(x86)"] || "", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+      ]
+    : [
+        path.join(process.env.HOME || "", ".local", "bin", "antigravity-ide"),
+        "/usr/local/bin/antigravity-ide",
+        "/usr/bin/antigravity-ide",
+        "/snap/bin/antigravity-ide",
+        "/opt/Antigravity IDE/bin/antigravity-ide",
+        "/opt/antigravity/bin/antigravity-ide",
+        "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
+      ];
 const cli = candidates.find((c) => fs.existsSync(c));
 if (!cli) {
   console.error(`Antigravity IDE CLI not found. Install manually: Extensions view → "Install from VSIX…" → ${vsix}`);

@@ -9,18 +9,8 @@ import path from "node:path";
  * check what the orchestrator guarantees (truthful outcome, files only in the workspace,
  * evidence shown) rather than exact code.
  */
-const OLLAMA = process.env.LOCAL_REASONING_BASE_URL || "http://127.0.0.1:11434";
+const LIVE_REASONING_READY = process.env.LIVE_REASONING_READY === "true";
 test.describe.configure({ mode: "serial", timeout: 600_000 });
-
-let ollamaUp = false;
-test.beforeAll(async () => {
-  try {
-    const res = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    ollamaUp = res.ok;
-  } catch {
-    ollamaUp = false;
-  }
-});
 
 const parent = fs.mkdtempSync(path.join(os.tmpdir(), "orches-e2e-live-"));
 test.afterAll(() => fs.rmSync(parent, { recursive: true, force: true }));
@@ -36,7 +26,7 @@ async function addProject(page: import("@playwright/test").Page, folder: string)
 }
 
 test("creates a Node module with tests from an empty folder, verified by the project's own test run", async ({ page }) => {
-  test.skip(!ollamaUp, "Ollama is not reachable");
+  test.skip(!LIVE_REASONING_READY, "Live reasoning backend not configured");
   const folder = path.join(parent, "calc");
   await addProject(page, folder);
 
@@ -68,7 +58,7 @@ test("creates a Node module with tests from an empty folder, verified by the pro
 });
 
 test("edits an existing file in a Git repository and commits only that change on the current branch", async ({ page }) => {
-  test.skip(!ollamaUp, "Ollama is not reachable");
+  test.skip(!LIVE_REASONING_READY, "Live reasoning backend not configured");
   const folder = path.join(parent, "docs");
   fs.mkdirSync(folder);
   fs.writeFileSync(path.join(folder, "README.md"), "# Docs demo\n\nA tiny project.\n");

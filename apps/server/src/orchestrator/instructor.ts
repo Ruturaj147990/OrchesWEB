@@ -603,7 +603,20 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
 
   const parsed = (response.parsed ?? extractJsonFromText(response.text)) as Record<string, unknown> | null;
   const action = String(parsed?.action ?? "").toLowerCase();
-  const rawInstruction = typeof parsed?.instruction === "string" ? parsed.instruction.trim() : typeof parsed?.prompt === "string" ? (parsed.prompt as string).trim() : "";
+  let rawInstruction = typeof parsed?.instruction === "string" ? parsed.instruction.trim() : typeof parsed?.prompt === "string" ? (parsed.prompt as string).trim() : "";
+
+  // Support output markers contract from ChatGPT Web
+  if (!rawInstruction && response.text) {
+    const markerStart = response.text.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    const markerEnd = response.text.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    if (markerStart !== -1 && markerEnd !== -1 && markerEnd > markerStart) {
+      rawInstruction = response.text.slice(markerStart + 32, markerEnd).trim();
+    } else if (markerStart !== -1) {
+      rawInstruction = response.text.slice(markerStart + 32).trim();
+    } else if (response.text.length > 50 && !response.text.startsWith("{")) {
+      rawInstruction = response.text.trim();
+    }
+  }
 
   if (action === "stop") {
     return {

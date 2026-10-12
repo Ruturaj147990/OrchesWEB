@@ -33,7 +33,7 @@ export function TaskComposer({ project, settings, providerReady, runActive, disa
   };
 
   const providerText = settings
-    ? `${settings.activeProviderId === "openai" ? "OpenAI" : "Local"} · ${settings.activeModel}`
+    ? "ChatGPT Web · Browser"
     : "…";
   const agent = settings?.codingAgents.find((a) => a.id === settings.codingAgentId);
   const modeText = project

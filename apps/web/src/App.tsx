@@ -345,7 +345,7 @@ export function App() {
         <span className="spacer" />
         <button className="provider-pill" onClick={() => setDialog("settings")} title={providerMessage ?? "Reasoning model"}>
           <span className={`dot dot-${providerReady === null ? "neutral" : providerReady ? "ok" : "bad"}`} aria-hidden />
-          {settings ? `${settings.activeProviderId === "openai" ? "OpenAI" : "Local"} · ${settings.activeModel}` : "…"}
+          {settings ? "ChatGPT Web · Browser" : "…"}
         </button>
         <button
           className="btn btn-ghost btn-sm"

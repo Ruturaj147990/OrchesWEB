@@ -45,7 +45,7 @@ export const hangUntilAborted: Responder = (_req, signal) =>
  * every request so tests can assert what the pipeline sent.
  */
 export class ScriptedProvider implements ReasoningProvider {
-  public id = "openai-compatible-local";
+  public id = "chatgpt-web";
   public displayName = "Scripted test provider";
   public privacyClass = "local" as const;
   public requests: ReasoningRequest[] = [];

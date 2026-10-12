@@ -39,7 +39,7 @@ export function estimateTokens(content: string | null | undefined): number {
 
 /**
  * Calculates a model-aware context budget.
- * Accurately scales between local Ollama (e.g. 16k tokens) and cloud OpenAI (e.g. 128k tokens)
+ * Accurately scales across model windows (e.g. ChatGPT Web 32k tokens, custom 128k tokens)
  * without hardcoding single-provider limits.
  *
  * Defines and accounts for:
@@ -60,21 +60,7 @@ export function calculateContextBudget(
   if (typeof provider.getContextWindow === "function") {
     totalContextTokens = provider.getContextWindow();
   } else {
-    const settings = SettingsManager.loadSettings();
-    if (provider.id === "openai") {
-      const m = provider.getModel().toLowerCase();
-      if (m.includes("gpt-4o") || m.includes("o1") || m.includes("o3") || m.includes("o4")) {
-        totalContextTokens = 128_000;
-      } else if (m.includes("gpt-4")) {
-        totalContextTokens = 8_192;
-      } else if (m.includes("gpt-3.5")) {
-        totalContextTokens = 16_385;
-      } else {
-        totalContextTokens = 32_768;
-      }
-    } else {
-      totalContextTokens = settings.localContextTokens || 16_384;
-    }
+    totalContextTokens = 32_768;
   }
 
   // Ensure reasonable bounds (minimum 2048)

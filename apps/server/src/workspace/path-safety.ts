@@ -146,7 +146,7 @@ export function validateWorkspaceRoot(
   const trimmed = (rawPath || "").trim().replace(/^"+|"+$/g, "");
   if (!trimmed) return { ok: false, canonicalPath: "", reason: "A workspace folder path is required." };
   if (!path.isAbsolute(trimmed)) {
-    return { ok: false, canonicalPath: trimmed, reason: "Workspace path must be absolute (for example C:\\Users\\you\\projects\\app)." };
+    return { ok: false, canonicalPath: trimmed, reason: "Workspace path must be absolute (for example C:\\Users\\you\\projects\\app or /home/you/projects/app)." };
   }
   let canonical = path.resolve(trimmed);
   if (fs.existsSync(canonical)) {
