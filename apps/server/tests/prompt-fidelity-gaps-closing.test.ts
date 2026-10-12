@@ -188,11 +188,11 @@ Implement JWT authentication.
       expect(result.initialReport.missingRequirements.length).toBe(1);
 
       expect(result.report).toBeDefined();
-      expect(result.passed).toBe(true);
+      expect(result.passed).toBe(false);
+      expect(result.prompt).not.toContain("## Mandatory Requirements (Traceability Enforcement)");
       expect(result.residualUncertainties.length).toBeGreaterThan(0);
-      expect(result.report.score).toBeLessThanOrEqual(95);
-      expect(result.report.summary).toContain("Initial:");
-      expect(result.report.summary).toContain("residual uncertainties noted");
+      expect(result.report.missingRequirements.length).toBe(1);
+      expect(result.report.summary).toContain("flagged");
     });
   });
 });

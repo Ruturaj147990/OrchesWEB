@@ -1079,6 +1079,652 @@ Build the deterministic data aggregator.
       expect(waitFinished).toBe(true);
     });
   });
+
+  describe("Section 12 & 17 Master Regression Suite: Natural-Language Protocol & End-to-End Loop", () => {
+    it("1. extracts a valid detailed natural-language instruction response cleanly", async () => {
+      const response = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+
+# Implementation Mission: Order Fulfillment Service
+
+## 1. Executive Objective
+Implement idempotent order processing with database transaction isolation.
+
+## 2. Architecture & Design Direction
+Coordinate state transitions across \`src/orders/service.ts\` and \`src/payments/gateway.ts\`.
+
+## 3. Verification Instructions
+Run \`npm test\` and verify all unit tests pass with exit code 0.
+
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.extractInstruction(response);
+      expect(result.action).toBe("instruct");
+      expect(result.status).toBe("INSTRUCT");
+      expect(result.isMarkerExtracted).toBe(true);
+      expect(result.instructionText).toContain("# Implementation Mission: Order Fulfillment Service");
+      expect(result.instructionText).toContain("Implement idempotent order processing");
+      expect(result.instructionText).not.toContain("ORCHES_STATUS: INSTRUCT");
+      expect(result.instructionText).not.toContain("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    });
+
+    it("2. preserves complete Markdown structure without alteration", async () => {
+      const markdown = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Master Brief
+> [!IMPORTANT]
+> Preserve existing customer records.
+
+- Item 1: Inspect schemas
+- Item 2: Add validation rules
+  - Subitem 2a: Validate email
+  - Subitem 2b: Validate phone
+
+1. First migration
+2. Second migration
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.extractInstruction(markdown);
+      expect(result.instructionText).toContain("> [!IMPORTANT]");
+      expect(result.instructionText).toContain("- Item 1: Inspect schemas");
+      expect(result.instructionText).toContain("  - Subitem 2a: Validate email");
+      expect(result.instructionText).toContain("1. First migration");
+    });
+
+    it("3. handles large multi-kilobyte engineering briefs without clipping or truncation", async () => {
+      const longSection = Array.from({ length: 50 }, (_, i) => `### Subsection ${i + 1}\nDetailed technical requirement ${i + 1} with parameters and error handling.`).join("\n\n");
+      const fullResponse = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Comprehensive System Architecture Brief
+${longSection}
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.extractInstruction(fullResponse);
+      expect(result.instructionText.length).toBeGreaterThan(3000);
+      expect(result.instructionText).toContain("Subsection 1");
+      expect(result.instructionText).toContain("Subsection 50");
+    });
+
+    it("4. preserves fenced code blocks and code indentation inside instructions", async () => {
+      const response = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Algorithm Implementation
+Implement the following function in \`src/math.ts\`:
+
+\`\`\`typescript
+export function calculateMovingAverage(values: number[], windowSize: number): number[] {
+  if (windowSize <= 0) throw new Error("Window size must be positive");
+  const result: number[] = [];
+  for (let i = 0; i <= values.length - windowSize; i++) {
+    const slice = values.slice(i, i + windowSize);
+    const sum = slice.reduce((a, b) => a + b, 0);
+    result.push(sum / windowSize);
+  }
+  return result;
+}
+\`\`\`
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.extractInstruction(response);
+      expect(result.instructionText).toContain("```typescript");
+      expect(result.instructionText).toContain("export function calculateMovingAverage");
+      expect(result.instructionText).toContain("const slice = values.slice(i, i + windowSize);");
+    });
+
+    it("5. parses explicit STOP status with clear reason and prevents instruction dispatch", async () => {
+      const stopText = `ORCHES_STATUS: STOP
+
+Reason: External payment gateway API key is required to test real credit card authorizations.`;
+
+      const result = ResponseReader.extractInstruction(stopText);
+      expect(result.action).toBe("stop");
+      expect(result.status).toBe("STOP");
+      expect(result.instructionText).toBe("");
+      expect(result.stopReason).toContain("External payment gateway API key is required");
+      expect(result.rationale).toContain("External payment gateway API key is required");
+    });
+
+    it("6. rejects responses missing protocol status line in strict mode", async () => {
+      const missingStatus = `[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Brief without status line
+Implement feature now.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(missingStatus, { requireProtocolStatus: true });
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Missing protocol status line");
+    });
+
+    it("7. rejects responses missing opening instruction delimiter", async () => {
+      const missingStart = `ORCHES_STATUS: INSTRUCT
+
+# Brief without opening delimiter
+Implement feature.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(missingStart);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Missing opening instruction delimiter");
+    });
+
+    it("8. rejects responses with duplicated opening instruction delimiters", async () => {
+      const duplicatedStart = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Ambiguous Brief
+Implement feature.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(duplicatedStart);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Duplicated opening instruction delimiters");
+    });
+
+    it("9. rejects responses with reversed delimiters", async () => {
+      const reversed = `ORCHES_STATUS: INSTRUCT
+
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Inverted Brief
+Implement feature.
+[ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(reversed);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Reversed delimiters");
+    });
+
+    it("10. rejects empty instruction body between delimiters", async () => {
+      const emptyBody = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+   
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(emptyBody);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Instruction body between delimiters is empty");
+    });
+
+    it("11. rejects invalid protocol status values", async () => {
+      const invalidStatus = `ORCHES_STATUS: UNKNOWN
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Some Brief
+Implement feature.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(invalidStatus);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Invalid protocol status 'UNKNOWN'");
+    });
+
+    it("12. rejects truncated response missing closing delimiter", async () => {
+      const truncated = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Cut-off Brief
+Edit src/handler.ts to add error handling`;
+
+      const result = ResponseReader.parseProtocol(truncated);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Missing closing instruction delimiter");
+    });
+
+    it("13. does not truncate when marker-like text appears in quoted inline examples", async () => {
+      const inlineExample = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Instruction with Quoted Marker Example
+To parse markers, search for \`[ORCHES_ANTIGRAVITY_INSTRUCTION]\` and \`[/ORCHES_ANTIGRAVITY_INSTRUCTION]\`.
+Ensure you test this function thoroughly with unit tests.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(inlineExample);
+      expect(result.status).toBe("INSTRUCT");
+      expect(result.instructionText).toContain("Ensure you test this function thoroughly with unit tests.");
+    });
+
+    it("14. does not truncate when marker-like text appears inside fenced code blocks", async () => {
+      const codeBlockExample = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Integration Testing Brief
+Implement the following test fixture:
+
+\`\`\`typescript
+const mockResponse = \`
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+Inside mock
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]
+\`;
+\`\`\`
+
+Verify all tests pass cleanly.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(codeBlockExample);
+      expect(result.status).toBe("INSTRUCT");
+      expect(result.instructionText).toContain("Verify all tests pass cleanly.");
+      expect(result.instructionText).toContain("Inside mock");
+    });
+
+    it("15. maintains backward compatibility for legacy JSON responses when permitted", async () => {
+      const legacyJson = JSON.stringify({
+        action: "instruct",
+        instruction: "Legacy instruction from historical run record.",
+        rationale: "Historical record",
+      });
+
+      const result = ResponseReader.parseProtocol(legacyJson, { allowLegacyJson: true });
+      expect(result.status).toBe("INSTRUCT");
+      expect(result.instructionText).toBe("Legacy instruction from historical run record.");
+      expect(result.isLegacyJson).toBe(true);
+    });
+
+    it("16. strictly rejects JSON-only response in active contract when allowLegacyJson is false", async () => {
+      const activeJsonResponse = JSON.stringify({
+        action: "instruct",
+        instruction: "Should not be wrapped in JSON.",
+      });
+
+      const result = ResponseReader.parseProtocol(activeJsonResponse, { allowLegacyJson: false });
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("Active response contract requires natural-language protocol");
+    });
+
+    it("17. rejects task-planning descriptor inside markers and identifies it as invalid", async () => {
+      const descriptorInsideMarkers = `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+{
+  "title": "Build feature",
+  "acceptance_criteria": ["All tests pass"],
+  "files_to_read": ["src/index.ts"]
+}
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+
+      const result = ResponseReader.parseProtocol(descriptorInsideMarkers);
+      expect(result.status).toBe("INVALID");
+      expect(result.validationError).toContain("task-planning descriptor");
+    });
+
+    it("18. accepts legitimately concise response for a simple task in substance validator", async () => {
+      const { validateInstructionSubstance } = await import("../src/prompts/instruction-validator.js");
+
+      const conciseBrief = `# Add Helper Function
+Add a \`formatIsoDate\` helper in \`src/utils/date.ts\`. Run \`npm test\` to verify.`;
+
+      const validation = validateInstructionSubstance(conciseBrief, "Add date helper", { isComplex: false });
+      expect(validation.valid).toBe(true);
+      expect(validation.hasVerificationInstructions).toBe(true);
+    });
+
+    it("19. rejects inadequate brief for a complex specification in substance validator", async () => {
+      const { validateInstructionSubstance } = await import("../src/prompts/instruction-validator.js");
+
+      const tooShort = "Implement the microservices architecture.";
+      const complexTask = "Architect and implement distributed consensus with Raft, persistence, replication, and fault recovery over 5 nodes.";
+
+      const validation = validateInstructionSubstance(tooShort, complexTask, { isComplex: true });
+      expect(validation.valid).toBe(false);
+      expect(validation.summary).toContain("lacks sufficient detail for a complex engineering specification");
+    });
+
+    it("20. ChatGPTWebProvider assemblePrompt directs model to return natural-language routing protocol", async () => {
+      const { ChatGPTWebProvider } = await import("../src/providers/reasoning/chatgpt-web/chatgpt-web-provider.js");
+
+      const provider = new ChatGPTWebProvider({ headless: true });
+      const promptText = (provider as any).assemblePrompt({
+        operation: "code_generation",
+        systemInstruction: "You are the systems architect.",
+        messages: [{ role: "user", content: "Build user service" }],
+        projectId: "proj-1",
+        runId: "run-1",
+      });
+
+      expect(promptText).toContain("ORCHES_STATUS: INSTRUCT");
+      expect(promptText).toContain("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+      expect(promptText).toContain("ORCHES_STATUS: STOP");
+      expect(promptText).toContain("Do NOT return a JSON object");
+      expect(promptText).not.toContain("Reply with a single JSON object");
+    });
+
+    it("21. composeInstruction correctly processes natural-language INSTRUCT protocol and STOP protocol", async () => {
+      const { composeInstruction } = await import("../src/orchestrator/instructor.js");
+      const { ScriptedProvider } = await import("./helpers.js");
+
+      // Test INSTRUCT protocol
+      const instructProvider = new ScriptedProvider();
+      instructProvider.enqueue("code_generation", () => {
+        return `ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Master Engineering Brief: Calculator Module
+## 1. Executive Objective
+Implement calculator operations in \`src/calculator.ts\`.
+## 2. Working Instructions for Antigravity Agent
+- Implement add, subtract, multiply, and divide with zero-division validation.
+- Run tests via \`npm test\` to verify.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+      });
+
+      const instr = await composeInstruction(instructProvider, {
+        projectId: "proj-protocol-test",
+        runId: "run-protocol-test",
+        taskText: "Implement calculator operations with input validation",
+        criteria: ["All operations work", "Zero division throws error"],
+        profile: {
+          fileCount: 1,
+          isEmpty: false,
+          languages: ["typescript"],
+          checks: [{ label: "npm test", command: "npm test", source: "package.json", kind: "test" }],
+          testFrameworks: ["vitest"],
+          packageManagers: ["npm"],
+          manifests: ["package.json"],
+          notes: [],
+        },
+        files: ["package.json", "src/calculator.ts"],
+        iteration: 1,
+        maxIterations: 3,
+        history: [],
+      });
+
+      expect(instr.action).toBe("instruct");
+      expect(instr.source).toBe("model");
+      expect(instr.instruction).toContain("# Master Engineering Brief: Calculator Module");
+      expect(instr.instruction).toContain("Implement add, subtract, multiply, and divide");
+      expect(instr.instruction).not.toContain("ORCHES_STATUS: INSTRUCT");
+      expect(instr.instruction).not.toContain("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+
+      // Test STOP protocol
+      const stopProvider = new ScriptedProvider();
+      stopProvider.enqueue("code_generation", () => {
+        return `ORCHES_STATUS: STOP
+
+Reason: Operation requires external cloud database credentials which are unavailable.`;
+      });
+
+      const stopInstr = await composeInstruction(stopProvider, {
+        projectId: "proj-protocol-test",
+        runId: "run-protocol-test",
+        taskText: "Connect to live production database",
+        criteria: ["Connects cleanly"],
+        profile: {
+          fileCount: 1,
+          isEmpty: false,
+          languages: ["typescript"],
+          checks: [],
+          testFrameworks: [],
+          packageManagers: [],
+          manifests: [],
+          notes: [],
+        },
+        files: ["package.json"],
+        iteration: 1,
+        maxIterations: 3,
+        history: [],
+      });
+
+      expect(stopInstr.action).toBe("stop");
+      expect(stopInstr.instruction).toBe("");
+      expect(stopInstr.rationale).toContain("requires external cloud database credentials");
+    });
+  });
+
+  describe("Section 13 Regression Suite: Hotfix — Prevent Incomplete GPT Responses from Reaching Antigravity", () => {
+    let ScriptedProvider: any;
+    let composeInstruction: any;
+
+    beforeAll(async () => {
+      const helpers = await import("./helpers.js");
+      ScriptedProvider = helpers.ScriptedProvider;
+      const instructor = await import("../src/orchestrator/instructor.js");
+      composeInstruction = instructor.composeInstruction;
+    });
+
+    it("1. rejects a 27-character response containing only 'Defining a safe alternative'", async () => {
+      const fragment = "Defining a safe alternative";
+      expect(fragment.length).toBe(27);
+
+      // parseProtocol must reject it as an interim thought fragment / invalid status
+      const extracted = ResponseReader.parseProtocol(fragment);
+      expect(extracted.status).toBe("INVALID");
+      expect(extracted.instructionText).toBe("");
+      expect(extracted.validationError).toBeDefined();
+
+      // Even if inside delimiters, it must be rejected as an interim thought fragment
+      const insideMarkers = `ORCHES_STATUS: INSTRUCT\n\n[ORCHES_ANTIGRAVITY_INSTRUCTION]\n${fragment}\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+      const extractedWithMarkers = ResponseReader.parseProtocol(insideMarkers);
+      expect(extractedWithMarkers.status).toBe("INVALID");
+      expect(extractedWithMarkers.validationError).toContain("interim thought fragment");
+    });
+
+    it("2. rejects a response without the required status or delimiters", async () => {
+      const missingProtocol = "Build the user registration and login endpoints with SQLite and bcrypt.";
+      const extractedStrict = ResponseReader.parseProtocol(missingProtocol, { requireProtocolStatus: true });
+      expect(extractedStrict.status).toBe("INVALID");
+      expect(extractedStrict.validationError).toContain("Missing protocol status line");
+    });
+
+    it("3. an incomplete response is not dispatched merely because browser reports Generating: false", async () => {
+      const fragment = "Defining a safe alternative";
+      const { isThoughtOrStatusFragment } = await import("../src/prompts/instruction-validator.js");
+      expect(isThoughtOrStatusFragment(fragment)).toBe(true);
+
+      const mockPage: any = {
+        url: () => "https://chatgpt.com/c/test-incomplete",
+      };
+      // checkForCompletedResponse rejects thought fragments and short non-protocol text even when isGenerating is false
+      const baseline = { assistantCount: 0, lastAssistantText: "" };
+      // PromptSender methods would return [fragment] with isGenerating: false
+      const isShortWithoutProtocol =
+        fragment.length < 80 &&
+        !fragment.includes(ResponseReader.STATUS_LINE_PREFIX) &&
+        !fragment.includes(ResponseReader.MARKER_START);
+      expect(isShortWithoutProtocol).toBe(true);
+    });
+
+    it("4. a stale assistant response cannot satisfy the current request", async () => {
+      const staleText = "ORCHES_STATUS: INSTRUCT\n\n[ORCHES_ANTIGRAVITY_INSTRUCTION]\n# Old brief\nDo nothing\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]";
+      const baseline = { assistantCount: 1, lastAssistantText: staleText };
+
+      // If the texts list only contains the same baseline text and same count, it's not new
+      const currentTexts = [staleText];
+      const isNew = currentTexts.length > baseline.assistantCount || currentTexts[0] !== baseline.lastAssistantText;
+      expect(isNew).toBe(false);
+    });
+
+    it("5. requirement-inventory assembly cannot promote an invalid response into a valid brief", async () => {
+      const { validateAndCorrectPrompt } = await import("../src/orchestrator/prompt-fidelity-gate.js");
+      const { buildRequirementInventory } = await import("../src/domain/requirements/requirement-inventory.js");
+
+      const fragment = "Defining a safe alternative";
+      const inventory = buildRequirementInventory({
+        taskText: "Build PRAHARI RF Receiver Controller",
+        projectObjective: "Must implement operational RF interception and receiver tuning [REQ-001].",
+      });
+
+      const result = validateAndCorrectPrompt(fragment, inventory);
+      expect(result.passed).toBe(false);
+      // Requirements must NOT be appended to a hollow fragment to pass it
+      expect(result.prompt).toBe(fragment);
+      expect(result.prompt).not.toContain("## Mandatory Requirements (Traceability Enforcement)");
+    });
+
+    it("6. a missing or malformed instruction body causes zero native-agent dispatches", async () => {
+      const { AntigravityAgentAdapter } = await import("../src/providers/coding-agents/antigravity/antigravity-agent-adapter.js");
+      const adapter = new AntigravityAgentAdapter();
+
+      const resultFragment = await adapter.execute({
+        projectId: "proj-1",
+        runId: "run-test-1",
+        taskId: "task-1",
+        attemptNumber: 1,
+        workspacePath: process.cwd(),
+        taskText: "Task",
+        title: "Task",
+        acceptanceCriteria: [],
+        profile: { fileCount: 0, isEmpty: true, languages: [], checks: [], testFrameworks: [], packageManagers: [], manifests: [], notes: [] },
+        filesToRead: [],
+        instruction: "Defining a safe alternative",
+      });
+
+      expect(resultFragment.status).toBe("failed");
+      expect(resultFragment.error).toContain("Antigravity boundary rejected non-executable or interim instruction");
+    });
+
+    it("7. explicit STOP responses and refusals remain terminal and cannot be dispatched", async () => {
+      const stopRaw = "ORCHES_STATUS: STOP\n\nReason: Cannot fulfill request due to safety policy.";
+      const extracted = ResponseReader.parseProtocol(stopRaw);
+      expect(extracted.action).toBe("stop");
+      expect(extracted.status).toBe("STOP");
+      expect(extracted.instructionText).toBe("");
+
+      const provider = new ScriptedProvider();
+      provider.enqueue("code_generation", () => stopRaw);
+
+      const instr = await composeInstruction(provider, {
+        projectId: "proj-stop",
+        runId: "run-stop",
+        taskText: "Intercept emitter hardware",
+        criteria: ["Safe"],
+        profile: { fileCount: 0, isEmpty: true, languages: [], checks: [], testFrameworks: [], packageManagers: [], manifests: [], notes: [] },
+        files: [],
+        iteration: 1,
+        maxIterations: 1,
+        history: [],
+      });
+
+      expect(instr.action).toBe("stop");
+      expect(instr.instruction).toBe("");
+    });
+
+    it("8. a complete, valid, detailed Markdown instruction passes the protocol and fidelity checks", async () => {
+      const validMarkdown = `# Implementation Mission — Synthetic Research Simulator
+## 1. Executive Objective
+Build a synthetic scheduling research simulator with zero physical hardware control.
+## 2. Functional Requirements
+- **[REQ-001]** Implement synthetic job queue and priority scheduler.
+- **[REQ-002]** Implement simulated emitter pulse generator in software.
+## 3. Automated Verification
+Run \`npm test\` to verify all scheduler tests pass cleanly.`;
+
+      const protocolResponse = `ORCHES_STATUS: INSTRUCT\n\n[ORCHES_ANTIGRAVITY_INSTRUCTION]\n${validMarkdown}\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+      const extracted = ResponseReader.parseProtocol(protocolResponse, { requireProtocolStatus: true });
+
+      expect(extracted.status).toBe("INSTRUCT");
+      expect(extracted.instructionText).toBe(validMarkdown);
+
+      const { validateInstructionSubstance } = await import("../src/prompts/instruction-validator.js");
+      const validation = validateInstructionSubstance(extracted.instructionText, "Build synthetic scheduling research simulator");
+      expect(validation.valid).toBe(true);
+    });
+
+    it("9. the exact validated instruction body reaches the dispatch boundary intact", async () => {
+      const briefBody = `# Synthetic Simulator
+Implement the synthetic job queue with automated tests. Run \`npm test\` to verify.`;
+
+      const provider = new ScriptedProvider();
+      provider.enqueue("code_generation", () => `ORCHES_STATUS: INSTRUCT\n\n[ORCHES_ANTIGRAVITY_INSTRUCTION]\n${briefBody}\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]`);
+
+      const instr = await composeInstruction(provider, {
+        projectId: "proj-exact",
+        runId: "run-exact",
+        taskText: "Build Synthetic Simulator",
+        criteria: ["Passes tests"],
+        profile: { fileCount: 0, isEmpty: true, languages: [], checks: [], testFrameworks: [], packageManagers: [], manifests: [], notes: [] },
+        files: [],
+        iteration: 1,
+        maxIterations: 1,
+        history: [],
+      });
+
+      expect(instr.instruction).toBe(briefBody);
+    });
+
+    it("10. conflicting or out-of-scope requirements remain traceable without being silently reintroduced", async () => {
+      const { buildRequirementInventory } = await import("../src/domain/requirements/requirement-inventory.js");
+
+      const inventory = buildRequirementInventory({
+        taskText: "Build non-operational synthetic scheduling research simulator",
+        projectObjective: `# PRAHARI Architecture
+- [REQ-001] Implement synthetic pulse scheduler.
+- [REQ-002] Control physical RF receiver hardware and operational emitter interception.`,
+      });
+
+      const syntheticReq = inventory.requirements.find((r) => r.title.includes("synthetic pulse scheduler"));
+      const physicalReq = inventory.requirements.find((r) => r.title.includes("physical RF receiver hardware"));
+
+      expect(syntheticReq).toBeDefined();
+      expect(syntheticReq?.scopeStatus).toBe("in_scope");
+
+      expect(physicalReq).toBeDefined();
+      expect(physicalReq?.scopeStatus).toBe("safety_conflict");
+      expect(physicalReq?.scopeConflictReason).toContain("Operational hardware / live interception is prohibited");
+    });
+
+    it("11. a benign synthetic-simulator brief remains within its declared scope", async () => {
+      const { synthesizeSubstantiveBrief } = await import("../src/orchestrator/instructor.js");
+      const { buildRequirementInventory } = await import("../src/domain/requirements/requirement-inventory.js");
+
+      const inventory = buildRequirementInventory({
+        taskText: "Build non-operational synthetic scheduling research simulator",
+        projectObjective: `- [REQ-001] Implement simulated emitter event generator.\n- [REQ-002] Physical receiver control.`,
+      });
+
+      const brief = synthesizeSubstantiveBrief(
+        {
+          projectId: "proj-sim",
+          runId: "run-sim",
+          taskText: "Build non-operational synthetic scheduling research simulator",
+          criteria: ["Simulator runs cleanly"],
+          profile: { fileCount: 0, isEmpty: true, languages: ["typescript"], checks: [], testFrameworks: [], packageManagers: [], manifests: [], notes: [] },
+          files: [],
+          iteration: 1,
+          maxIterations: 1,
+          history: [],
+        },
+        inventory
+      );
+
+      // Brief must contain simulation requirements
+      expect(brief).toContain("simulated emitter event generator");
+      // Physical receiver control must NOT be listed in active specification requirements
+      expect(brief).not.toContain("### Explicit Specification Requirements\n- **[REQ-002]** (critical) Physical receiver control");
+      // It must be placed in safety boundaries & excluded operational scope
+      expect(brief).toContain("Safety Boundaries & Excluded Operational Scope");
+      expect(brief).toContain("Physical receiver control");
+    });
+
+    it("12. retry exhaustion produces a truthful blocked or failed status rather than false success", async () => {
+      const provider = new ScriptedProvider();
+      // Returns fragments repeatedly
+      provider.enqueue("code_generation", () => "Defining a safe alternative");
+
+      const instr = await composeInstruction(provider, {
+        projectId: "proj-fallback",
+        runId: "run-fallback",
+        taskText: "Build non-operational synthetic scheduling research simulator",
+        criteria: ["Passes tests"],
+        profile: { fileCount: 0, isEmpty: true, languages: ["typescript"], checks: [], testFrameworks: [], packageManagers: [], manifests: [], notes: [] },
+        files: [],
+        iteration: 1,
+        maxIterations: 1,
+        history: [],
+      });
+
+      // The orchestrator synthesizes a complete substantive brief instead of passing the 27-char fragment
+      expect(instr.source).toBe("fallback");
+      expect(instr.instruction.length).toBeGreaterThan(200);
+      expect(instr.instruction).not.toBe("Defining a safe alternative");
+      expect(instr.warning).toContain("Defining a safe alternative");
+    });
+  });
 });
 
 

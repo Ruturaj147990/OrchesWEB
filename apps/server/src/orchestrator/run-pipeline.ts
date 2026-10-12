@@ -17,11 +17,13 @@ import { planTask } from "./planner.js";
 import { reviewAttempt, CriticOutcome } from "./critic.js";
 import { evaluateAttempt, GateDecision } from "./acceptance-gate.js";
 import { composeInstruction, IterationEvidence } from "./instructor.js";
+import { validateInstructionSubstance, isThoughtOrStatusFragment, isTaskDescriptor } from "../prompts/instruction-validator.js";
 import { projectFileList } from "../workspace/project-inspector.js";
 import { missingRequestedFiles } from "../workspace/requested-files.js";
 import { ReasoningUsageLedger } from "../domain/budgets/usage-ledger.js";
 import { SettingsManager } from "../platform/settings-manager.js";
 import { BlueprintRepository } from "../storage/repositories/blueprint-repository.js";
+import { buildAuthoritativeTaskContext, updateAuthoritativeTaskContext, type AuthoritativeTaskContext } from "./task-context.js";
 import { getProjectProfile } from "../domain/profiles/project-profiles.js";
 import { buildRequirementInventory, updateRequirementStatuses, RequirementInventory } from "../domain/requirements/requirement-inventory.js";
 import { ConversationMemoryService } from "../domain/memory/conversation-memory-service.js";
@@ -213,6 +215,17 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     }
     runs.updateFields(run.id, { title: plan.title });
     taskId = `task-${crypto.randomUUID()}`;
+    let taskContext = buildAuthoritativeTaskContext({
+      projectId: project.id,
+      runId: run.id,
+      taskId,
+      taskText: ctx.taskText,
+      projectObjective: project.objective,
+      inventory,
+      maxIterations: ctx.maxAttempts,
+    });
+
+    const activeCriteriaStrings = taskContext.activeAcceptanceCriteria.map((c) => c.description);
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO tasks (id, project_id, run_id, title, objective, roadmap_item_id, status, priority, risk,
@@ -224,14 +237,14 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       run.id,
       plan.title,
       ctx.taskText,
-      JSON.stringify(plan.acceptanceCriteria),
+      JSON.stringify(activeCriteriaStrings),
       JSON.stringify(baselineProfile.checks.map((c) => c.label)),
       ctx.maxAttempts,
       now,
       now
     );
     runs.updateFields(run.id, { currentTaskId: taskId });
-    events.record(project.id, "task.planned", { taskId, title: plan.title, criteria: plan.acceptanceCriteria, filesToRead: plan.filesToRead, source: plan.source }, run.id, taskId);
+    events.record(project.id, "task.planned", { taskId, title: plan.title, criteria: activeCriteriaStrings, filesToRead: plan.filesToRead, source: plan.source }, run.id, taskId);
 
     // 4. Attempts. Every attempt is judged on the cumulative change since the run started, so a
     // repair attempt edits the previous attempt's files instead of starting over. Rollback to the
@@ -283,7 +296,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           runId: run.id,
           taskText: ctx.taskText,
           projectObjective: project.objective,
-          criteria: plan.acceptanceCriteria,
+          criteria: activeCriteriaStrings,
+          taskContext,
           profile: baselineProfile,
           profileDefinition: profileDef,
           autonomyMode,
@@ -328,7 +342,29 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           finish("failed", "rejected", `${provider.displayName} stopped the run: ${instr.rationale} ${describeRollback(rb)}`, { rollback: rb });
           return;
         }
-        instructionText = instr.instruction;
+        instructionText = instr.instruction?.trim();
+
+        // Final dispatch boundary validation: reject hollow fragments, thought headers, or empty instructions
+        if (
+          !instructionText ||
+          instructionText.length < 30 ||
+          isThoughtOrStatusFragment(instructionText) ||
+          isTaskDescriptor(instructionText)
+        ) {
+          const rejectReason = isThoughtOrStatusFragment(instructionText || "")
+            ? `Final dispatch gate rejected interim thought fragment: "${instructionText?.slice(0, 40)}"`
+            : isTaskDescriptor(instructionText || "")
+              ? "Final dispatch gate rejected internal task descriptor"
+              : `Final dispatch gate rejected empty or insufficient instruction (${instructionText?.length || 0} chars)`;
+          log(`[run-pipeline] ${rejectReason}`, "warn");
+          db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, instruction_text = ? WHERE id = ?").run(new Date().toISOString(), `(dispatch-rejected) ${rejectReason}`, attemptId);
+          events.record(project.id, "brain.instruction", { attempt, action: "failed", rationale: rejectReason, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
+          const rb = rollbackActive("invalid-instruction");
+          activeSnapshot = null;
+          finish("failed", "rejected", rejectReason, { rollback: rb });
+          return;
+        }
+
         memoryService.recordAgentDispatch(conversation.id, instructionText, { attempt, agent: agent.displayName, runId: run.id });
         db.prepare("UPDATE task_attempts SET instruction_text = ? WHERE id = ?").run(instructionText, attemptId);
         events.record(project.id, "brain.instruction", { attempt, action: "instruct", instruction: instructionText, rationale: instr.rationale, source: instr.source, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
@@ -412,8 +448,11 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           runId: run.id,
           taskId,
           taskText: ctx.taskText,
-          criteria: plan.acceptanceCriteria,
+          taskContext,
+          activeCriteria: taskContext.activeAcceptanceCriteria,
+          excludedRequirements: taskContext.excludedRequirements,
           diffText: diff.diffText,
+          changes: diff.changes,
           checks: attemptChecks,
           agentReport: agentResult.transcript?.finalReply,
           signal,
@@ -498,6 +537,16 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         unverified: inventory.requirements.filter((r) => r.status !== "verified").map((r) => ({ id: r.id, status: r.status, title: r.title })),
       }, run.id, taskId);
 
+      taskContext = updateAuthoritativeTaskContext(taskContext, {
+        iteration: attempt,
+        changes: diff.changes,
+        diffText: diff.diffText,
+        diffTruncated: diff.diffText.length > 24000,
+        checks: attemptChecks,
+        findings: critic.findings,
+        criteriaReviews: critic.criteria,
+      });
+
       const prevDiffExcerpt = history[history.length - 1]?.diffExcerpt;
       const isRepeatedAttempt = attempt > 1 && diff.diffText.slice(0, 6000) === prevDiffExcerpt;
 
@@ -550,7 +599,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         runs.incrementIteration(run.id);
         previousFailure = "The project currently has no automated checks, so behaviour was not tested. Implement automated verification tests (e.g. test suite or verification script) to validate the system, and complete any remaining requirements.";
       } else {
-        log(`Attempt ${attempt} rejected: ${gate.blockers.join(" | ")}`, "warn");
+        log(`Iteration ${attempt} completed with items to address: ${gate.blockers.join(" | ")}`, "info");
         previousFailure = buildRepairFeedback(gate, attemptChecks, staticResults, critic);
       }
 
@@ -567,7 +616,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         blockers: gate.accepted ? ["No automated checks exist: behaviour was not tested. Please implement automated verification tests (e.g. test suite) and verify remaining functionality."] : gate.blockers,
         reviewer: critic.available ? `${critic.verdict}: ${critic.summary} ${critic.repairInstructions.join(" ")}` : "",
       });
-      if (attempt < ctx.maxAttempts) log("Keeping this attempt's files so the next attempt can repair them; everything is rolled back if no attempt is accepted.");
+      if (attempt < ctx.maxAttempts) log("Preserving files for the next iteration to address feedback.");
     }
 
     const rb = rollbackActive("rejected");

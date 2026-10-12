@@ -1,5 +1,13 @@
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
 import { extractJsonFromText } from "../prompts/json-extractor.js";
+import { ResponseReader } from "../providers/reasoning/chatgpt-web/response-reader.js";
+import {
+  isTaskDescriptor,
+  isMetaInstruction,
+  isUnderSpecified,
+  isThoughtOrStatusFragment,
+  validateInstructionSubstance,
+} from "../prompts/instruction-validator.js";
 import type { ProjectProfile } from "../workspace/project-inspector.js";
 import type { ProjectProfileDefinition } from "../domain/profiles/project-profiles.js";
 import type { AutonomyMode } from "@orchestrator/shared-types";
@@ -15,6 +23,14 @@ import {
   type PromptFidelityReport,
 } from "./prompt-fidelity-gate.js";
 import { calculateContextBudget, estimateTokens } from "../domain/memory/context-budget.js";
+import type { AuthoritativeTaskContext } from "./task-context.js";
+
+export {
+  isTaskDescriptor,
+  isMetaInstruction,
+  isUnderSpecified,
+  validateInstructionSubstance,
+};
 
 export interface IterationEvidence {
   iteration: number;
@@ -40,6 +56,7 @@ export interface InstructionContext {
   blueprintDocuments?: ImportedDocument[];
   blueprintRequirements?: CandidateRequirement[];
   requirementInventory?: RequirementInventory;
+  taskContext?: AuthoritativeTaskContext;
   files: string[];
   iteration: number;
   maxIterations: number;
@@ -80,12 +97,32 @@ CRITICAL DIRECTIVES:
 3. SPECIFY IMPLEMENTATION, INTEGRATION, AND VERIFICATION:
    - Specify relevant implementation, integration, and verification expectations.
    - DO NOT write the source code yourself. DO NOT output full copy-paste source files or micro-manage single file contents. The agent is a capable engineer that will independently inspect existing code conventions, edit files, and run tests.
-   - When repairing a rejected iteration, conduct a root-cause analysis of the orchestrator's verification failure, quote the exact error output, and provide targeted corrective guidance.
+   - When addressing feedback from a previous iteration, conduct a root-cause analysis of the shortcomings, test outputs, and reviewer requests provided in the iteration history, and provide targeted corrective guidance.
 
-OUTPUT CONTRACT:
-Reply with one JSON object:
-{"action": "instruct" or "stop", "instruction": "the complete substantive markdown implementation prompt for Antigravity", "rationale": "one sentence summary of approach", "stop_reason": "only if action is stop: the genuine blocker"}
-Do not return the internal task-planning JSON schema (e.g. title, acceptance_criteria, files_to_read) as the engineering instruction.`;
+ROUTING & OUTPUT CONTRACT:
+You must reply using the Orches text-based routing protocol. Do NOT return a JSON object. Do NOT wrap your response in JSON.
+
+For a successful instruction response, you MUST output this exact structure:
+ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+
+# Implementation Mission
+
+<The complete, project-specific substantive engineering brief in Markdown>
+
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]
+
+For an operation that must stop:
+ORCHES_STATUS: STOP
+
+Reason: <A concise and truthful explanation of why the operation cannot proceed and, where appropriate, a safe alternative>
+
+CRITICAL PROTOCOL RULES:
+- The substantive engineering brief must be Markdown and natural language.
+- Do NOT return a JSON envelope or task descriptor around the engineering brief.
+- Do NOT return only a task title, short summary, task descriptor, or generic plan.
+- The content inside [ORCHES_ANTIGRAVITY_INSTRUCTION] must contain the complete, actionable engineering brief with concrete objectives, architecture guidance, functional requirements with [REQ-xxx] traceability, implementation boundaries, and automated verification expectations.`;
 
 export const MODE_DIRECTIVES: Record<AutonomyMode, string> = {
   creative_within_constraints: `MODE: Creative within constraints (Default).
@@ -95,80 +132,6 @@ Grant greater autonomy in architectural design, technical approach, and alternat
   strict_blueprint_adherence: `MODE: Strict instruction & blueprint adherence.
 Prioritize exact, faithful implementation of the user's explicit requirements and blueprint specifications. Strictly discourage unsolicited features, speculative redesigns, scope expansion, or unrequested architectural restructuring. Fulfill the exact acceptance criteria with minimal, targeted changes.`,
 };
-
-/**
- * Detects whether the model produced a shallow meta-instruction (e.g. telling the agent
- * to construct a brief) instead of the actual substantive engineering brief.
- */
-export function isMetaInstruction(text: string): boolean {
-  if (!text || typeof text !== "string") return true;
-  const trimmed = text.trim();
-  if (trimmed.length < 15) return true;
-
-  const metaPatterns = [
-    /^(construct|create|generate|write|produce|draft|prepare|assemble|formulate)\s+(a\s+)?(comprehensive\s+|cohesive\s+|detailed\s+|markdown\s+)*(engineering\s+brief|implementation\s+prompt|brief|plan|specification|summary|roadmap)\s+(for|to|outlining|covering)/i,
-    /^(please\s+)?(construct|create|generate|write|produce|draft)\s+(a\s+)?(comprehensive\s+|cohesive\s+|detailed\s+|markdown\s+)*(engineering\s+brief|plan|specification)/i,
-    /^(implement|build)\s+the\s+(requested\s+)?(project|application|system|feature)\s+according\s+to\s+(the\s+)?(guidelines|requirements|criteria|specifications)/i,
-    /^(the\s+agent\s+should\s+)?(construct|create|draft|prepare)\s+a\s+(brief|plan|specification)/i,
-    /^as\s+the\s+systems\s+architect,\s+(i\s+instruct\s+the\s+agent\s+to\s+)?construct/i,
-  ];
-
-  if (metaPatterns.some((pattern) => pattern.test(trimmed))) return true;
-
-  if (trimmed.length < 200 && /brief|guidelines and constraints|adhering to/i.test(trimmed) && !/#\s+/i.test(trimmed)) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Detects whether the text is an internal task-planning descriptor (such as JSON with
- * title, acceptance_criteria, files_to_read) rather than a substantive engineering instruction.
- */
-export function isTaskDescriptor(text: string): boolean {
-  if (!text || typeof text !== "string") return true;
-  const trimmed = text.trim();
-
-  // If text starts with '{' or '[' or contains task descriptor fields
-  if (trimmed.startsWith("{") || trimmed.includes('"acceptance_criteria"') || trimmed.includes('"files_to_read"')) {
-    try {
-      const parsed = extractJsonFromText(trimmed) as Record<string, unknown> | null;
-      if (parsed && typeof parsed === "object") {
-        const hasDescriptorFields =
-          "acceptance_criteria" in parsed ||
-          "files_to_read" in parsed ||
-          ("title" in parsed && !("instruction" in parsed) && !("prompt" in parsed));
-        if (hasDescriptorFields && !parsed.instruction && !parsed.prompt) {
-          return true;
-        }
-      }
-    } catch {}
-  }
-
-  // Check for plain text or markdown repeating task descriptor patterns without actual body
-  if (
-    /^(title:\s*|task:\s*).+acceptance criteria:/is.test(trimmed) &&
-    trimmed.length < 300 &&
-    !trimmed.includes("##")
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Checks whether an instruction is hollow or lacks adequate specification.
- */
-export function isUnderSpecified(text: string, taskText: string): boolean {
-  if (!text) return true;
-  const trimmed = text.trim();
-  if (trimmed.length < 20) return true;
-  if (trimmed.toLowerCase() === taskText.trim().toLowerCase()) return true;
-  if (isTaskDescriptor(trimmed)) return true;
-  return false;
-}
 
 /**
  * Expands high-level project tasks into concrete domain architecture, workflows,
@@ -319,7 +282,16 @@ export function synthesizeSubstantiveBrief(ctx: InstructionContext, inventory: R
   sections.push("### Business Rules & Integrity Constraints");
   domain.businessRules.forEach((b) => sections.push(`- ${b}`));
 
-  const mandatory = inventory.requirements.filter((r) => r.classification === "mandatory_requirement");
+  // Distinguish active in-scope requirements from safety-conflicted, out-of-scope, or deferred items
+  const activeConstraints = constraints.filter((c) => c.scopeStatus !== "safety_conflict" && c.scopeStatus !== "out_of_scope");
+  const conflictedItems = inventory.requirements.filter((r) => r.scopeStatus === "safety_conflict");
+
+  const mandatory = inventory.requirements.filter(
+    (r) =>
+      r.classification === "mandatory_requirement" &&
+      r.scopeStatus !== "safety_conflict" &&
+      r.scopeStatus !== "out_of_scope"
+  );
   if (mandatory.length > 0) {
     sections.push("");
 
@@ -371,6 +343,15 @@ export function synthesizeSubstantiveBrief(ctx: InstructionContext, inventory: R
     sections.push("### Optional Enhancements & Non-Binding Inferences");
     for (const o of optional) {
       sections.push(`- **[${o.id}]** (Optional) ${o.title}: ${o.description}`);
+    }
+  }
+
+  if (conflictedItems.length > 0) {
+    sections.push("");
+    sections.push("## Scope Safety Boundaries & Excluded Operational Scope");
+    sections.push("The following requirements from source materials conflict with authorized safety boundaries or declared simulation scope and are EXCLUDED from active implementation:");
+    for (const c of conflictedItems) {
+      sections.push(`- **[${c.id}]** (Excluded / Conflict): ${c.title} — *${c.scopeConflictReason || "Excluded from authorized scope."}*`);
     }
   }
 
@@ -468,15 +449,19 @@ export function synthesizeRepairBrief(ctx: InstructionContext, inventory: Requir
 }
 
 /**
- * The reasoning provider decides what the coding agent should do next: synthesizing
- * a comprehensive Engineering Brief for the task, validating it against the requirement
- * inventory, and generating targeted corrective instructions across iterations.
+ * Builds the complete, deterministic instruction prompt for the initial brief
+ * or iterative repair iterations.
  */
-export async function composeInstruction(
-  provider: ReasoningProvider,
-  ctx: InstructionContext
-): Promise<Instruction> {
-  const inventory =
+export function buildInstructionPrompt(
+  ctx: InstructionContext,
+  inventory?: RequirementInventory,
+  options: {
+    filesRepresentation?: string;
+    historyRepresentation?: string[];
+  } = {}
+): string {
+  const inv =
+    inventory ||
     ctx.requirementInventory ||
     buildRequirementInventory({
       taskText: ctx.taskText,
@@ -487,9 +472,9 @@ export async function composeInstruction(
 
   const mode = ctx.autonomyMode ?? "creative_within_constraints";
   const modeDirective = MODE_DIRECTIVES[mode] || MODE_DIRECTIVES.creative_within_constraints;
-
   const checks = ctx.profile.checks.map((c) => c.label).join(", ") || "none detected (only file validation)";
-  const history = ctx.history.slice(-2).map(
+
+  const histArr = options.historyRepresentation ?? ctx.history.slice(-2).map(
     (h) => `--- Iteration ${h.iteration} ---
 INSTRUCTION YOU GAVE: ${h.instruction.slice(0, 1500)}
 AGENT STATE: ${h.agentState}
@@ -499,8 +484,8 @@ DIFF EXCERPT:
 ${h.diffExcerpt.slice(0, 5000) || "(no changes)"}
 CHECKS RUN BY THE ORCHESTRATOR:
 ${h.checks.map((c) => `- ${c.label}: ${c.status}${c.status !== "passed" && c.output ? `\n${c.output.split("\n").slice(-25).join("\n")}` : ""}`).join("\n") || "- none"}
-WHY THE ORCHESTRATOR REJECTED IT:
-${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}
+SHORTCOMINGS & REVIEW FEEDBACK TO ADDRESS:
+${h.blockers.map((b) => `- ${b}`).join("\n") || "- (none)"}
 REVIEWER NOTES: ${h.reviewer || "(none)"}`
   );
 
@@ -517,12 +502,17 @@ Focus Areas: ${ctx.profileDefinition.focusAreas.join(", ")}`
 ${ctx.projectObjective.trim()}`
     : "";
 
+  const inScopeMandatory = inv.requirements
+    .filter((r) => r.classification === "mandatory_requirement" && r.scopeStatus !== "safety_conflict" && r.scopeStatus !== "out_of_scope")
+    .slice(0, 20);
+  const excludedItems = inv.requirements.filter((r) => r.scopeStatus === "safety_conflict" || r.scopeStatus === "out_of_scope");
+
   const inventorySection = `STRUCTURED REQUIREMENT INVENTORY (Extracted from source):
 Mandatory Requirements:
-${inventory.requirements.filter((r) => r.classification === "mandatory_requirement").slice(0, 20).map((r) => `- [${r.id}] ${r.title}`).join("\n") || "- None explicit"}
+${inScopeMandatory.map((r) => `- [${r.id}] ${r.title}`).join("\n") || "- None explicit"}
 Explicit Constraints:
-${inventory.requirements.filter((r) => r.classification === "explicit_constraint").slice(0, 10).map((r) => `- [${r.id}] STRICT: ${r.description}`).join("\n") || "- None explicit"}
-${inventory.summary.contradictions > 0 ? `Unresolved Contradictions (Surface, do not invent resolution):\n${inventory.requirements.filter((r) => r.classification === "unresolved_contradiction").map((r) => `- [${r.id}] ${r.description}`).join("\n")}` : ""}`;
+${inv.requirements.filter((r) => r.classification === "explicit_constraint").slice(0, 10).map((r) => `- [${r.id}] STRICT: ${r.description}`).join("\n") || "- None explicit"}
+${excludedItems.length > 0 ? `Excluded / Safety Conflict Scope Boundaries (DO NOT IMPLEMENT):\n${excludedItems.map((r) => `- [${r.id}] (EXCLUDED): ${r.title} — ${r.scopeConflictReason || "Out of scope"}`).join("\n")}\n` : ""}${inv.summary.contradictions > 0 ? `Unresolved Contradictions (Surface, do not invent resolution):\n${inv.requirements.filter((r) => r.classification === "unresolved_contradiction").map((r) => `- [${r.id}] ${r.description}`).join("\n")}` : ""}`;
 
   const blueprintSection = ctx.blueprintRequirements && ctx.blueprintRequirements.length > 0
     ? `MASTER BLUEPRINT REQUIREMENTS:
@@ -543,40 +533,40 @@ ${ctx.blueprintDocuments[0].extractedText.slice(0, 2500)}`
       ? `PERSISTENT CONTEXT MEMORY SNAPSHOT:\n${ctx.memorySnapshotMarkdown}`
       : "";
 
-  const budget = calculateContextBudget(provider);
-  let maxOutputTokens = budget.breakdown.maxOutputTokens || 3500;
-  const systemTokens = estimateTokens(SYSTEM);
-  const effectiveLimit = Math.max(1000, budget.totalContextTokens - budget.safetyMarginTokens);
+  const filesStr = options.filesRepresentation ?? (ctx.files.slice(0, 100).join(", ") || "(none)");
 
-  const assemblePrompt = (filesStr: string, histArr: string[]): string => {
-    return [
-      "OBJECTIVE / TASK FROM THE USER:",
-      ctx.taskText.trim(),
-      "",
-      objectiveSection,
-      "",
-      inventorySection,
-      "",
-      blueprintSection,
-      "",
-      memorySection,
-      "",
-      "AUTONOMY & CREATIVITY DIRECTIVE:",
-      modeDirective,
-      "",
-      profileSection,
-      "",
-      "ACCEPTANCE CRITERIA:",
-      ctx.criteria.map((c, i) => `${i + 1}. ${c}`).join("\n"),
-      "",
-      `PROJECT: ${ctx.profile.isEmpty ? "empty folder" : `${ctx.profile.fileCount} files; languages: ${ctx.profile.languages.join(", ") || "unknown"}`}. Checks the orchestrator runs afterwards: ${checks}.`,
-      `EXISTING FILES (sample): ${filesStr}`,
-      "",
-      `ITERATION ${ctx.iteration} of at most ${ctx.maxIterations}.`,
-      histArr.length ? `PREVIOUS ITERATIONS:\n${histArr.join("\n\n")}` : "This is the first iteration.",
-      ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
-      "",
-      `INSTRUCTIONS:
+  const criteriaList = ctx.taskContext?.activeAcceptanceCriteria && ctx.taskContext.activeAcceptanceCriteria.length > 0
+    ? ctx.taskContext.activeAcceptanceCriteria.map((c) => `- **[${c.id}]** ${c.title}: ${c.description}`)
+    : ctx.criteria.map((c, i) => `${i + 1}. ${c}`);
+
+  return [
+    "OBJECTIVE / TASK FROM THE USER:",
+    ctx.taskText.trim(),
+    "",
+    objectiveSection,
+    "",
+    inventorySection,
+    "",
+    blueprintSection,
+    "",
+    memorySection,
+    "",
+    "AUTONOMY & CREATIVITY DIRECTIVE:",
+    modeDirective,
+    "",
+    profileSection,
+    "",
+    "ACCEPTANCE CRITERIA:",
+    criteriaList.join("\n"),
+    "",
+    `PROJECT: ${ctx.profile.isEmpty ? "empty folder" : `${ctx.profile.fileCount} files; languages: ${ctx.profile.languages.join(", ") || "unknown"}`}. Checks the orchestrator runs afterwards: ${checks}.`,
+    `EXISTING FILES (sample): ${filesStr}`,
+    "",
+    `ITERATION ${ctx.iteration} of at most ${ctx.maxIterations}.`,
+    histArr.length ? `PREVIOUS ITERATIONS:\n${histArr.join("\n\n")}` : "This is the first iteration.",
+    ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
+    "",
+    `INSTRUCTIONS:
 Determine what engineering work is actually required now.
 Preserve all applicable user requirements, attached-source constraints, and existing architecture.
 Distinguish verified facts from assumptions and unresolved issues.
@@ -596,7 +586,7 @@ It must communicate:
 4. Functional Specifications & Workflows: Represent all mandatory requirements from the inventory with [REQ-xxx] traceability.
 5. Scope of Implementation: Guide the agent on areas to inspect and coordinate without prescribing file-by-file copy-paste dumps.
 6. Verification Expectations: Explicitly state how the agent must validate its work (e.g. running the project's tests).
-${history.length ? "7. Root Cause Analysis & Fix Directions: Quote the exact failing checks above and specify the technical correction required." : ""}
+${histArr.length ? "7. Root Cause Analysis & Fix Directions: Quote the exact failing checks above and specify the technical correction required." : ""}
 
 CRITICAL RULES:
 - DO NOT emit a meta-instruction telling the agent to "construct a brief" or "write a plan". Write the brief directly!
@@ -604,25 +594,72 @@ CRITICAL RULES:
 - DO NOT output full copy-paste source files. The agent will independently inspect the workspace and write the code.
 - DO NOT return the internal task-planning JSON schema (e.g. {"title": "...", "acceptance_criteria": [...], "files_to_read": [...]}).
 
-OUTPUT CONTRACT:
-Respond with JSON:
-{"action": "instruct" or "stop", "instruction": "the complete substantive markdown implementation prompt for Antigravity", "rationale": "one sentence", "stop_reason": "only if action is stop: the genuine blocker"}
-Use "stop" only when the objective cannot be achieved (e.g. it is impossible or requires external human credentials).`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  };
+ROUTING & OUTPUT CONTRACT:
+Respond using the Orches routing protocol (NOT JSON):
+
+If you can provide engineering instructions:
+ORCHES_STATUS: INSTRUCT
+
+[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Implementation Mission
+<Complete, substantive markdown engineering brief>
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]
+
+If the operation cannot proceed:
+ORCHES_STATUS: STOP
+Reason: <Explanation of genuine blocker>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * The reasoning provider decides what the coding agent should do next: synthesizing
+ * a comprehensive Engineering Brief for the task, validating it against the requirement
+ * inventory, and generating targeted corrective instructions across iterations.
+ */
+export async function composeInstruction(
+  provider: ReasoningProvider,
+  ctx: InstructionContext
+): Promise<Instruction> {
+  const inventory =
+    ctx.requirementInventory ||
+    buildRequirementInventory({
+      taskText: ctx.taskText,
+      projectObjective: ctx.projectObjective,
+      blueprintDocuments: ctx.blueprintDocuments,
+      candidateRequirements: ctx.blueprintRequirements,
+    });
+
+  const budget = calculateContextBudget(provider);
+  let maxOutputTokens = budget.breakdown.maxOutputTokens || 3500;
+  const systemTokens = estimateTokens(SYSTEM);
+  const effectiveLimit = Math.max(1000, budget.totalContextTokens - budget.safetyMarginTokens);
+
+  let currentHistory = ctx.history.slice(-2).map(
+    (h) => `--- Iteration ${h.iteration} ---
+INSTRUCTION YOU GAVE: ${h.instruction.slice(0, 1500)}
+AGENT STATE: ${h.agentState}
+AGENT'S OWN REPORT (unverified claim): ${h.agentReply.slice(0, 1500) || "(none)"}
+FILES CHANGED SINCE THE RUN STARTED: ${h.changedFiles.join(", ") || "none"}
+DIFF EXCERPT:
+${h.diffExcerpt.slice(0, 5000) || "(no changes)"}
+CHECKS RUN BY THE ORCHESTRATOR:
+${h.checks.map((c) => `- ${c.label}: ${c.status}${c.status !== "passed" && c.output ? `\n${c.output.split("\n").slice(-25).join("\n")}` : ""}`).join("\n") || "- none"}
+SHORTCOMINGS & REVIEW FEEDBACK TO ADDRESS:
+${h.blockers.map((b) => `- ${b}`).join("\n") || "- (none)"}
+REVIEWER NOTES: ${h.reviewer || "(none)"}`
+  );
 
   let filesRepresentation = ctx.files.slice(0, 100).join(", ") || "(none)";
-  let currentHistory = history;
-  let prompt = assemblePrompt(filesRepresentation, currentHistory);
+  let prompt = buildInstructionPrompt(ctx, inventory, { filesRepresentation, historyRepresentation: currentHistory });
 
   // Request Assembly Guard: ensure total assembled request (system + prompt + output reserve)
   // strictly fits within effective budget
   if (systemTokens + estimateTokens(prompt) + maxOutputTokens > effectiveLimit) {
     // Stage 1: Prune file list
     filesRepresentation = ctx.files.slice(0, 15).join(", ") || "(none)";
-    prompt = assemblePrompt(filesRepresentation, currentHistory);
+    prompt = buildInstructionPrompt(ctx, inventory, { filesRepresentation, historyRepresentation: currentHistory });
   }
 
   if (systemTokens + estimateTokens(prompt) + maxOutputTokens > effectiveLimit) {
@@ -633,10 +670,10 @@ INSTRUCTION: ${h.instruction.slice(0, 400)}
 AGENT REPLY: ${h.agentReply.slice(0, 300) || "(none)"}
 FILES CHANGED: ${h.changedFiles.join(", ") || "none"}
 CHECKS: ${h.checks.map((c) => `- ${c.label}: ${c.status}`).join("\n") || "- none"}
-BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
+SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (none)"}`
     );
     filesRepresentation = "(omitted to preserve context budget)";
-    prompt = assemblePrompt(filesRepresentation, currentHistory);
+    prompt = buildInstructionPrompt(ctx, inventory, { filesRepresentation, historyRepresentation: currentHistory });
   }
 
   if (systemTokens + estimateTokens(prompt) + maxOutputTokens > effectiveLimit) {
@@ -645,6 +682,7 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
     maxOutputTokens = Math.max(500, Math.min(maxOutputTokens, remainingForOutput));
   }
 
+
   const operation = ctx.iteration === 1 ? "code_generation" : "repair_diagnosis";
 
   const response = await provider.generate(
@@ -652,7 +690,7 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
       operation,
       systemInstruction: SYSTEM,
       messages: [{ role: "user", content: prompt }],
-      json: true,
+      json: false,
       temperature: 0.2,
       maxOutputTokens,
       projectId: ctx.projectId,
@@ -661,42 +699,16 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
     ctx.signal
   );
 
-  const parsed = (response.parsed ?? extractJsonFromText(response.text)) as Record<string, unknown> | null;
-  const action = String(parsed?.action ?? "").toLowerCase();
-  let rawInstruction = typeof parsed?.instruction === "string" ? parsed.instruction.trim() : typeof parsed?.prompt === "string" ? (parsed.prompt as string).trim() : "";
+  // 1. Extract instruction using natural-language protocol reader
+  const extracted = ResponseReader.extractInstruction(response.text || "", {
+    allowLegacyJson: true,
+  });
 
-  // Support output markers contract from ChatGPT Web
-  if (rawInstruction) {
-    const markerStart = rawInstruction.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
-    const markerEnd = rawInstruction.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
-    if (markerStart !== -1 && markerEnd !== -1 && markerEnd > markerStart) {
-      rawInstruction = rawInstruction.slice(markerStart + 32, markerEnd).trim();
-    } else if (markerStart !== -1) {
-      rawInstruction = rawInstruction.slice(markerStart + 32).trim();
-    }
-  } else if (response.text) {
-    const markerStart = response.text.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
-    const markerEnd = response.text.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
-    if (markerStart !== -1 && markerEnd !== -1 && markerEnd > markerStart) {
-      rawInstruction = response.text.slice(markerStart + 32, markerEnd).trim();
-    } else if (markerStart !== -1) {
-      rawInstruction = response.text.slice(markerStart + 32).trim();
-    } else if (response.text.length > 50 && !response.text.startsWith("{")) {
-      rawInstruction = response.text.trim();
-    }
-  }
-
-  // Reject internal task descriptors (e.g. JSON with title/acceptance_criteria but no substantive brief)
-  if (rawInstruction && isTaskDescriptor(rawInstruction)) {
-    rawInstruction = "";
-  }
-
-  if (action === "stop") {
-    const stopReason = String(parsed?.stop_reason ?? parsed?.stopReason ?? "").trim();
-    const rationale = String(parsed?.rationale ?? parsed?.reason ?? "").trim();
-    const combinedRationale = stopReason && rationale && stopReason !== rationale
-      ? `${stopReason}: ${rationale}`
-      : stopReason || rationale || "The reasoning model stopped the run.";
+  // 2. Check for explicit STOP status or refusal
+  if (extracted.action === "stop") {
+    const combinedRationale = extracted.stopReason && extracted.rationale && extracted.stopReason !== extracted.rationale
+      ? `${extracted.stopReason}: ${extracted.rationale}`
+      : extracted.stopReason || extracted.rationale || "The reasoning model stopped the run.";
     return {
       action: "stop",
       instruction: "",
@@ -705,23 +717,87 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
     };
   }
 
+  // 3. Check parsed object fallback if provider returned parsed object (e.g. ScriptedProvider in tests)
+  const parsed = (response.parsed ?? extractJsonFromText(response.text || "")) as Record<string, unknown> | null;
+  if (parsed && typeof parsed === "object") {
+    const parsedAction = String(parsed.action ?? "").toLowerCase();
+    if (parsedAction === "stop") {
+      const stopReason = String(parsed.stop_reason ?? parsed.stopReason ?? "").trim();
+      const rationale = String(parsed.rationale ?? parsed.reason ?? "").trim();
+      const combinedRationale = stopReason && rationale && stopReason !== rationale
+        ? `${stopReason}: ${rationale}`
+        : stopReason || rationale || "The reasoning model stopped the run.";
+      return {
+        action: "stop",
+        instruction: "",
+        rationale: combinedRationale,
+        source: "model",
+      };
+    }
+  }
+
+  // 4. Retrieve candidate raw instruction
+  let rawInstruction = extracted.instructionText.trim();
+  if (!rawInstruction && parsed) {
+    if (typeof parsed.instruction === "string") rawInstruction = parsed.instruction.trim();
+    else if (typeof parsed.prompt === "string") rawInstruction = parsed.prompt.trim();
+  }
+
+  // Support markers inside parsed instruction if any
+  if (rawInstruction) {
+    const markerStart = rawInstruction.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    const markerEnd = rawInstruction.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    if (markerStart !== -1 && markerEnd !== -1 && markerEnd > markerStart) {
+      rawInstruction = rawInstruction.slice(markerStart + 32, markerEnd).trim();
+    } else if (markerStart !== -1) {
+      rawInstruction = rawInstruction.slice(markerStart + 32).trim();
+    }
+  }
+
+  // Reject internal task descriptors (e.g. JSON with title/acceptance_criteria but no substantive brief)
+  if (rawInstruction && isTaskDescriptor(rawInstruction)) {
+    rawInstruction = "";
+  }
+
   const combinedSource = `${ctx.taskText}\n${ctx.projectObjective || ""}\n${ctx.blueprintDocuments?.map((b) => b.extractedText).join("\n") || ""}`;
 
   let candidateInstruction = rawInstruction;
   let source: "model" | "fallback" = "model";
   let warning: string | undefined;
 
-  // Quality Gate: Check if the model emitted a meta-instruction, task descriptor, or under-specified brief
+  // Quality Gate: Check if the model emitted a meta-instruction, task descriptor, thought fragment, or under-specified brief
+  const isRepair = ctx.iteration > 1;
   const isDescriptor = (response.text && isTaskDescriptor(response.text)) || (rawInstruction && isTaskDescriptor(rawInstruction));
-  if (!rawInstruction || rawInstruction.length < 10 || isDescriptor || isMetaInstruction(rawInstruction) || isUnderSpecified(rawInstruction, ctx.taskText)) {
+  const isThought = (response.text && isThoughtOrStatusFragment(response.text)) || (rawInstruction && isThoughtOrStatusFragment(rawInstruction));
+  const minLength = isRepair ? 15 : 30;
+  const isSubstanceInvalid = rawInstruction
+    ? isRepair
+      ? rawInstruction.length < minLength
+      : !validateInstructionSubstance(rawInstruction, ctx.taskText).valid
+    : true;
+
+  if (
+    !rawInstruction ||
+    rawInstruction.length < minLength ||
+    isDescriptor ||
+    isThought ||
+    isMetaInstruction(rawInstruction) ||
+    isUnderSpecified(rawInstruction, ctx.taskText, { isRepair }) ||
+    isSubstanceInvalid
+  ) {
     source = "fallback";
-    warning = isDescriptor
-      ? "The reasoning model returned an internal task-planning descriptor rather than a substantive engineering instruction; the orchestrator synthesized a comprehensive engineering brief directly."
-      : rawInstruction && isMetaInstruction(rawInstruction)
-        ? `The reasoning model returned a meta-instruction ("${rawInstruction.slice(0, 90)}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
-        : rawInstruction && isUnderSpecified(rawInstruction, ctx.taskText)
-          ? "The reasoning model returned an under-specified brief; the orchestrator synthesized a complete, structured engineering brief."
-          : "The reasoning model's instruction was not usable JSON; the orchestrator synthesized a comprehensive engineering brief directly.";
+    const fragmentSnippet = (rawInstruction || response.text || "").trim().slice(0, 90);
+    warning = isThought
+      ? `The reasoning model returned an interim thought fragment or status update ("${fragmentSnippet}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
+      : isDescriptor
+        ? "The reasoning model returned an internal task-planning descriptor rather than a substantive engineering instruction; the orchestrator synthesized a comprehensive engineering brief directly."
+        : rawInstruction && isMetaInstruction(rawInstruction)
+          ? `The reasoning model returned a meta-instruction ("${rawInstruction.slice(0, 90)}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
+          : rawInstruction && isUnderSpecified(rawInstruction, ctx.taskText)
+            ? "The reasoning model returned an under-specified brief; the orchestrator synthesized a complete, structured engineering brief."
+            : extracted.validationError
+              ? `The reasoning model's response did not adhere to the natural-language protocol (${extracted.validationError}); the orchestrator synthesized a comprehensive engineering brief directly.`
+              : "The reasoning model did not produce a usable natural-language instruction; the orchestrator synthesized a comprehensive engineering brief directly.";
 
     candidateInstruction = ctx.iteration > 1
       ? synthesizeRepairBrief(ctx, inventory)
@@ -739,7 +815,7 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
   return {
     action: "instruct",
     instruction: fidelityResult.prompt,
-    rationale: typeof parsed?.rationale === "string" && parsed.rationale ? parsed.rationale : "Engineering implementation brief with verified requirement fidelity",
+    rationale: extracted.rationale || (typeof parsed?.rationale === "string" && parsed.rationale ? parsed.rationale : "Engineering implementation brief with verified requirement fidelity"),
     source,
     warning: warning ? `${warning} ${fidelityResult.report.summary}` : fidelityResult.report.summary,
     fidelityReport: fidelityResult.report,

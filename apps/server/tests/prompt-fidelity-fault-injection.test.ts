@@ -42,9 +42,10 @@ Returns 401 on invalid token and 200 on valid credentials.
     expect(initial.missingRequirements.some((m) => m.title.includes("rate limiting"))).toBe(true);
 
     const corrected = validateAndCorrectPrompt(prompt, inventory, { sourceText: sourceSpec });
-    expect(corrected.passed).toBe(true);
-    expect(corrected.prompt).toContain("## Mandatory Requirements (Traceability Enforcement)");
-    expect(corrected.prompt).toContain("rate limiting");
+    expect(corrected.passed).toBe(false);
+    expect(corrected.prompt).not.toContain("## Mandatory Requirements (Traceability Enforcement)");
+    expect(corrected.report.missingRequirements.some((m) => m.title.includes("rate limiting"))).toBe(true);
+    expect(corrected.residualUncertainties.some((u) => u.includes("rate limiting") || u.includes("omitted"))).toBe(true);
   });
 
   // Fault 2: Change a specified technology
@@ -152,9 +153,10 @@ Returns 200 on valid credentials.
   it("Fault 7: detects unevidenced verification claims and neutralizes premature success assertions", () => {
     const prompt = `
 # Engineering Brief
-Implement Secure Authentication Service.
-All requirements (REQ-001, REQ-002, REQ-003) have already been verified and tested successfully.
-No further implementation or test execution is necessary.
+Implement Secure Authentication Service with Argon2id, JWT tokens, and rate limiting of 5 failed attempts.
+Strictly SQLite only. Zero external dependencies. No ORMs.
+All requirements have already been verified and tested successfully. No further implementation or test execution is necessary.
+Returns 401 on invalid token and 200 on valid credentials.
     `.trim();
 
     const initial = validatePromptFidelity(prompt, inventory, { sourceText: sourceSpec });

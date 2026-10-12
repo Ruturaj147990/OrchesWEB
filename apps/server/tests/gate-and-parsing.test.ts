@@ -156,4 +156,29 @@ describe("gate regressions from live closed-loop runs", () => {
     expect(missingRequestedFiles(task, ["stats.js", "test/stats.test.js", "package.json"])).toEqual([]);
     expect(evaluateAttempt(base({ missingRequestedFiles: ["stats.test.js"] })).accepted).toBe(false);
   });
+
+  it("ignores internal IDE and agent operational scratchpads in externalWrites", () => {
+    const withInternal = evaluateAttempt(
+      base({
+        externalWrites: [
+          "C:\\Users\\user\\.gemini\\antigravity-ide\\brain\\8ff040ea\\browser\\scratchpad_44fhg8ft.md",
+          "C:\\Users\\user\\AppData\\Local\\Temp\\test.tmp",
+        ],
+      })
+    );
+    expect(withInternal.accepted).toBe(true);
+    expect(withInternal.blockers).toEqual([]);
+
+    const withRogue = evaluateAttempt(
+      base({
+        externalWrites: [
+          "C:\\Users\\user\\.gemini\\antigravity-ide\\brain\\8ff040ea\\browser\\scratchpad_44fhg8ft.md",
+          "C:\\Users\\user\\Desktop\\another-project\\rogue.js",
+        ],
+      })
+    );
+    expect(withRogue.accepted).toBe(false);
+    expect(withRogue.blockers.join(" ")).toContain("The coding agent wrote outside the workspace: C:\\Users\\user\\Desktop\\another-project\\rogue.js");
+  });
 });
+

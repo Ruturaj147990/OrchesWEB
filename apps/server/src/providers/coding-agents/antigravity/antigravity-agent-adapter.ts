@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { CodingAgentAdapter, AgentExecutionInput, AgentExecutionResult, CodingAgentAvailability, AgentTranscript } from "../adapter.js";
 import { getBridgeStatus, submitToAgent, waitForAgent, AgentTrajectory } from "../../../platform/antigravity-agent.js";
-import { isInsideOrEqual } from "../../../workspace/path-safety.js";
+import { isInsideOrEqual, isInternalAgentArtifact } from "../../../workspace/path-safety.js";
+import { isThoughtOrStatusFragment, isTaskDescriptor } from "../../../prompts/instruction-validator.js";
 
 const PATH_ARG_KEYS = ["TargetFile", "AbsolutePath", "FilePath", "File", "Path", "DirectoryPath"];
 const WRITE_TOOLS = /write|edit|replace|create|delete|move|rename|patch/i;
@@ -20,7 +21,14 @@ export function transcriptFrom(t: AgentTrajectory | null, state: AgentTranscript
     if (!WRITE_TOOLS.test(c.tool)) continue;
     for (const k of PATH_ARG_KEYS) {
       const v = c.args[k];
-      if (typeof v === "string" && path.isAbsolute(v) && !isInsideOrEqual(path.resolve(workspaceRoot), path.resolve(v))) writesOutside.push(v);
+      if (
+        typeof v === "string" &&
+        path.isAbsolute(v) &&
+        !isInsideOrEqual(path.resolve(workspaceRoot), path.resolve(v)) &&
+        !isInternalAgentArtifact(v)
+      ) {
+        writesOutside.push(v);
+      }
     }
   }
   return {
@@ -58,6 +66,20 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
     const instruction = input.instruction?.trim();
     if (!instruction) {
       result.error = "No instruction was produced for the Antigravity Agent.";
+      return result;
+    }
+    if (
+      instruction.length < 30 ||
+      isThoughtOrStatusFragment(instruction) ||
+      isTaskDescriptor(instruction)
+    ) {
+      result.error = `Antigravity boundary rejected non-executable or interim instruction: ${
+        isThoughtOrStatusFragment(instruction)
+          ? `interim thought fragment "${instruction.slice(0, 40)}"`
+          : isTaskDescriptor(instruction)
+            ? "task descriptor"
+            : `too short (${instruction.length} chars)`
+      }`;
       return result;
     }
     const status = await getBridgeStatus(input.workspacePath);

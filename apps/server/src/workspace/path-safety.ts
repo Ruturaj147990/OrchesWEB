@@ -1,11 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { ORCHESTRATOR_ROOT } from "../config/env.js";
 import { SettingsManager } from "../platform/settings-manager.js";
 
 /** Folders a project may never point at (or contain): this installation and its data directory. */
 export function forbiddenWorkspaceRoots(): string[] {
   return [ORCHESTRATOR_ROOT, SettingsManager.getDataDir()];
+}
+
+/**
+ * Checks if a path is an internal operational artifact created by the coding agent or IDE
+ * (such as Antigravity brain logs, scratchpads, browser subagent sessions, or system temp files)
+ * rather than a rogue write to user system files.
+ */
+export function isInternalAgentArtifact(filePath: string): boolean {
+  if (!filePath || typeof filePath !== "string") return false;
+  const norm = filePath.replace(/\\/g, "/").toLowerCase();
+  const tmp = os.tmpdir().replace(/\\/g, "/").toLowerCase();
+  return (
+    norm.startsWith(tmp) ||
+    norm.includes("/.gemini/") ||
+    norm.includes("/antigravity-ide/") ||
+    norm.includes("/scratchpad_") ||
+    norm.includes("/scratch/") ||
+    norm.includes("/.system_generated/") ||
+    norm.includes("/appdata/local/temp/")
+  );
 }
 
 export type PathResolution =

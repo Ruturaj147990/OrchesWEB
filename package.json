@@ -22,7 +22,8 @@
     "dev": "npm run build:packages && npm run build --workspace=apps/web && tsx apps/server/src/server.ts",
     "dev:web": "npm run dev --workspace=apps/web",
     "start": "npm run build && node apps/server/dist/server.js",
-    "bridge:install": "node apps/antigravity-bridge/install.mjs"
+    "bridge:install": "node apps/antigravity-bridge/install.mjs",
+    "diagnose": "tsx apps/server/src/platform/diagnose.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",

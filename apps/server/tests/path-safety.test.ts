@@ -112,4 +112,14 @@ describe("validateWorkspaceRoot", () => {
     expect(isInsideOrEqual(path.resolve("/a/b"), path.resolve("/a/b/c"))).toBe(true);
     expect(isInsideOrEqual(path.resolve("/a/b"), path.resolve("/a/bc"))).toBe(false);
   });
+
+  it("identifies IDE and agent operational scratchpads as internal artifacts", async () => {
+    const { isInternalAgentArtifact } = await import("../src/workspace/path-safety.js");
+    expect(isInternalAgentArtifact("C:\\Users\\user\\.gemini\\antigravity-ide\\brain\\8ff040ea\\browser\\scratchpad_44fhg8ft.md")).toBe(true);
+    expect(isInternalAgentArtifact("/Users/user/.gemini/antigravity-ide/scratch/notes.txt")).toBe(true);
+    expect(isInternalAgentArtifact("C:\\Users\\user\\AppData\\Local\\Temp\\orches-scratch.tmp")).toBe(true);
+    expect(isInternalAgentArtifact("C:\\Users\\user\\projects\\my-app\\src\\index.js")).toBe(false);
+    expect(isInternalAgentArtifact("C:\\Windows\\System32\\cmd.exe")).toBe(false);
+  });
 });
+

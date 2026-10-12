@@ -39,14 +39,44 @@ you ─▶ Orches ─▶ reasoning model (ChatGPT Web via Browser): plan + first
 - Playwright Chromium (installed automatically via `npm install` / `npx playwright install chromium`) and a ChatGPT account (log in once via "Open ChatGPT Browser" in Settings)
 - Python / Go / Rust toolchains only if your projects use them
 
-## Run it
-```bash
-npm install
-npm run dev
+## Quick Start & Cross-Platform Installation
+
+Orches is fully cross-platform and supports **Windows** and **Ubuntu Linux** from a single source tree.
+
+### Automated Setup
+
+**Windows:**
+```bat
+scripts\setup.bat
+scripts\start.bat
 ```
-Open http://127.0.0.1:4317. `npm run dev` builds the UI once and starts the server with TypeScript directly.
-For a production-style run use `npm start` (builds everything, runs `apps/server/dist`). For UI work with hot
-reload, run `npm run dev` in one terminal and `npm run dev:web` in another (http://127.0.0.1:5173).
+
+**Ubuntu Linux:**
+```bash
+chmod +x scripts/setup.sh scripts/start.sh
+./scripts/setup.sh
+./scripts/start.sh
+```
+
+### Manual Setup & Diagnostic Self-Check
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Install Playwright browser binaries
+npx playwright install chromium
+
+# 3. Build packages and apps
+npm run build
+
+# 4. Run system diagnostics self-check
+npm run diagnose
+
+# 5. Start Orches
+npm start
+```
+
+Open http://127.0.0.1:4317. For development with live reload, run `npm run dev` and `npm run dev:web`.
 
 Then:
 1. **Add project**: enter the absolute path of the folder to work in (tick *Create the folder* for a new project).
@@ -59,29 +89,37 @@ Then:
 Data (SQLite database, settings, snapshots) lives in `%APPDATA%\AutonomousDevOrchestrator` on Windows, or `~/.config/AutonomousDevOrchestrator` on Linux; override
 with `ORCHESTRATOR_DATA_DIR` (see [.env.example](.env.example)).
 
-## Tests
+## Clean-Machine Redistribution
+
+To redistribute or run Orches on a clean machine:
+1. Ensure **Node.js >= 22.5.0** (Node 24 LTS recommended) and **Git** are installed.
+2. Clone or copy the Orches repository directory.
+3. Run `npm install` followed by `npx playwright install chromium`.
+4. Run `npm run diagnose` to verify environment paths, write permissions, and port availability.
+5. In Settings, authenticate ChatGPT Web via "Open ChatGPT Browser" (one-time persistent login stored locally in your OS profile directory).
+6. Run `npm run bridge:install` if utilizing the native Antigravity Bridge extension.
+
+## Testing & Quality Gates
 ```bash
-npm test           # unit + integration (real files, real git, real processes; scripted model)
-npm run test:e2e   # Playwright UI dashboard specs
+npm test           # 20 test suites / 247 unit and integration tests (including 17 Prompt Regression Gates)
+npm run diagnose   # Environment and prerequisites diagnostic self-check
+npm run build      # Full production TypeScript compile and Vite asset bundle
 ```
 
 ## Layout
 ```
 apps/server/src
-  orchestrator/   run-manager (lifecycle, stop, crash recovery), run-pipeline, planner, critic, acceptance-gate
-  workspace/      path-safety, snapshot-store (diff + scoped restore), project-inspector, text-diff
+  orchestrator/   task-context, run-manager, run-pipeline, planner, critic, acceptance-gate, instructor
+  workspace/      path-safety, snapshot-store, project-inspector, text-diff
   verification/   runner (project checks, static validation)
-  providers/      reasoning (chatgpt-web) and coding-agents (built-in coder)
-  platform/       process-runner (timeouts, tree kill), settings, antigravity detection, secret redaction
+  providers/      reasoning (chatgpt-web) and coding-agents (builtin, antigravity-bridge)
+  platform/       process-runner, settings-manager, diagnose, secret-redaction
   api/routes/     REST + server-sent events
 apps/web/src      React dashboard (App.tsx + components/)
 packages/shared-types   shared zod schemas
 ```
 
 ## Known limitations
-- Output quality depends on the model. With `llama3.1:8b`, small, well-specified tasks usually succeed within
-  the repair budget; larger or vaguer tasks are often rejected, and they are rolled back, never half-applied.
-- The built-in coder rewrites whole files, so it suits small and medium files; very large files are shown to the
-  model truncated and should not be the target of a task.
-- Snapshots hash every tracked file per attempt; very large workspaces (tens of thousands of files) make runs slower.
-- One run at a time per project and per folder. There is no authentication beyond loopback-only access.
+- The built-in coder rewrites whole files, so it suits small and medium files; very large files are shown with file-aware chunking and should be modified incrementally.
+- Snapshots hash tracked files per attempt; very large workspaces (tens of thousands of files) make runs slower.
+- One active run at a time per project folder. Loopback-only binding ensures local machine security.

@@ -154,8 +154,57 @@ export class ChatGPTWebProvider implements ReasoningProvider {
 
       this.browserManager.getStateMachine().transition("VALIDATING_RESPONSE");
 
-      // 8. Extract the substantive engineering instruction
-      const extracted = ResponseReader.extractInstruction(rawResponse, startTime);
+      // 8. Extract according to operation mode: Review Mode vs Instruction Mode
+      if (request.operation === "result_review") {
+        const review = ResponseReader.extractReview(rawResponse, { allowLegacyJson: false });
+
+        // Record success if conversation url exists
+        const currentUrl = page.url();
+        if (currentUrl.includes("/c/")) {
+          conversationManager.recordSuccess(request.projectId, currentUrl);
+        } else if (mappedConversationUrl && mappedConversationUrl.includes("/c/")) {
+          conversationManager.recordSuccess(request.projectId, mappedConversationUrl);
+        } else {
+          conversationManager.recordSuccess(request.projectId);
+        }
+
+        if (review.status === "INVALID") {
+          const errorDetail = review.validationError || "Response did not contain a valid natural-language review";
+          console.warn(`[ChatGPTWeb] Review protocol validation failed: ${errorDetail}`);
+          this.browserManager.getStateMachine().transition("FAILED_RECOVERABLE", errorDetail);
+          throw new Error(`ChatGPT Web review protocol validation failed: ${errorDetail}`);
+        }
+
+        const inputTokens = estimateTokens(promptText);
+        const outputTokens = estimateTokens(rawResponse);
+
+        return {
+          text: rawResponse,
+          parsed: {
+            verdict: review.verdict,
+            criteria: review.criteria,
+            findings: review.findings,
+            repair_instructions: review.repairInstructions,
+            summary: review.summary,
+          },
+          providerId: this.id,
+          modelId: this.getModel(),
+          usage: {
+            inputTokens,
+            outputTokens,
+            totalTokens: inputTokens + outputTokens,
+          },
+          durationMs: Date.now() - startTime,
+          warnings: [],
+        };
+      }
+
+      // 9. Extract the substantive engineering instruction adhering strictly to the routing protocol
+      const extracted = ResponseReader.extractInstruction(rawResponse, {
+        startTime,
+        allowLegacyJson: false,
+        requireProtocolStatus: true,
+      });
 
       // Record success with genuine conversation URL if promoted
       const currentUrl = page.url();
@@ -167,17 +216,19 @@ export class ChatGPTWebProvider implements ReasoningProvider {
         conversationManager.recordSuccess(request.projectId);
       }
 
-      // Handle explicit stop action from model
+      // Handle explicit stop action from model (or refusal)
       if (extracted.action === "stop") {
         console.log(`[ChatGPTWeb] Explicit stop response received: ${extracted.stopReason || extracted.rationale}`);
         this.browserManager.getStateMachine().transition("STOPPED", extracted.rationale);
+        const stopReason = extracted.stopReason || extracted.rationale || "Operation stopped by reasoning model.";
         const stopParsed = {
           action: "stop",
-          stop_reason: extracted.stopReason || extracted.rationale,
+          stop_reason: stopReason,
           rationale: extracted.rationale,
         };
+        const stopProtocolText = `ORCHES_STATUS: STOP\n\nReason: ${stopReason}`;
         return {
-          text: JSON.stringify(stopParsed),
+          text: stopProtocolText,
           parsed: stopParsed,
           providerId: this.id,
           modelId: this.getModel(),
@@ -191,26 +242,30 @@ export class ChatGPTWebProvider implements ReasoningProvider {
         };
       }
 
-      this.browserManager.getStateMachine().transition("INSTRUCTION_READY");
-
-      let parsed: unknown = null;
-      let finalText = extracted.instructionText;
-
-      if (request.json) {
-        parsed = {
-          action: "instruct",
-          instruction: extracted.instructionText,
-          rationale: extracted.rationale,
-        };
-        finalText = JSON.stringify(parsed);
+      // Safe rejection of invalid or malformed responses
+      if (extracted.status === "INVALID" || !extracted.instructionText.trim()) {
+        const errorDetail = extracted.validationError || "Response did not contain a valid natural-language engineering instruction";
+        console.warn(`[ChatGPTWeb] Response protocol validation failed: ${errorDetail}`);
+        this.browserManager.getStateMachine().transition("FAILED_RECOVERABLE", errorDetail);
+        throw new Error(`ChatGPT Web response protocol validation failed: ${errorDetail}`);
       }
 
+      this.browserManager.getStateMachine().transition("INSTRUCTION_READY");
+
+      const instructionText = extracted.instructionText;
+      const protocolText = `ORCHES_STATUS: INSTRUCT\n\n[ORCHES_ANTIGRAVITY_INSTRUCTION]\n${instructionText}\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]`;
+      const internalParsed = {
+        action: "instruct",
+        instruction: instructionText,
+        rationale: extracted.rationale,
+      };
+
       const inputTokens = estimateTokens(promptText);
-      const outputTokens = estimateTokens(finalText);
+      const outputTokens = estimateTokens(protocolText);
 
       return {
-        text: finalText,
-        parsed,
+        text: protocolText,
+        parsed: internalParsed,
         providerId: this.id,
         modelId: this.getModel(),
         usage: {
@@ -245,15 +300,33 @@ export class ChatGPTWebProvider implements ReasoningProvider {
       parts.push(`${msg.role.toUpperCase()}:\n${msg.content}\n`);
     }
 
-    // Add marker output requirement for structured extraction if doing instruction synthesis
+    // Require the mandatory natural-language routing protocol
     if (request.operation === "code_generation" || request.operation === "repair_diagnosis") {
       parts.push(`
-CRITICAL OUTPUT CONTRACT:
-Produce the comprehensive, substantive engineering instruction directly for the Antigravity development agent.
-You MUST enclose the engineering brief inside the following exact markers:
+CRITICAL ROUTING & OUTPUT CONTRACT:
+You must reply using the Orches text-based routing protocol. Do NOT return a JSON object. Do NOT wrap your response in JSON.
+
+For a successful instruction response, you MUST output this exact structure:
+ORCHES_STATUS: INSTRUCT
+
 [ORCHES_ANTIGRAVITY_INSTRUCTION]
-<substantive markdown engineering instruction here>
+
+# Implementation Mission
+
+<The complete, project-specific substantive engineering brief in Markdown>
+
 [/ORCHES_ANTIGRAVITY_INSTRUCTION]
+
+For an operation that must stop:
+ORCHES_STATUS: STOP
+
+Reason: <A concise and truthful explanation of why the operation cannot proceed and, where appropriate, a safe alternative>
+
+CRITICAL PROTOCOL RULES:
+- The substantive engineering brief must be Markdown and natural language.
+- Do NOT return a JSON envelope or task descriptor around the engineering brief.
+- Do NOT return only a task title, short summary, task descriptor, or generic plan.
+- The content inside [ORCHES_ANTIGRAVITY_INSTRUCTION] must contain the complete, actionable engineering brief with concrete objectives, architecture guidance, functional requirements with [REQ-xxx] traceability, implementation boundaries, and automated verification expectations.
 `);
     }
 

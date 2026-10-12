@@ -1,5 +1,6 @@
 import type { RequirementInventory, ProjectRequirement } from "../domain/requirements/requirement-inventory.js";
 import type { AutonomyMode } from "@orchestrator/shared-types";
+import { isTaskDescriptor, isThoughtOrStatusFragment, isUnderSpecified } from "../prompts/instruction-validator.js";
 
 export interface MissingRequirementDefect {
   id: string;
@@ -99,6 +100,52 @@ export function validatePromptFidelity(
   inventory: RequirementInventory,
   options: FidelityValidationOptions = {}
 ): PromptFidelityReport {
+  if (isTaskDescriptor(prompt)) {
+    return {
+      passed: false,
+      score: 0,
+      missingRequirements: inventory.requirements.map((r) => ({
+        id: r.id,
+        title: r.title,
+        importance: r.importance,
+        reason: "Omitted: candidate prompt is an internal task-planning descriptor rather than a substantive engineering brief.",
+      })),
+      weakenedConstraints: [],
+      unsupportedAdditions: [],
+      unresolvedContradictions: [],
+      traceabilityMap: inventory.requirements.map((r) => ({
+        requirementId: r.id,
+        title: r.title,
+        classification: r.classification,
+        isMapped: false,
+      })),
+      summary: "Candidate prompt rejected: internal task-planning descriptor cannot be used as an engineering instruction.",
+    };
+  }
+
+  if (isThoughtOrStatusFragment(prompt) || (prompt.trim().length < 60 && !prompt.includes("\n") && !prompt.includes("#"))) {
+    return {
+      passed: false,
+      score: 0,
+      missingRequirements: inventory.requirements.map((r) => ({
+        id: r.id,
+        title: r.title,
+        importance: r.importance,
+        reason: "Omitted: candidate prompt is an interim thought fragment or status update rather than a substantive engineering brief.",
+      })),
+      weakenedConstraints: [],
+      unsupportedAdditions: [],
+      unresolvedContradictions: [],
+      traceabilityMap: inventory.requirements.map((r) => ({
+        requirementId: r.id,
+        title: r.title,
+        classification: r.classification,
+        isMapped: false,
+      })),
+      summary: `Candidate prompt rejected: interim thought fragment or stub ("${prompt.trim().slice(0, 40)}") cannot be used as an engineering instruction.`,
+    };
+  }
+
   const promptLower = prompt.toLowerCase();
   const sourceLower = (options.sourceText || "").toLowerCase();
   const scopeBoundaryIdx = promptLower.indexOf("## scope boundary notice");
@@ -122,7 +169,13 @@ export function validatePromptFidelity(
       isMapped,
     });
 
-    if (!isMapped && (req.classification === "mandatory_requirement" || req.classification === "explicit_constraint")) {
+    // Skip requirements that are out of scope, deferred, or in safety conflict
+    const isExcludedFromActiveScope =
+      req.scopeStatus === "out_of_scope" ||
+      req.scopeStatus === "deferred" ||
+      req.scopeStatus === "safety_conflict";
+
+    if (!isMapped && !isExcludedFromActiveScope && (req.classification === "mandatory_requirement" || req.classification === "explicit_constraint")) {
       missingRequirements.push({
         id: req.id,
         title: req.title,
@@ -135,7 +188,7 @@ export function validatePromptFidelity(
   // 2. Constraint Preservation
   for (const req of inventory.requirements.filter((r) => r.classification === "explicit_constraint")) {
     const lDesc = req.description.toLowerCase();
-    
+
     // Check specific negative constraints (e.g. "no orms", "no tailwind")
     if (lDesc.includes("no orm") && hasAffirmativeViolation(activePromptLower, ["prisma", "typeorm", "sequelize"])) {
       weakenedConstraints.push({
@@ -233,11 +286,11 @@ export function validatePromptFidelity(
     if (
       lDesc.includes("401") &&
       (activePromptLower.includes("return 200 on expired") ||
-       activePromptLower.includes("returns 200 on expired") ||
-       activePromptLower.includes("return http 200 ok on expired") ||
-       activePromptLower.includes("return 200 ok on expired") ||
-       activePromptLower.includes("return 200 on invalid") ||
-       activePromptLower.includes("returns 200 on invalid"))
+        activePromptLower.includes("returns 200 on expired") ||
+        activePromptLower.includes("return http 200 ok on expired") ||
+        activePromptLower.includes("return 200 ok on expired") ||
+        activePromptLower.includes("return 200 on invalid") ||
+        activePromptLower.includes("returns 200 on invalid"))
     ) {
       contradictedCriteria.push({
         id: req.id,
@@ -261,7 +314,13 @@ export function validatePromptFidelity(
   }
 
   // Calculate score (0 to 100)
-  const totalMandatory = inventory.requirements.filter((r) => r.classification === "mandatory_requirement" || r.classification === "explicit_constraint").length;
+  const totalMandatory = inventory.requirements.filter(
+    (r) =>
+      (r.classification === "mandatory_requirement" || r.classification === "explicit_constraint") &&
+      r.scopeStatus !== "out_of_scope" &&
+      r.scopeStatus !== "deferred" &&
+      r.scopeStatus !== "safety_conflict"
+  ).length;
   const mappedMandatory = totalMandatory - missingRequirements.length;
   const coverageRatio = totalMandatory > 0 ? mappedMandatory / totalMandatory : 1.0;
 
@@ -311,7 +370,9 @@ export function validatePromptFidelity(
 const STOP_WORDS = new Set([
   "with", "from", "that", "this", "have", "been", "only", "must", "shall",
   "will", "when", "into", "some", "more", "make", "also", "and", "the", "for", "not",
-  "using", "should", "your", "their", "such", "each", "both"
+  "using", "should", "your", "their", "such", "each", "both",
+  "implement", "implements", "implementation", "provide", "provides", "providing", "per", "upon", "allowed",
+  "req", "requirement", "requirements",
 ]);
 
 /**
@@ -321,20 +382,15 @@ function checkRequirementMentioned(promptLower: string, req: ProjectRequirement,
   // Direct ID match
   if (promptLower.includes(req.id.toLowerCase())) return true;
 
-  // Key subject words match
-  const words = req.title
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
-
-  if (words.length === 0) {
-    return promptLower.includes(req.title.toLowerCase().slice(0, 15));
-  }
-
   // If this is a repair iteration (> 1), targeted repair guidance addressing any key subject
   // or defect area satisfies coverage
   if (iteration && iteration > 1) {
+    const words = req.title
+      .toLowerCase()
+      .replace(/\[[^\]]+\]/g, " ")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !STOP_WORDS.has(w));
     const matches = words.filter((w) => promptLower.includes(w));
     if (matches.length >= 1) return true;
     if (promptLower.includes("fix") || promptLower.includes("repair") || promptLower.includes("test")) {
@@ -342,10 +398,29 @@ function checkRequirementMentioned(promptLower: string, req: ProjectRequirement,
     }
   }
 
-  // Initial prompt coverage: at least 40% of distinctive words or at least 1 word if <= 2
-  const matches = words.filter((w) => promptLower.includes(w));
-  const threshold = words.length <= 2 ? 1 : Math.ceil(words.length * 0.4);
-  return matches.length >= threshold;
+  // Strip bracketed IDs like [REQ-001] from title before clause and word evaluation
+  const cleanTitle = req.title.replace(/\[[^\]]+\]/g, " ").trim();
+
+  // Check candidate clauses: full title, core rule before colon/semicolon, or clauses split by with/using/upon
+  const candidateTexts = [
+    cleanTitle,
+    cleanTitle.split(/[:;]/)[0],
+    ...cleanTitle.split(/\s+(?:with|using|upon)\s+/i),
+  ];
+
+  for (const text of candidateTexts) {
+    const words = text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !STOP_WORDS.has(w));
+    if (words.length === 0) continue;
+    const matches = words.filter((w) => promptLower.includes(w));
+    const threshold = words.length <= 2 ? 1 : Math.ceil(words.length * 0.4);
+    if (matches.length >= threshold) return true;
+  }
+
+  return false;
 }
 
 /**
@@ -450,25 +525,36 @@ export function validateAndCorrectPrompt(
     return { passed: true, prompt, initialReport, report: initialReport, residualUncertainties: [] };
   }
 
+  // A hollow fragment, interim status update, or task descriptor must never have raw requirements
+  // mechanically appended to pass the gate. It must be rejected outright so the orchestrator can synthesize
+  // a genuine substantive engineering brief or handle the failure.
+  if (
+    isTaskDescriptor(prompt) ||
+    isThoughtOrStatusFragment(prompt) ||
+    (prompt.trim().length < 60 && !prompt.includes("\n") && !prompt.includes("#"))
+  ) {
+    return {
+      passed: false,
+      prompt,
+      initialReport,
+      report: initialReport,
+      residualUncertainties: [initialReport.summary],
+    };
+  }
+
   // Apply bounded correction to enforce full requirement traceability
   let corrected = prompt;
   const residualUncertainties: string[] = [];
 
-  // 1. Correct Missing Mandatory Requirements
+  // 1. Handle Missing Mandatory Requirements:
+  // Do NOT append raw requirement inventory (e.g. ## Mandatory Requirements (Traceability Enforcement))
+  // to the instruction body. The validated brief is the authoritative source of implementation instructions.
+  // Genuinely missing applicable requirements are flagged in residualUncertainties and report.missingRequirements,
+  // preventing malformed or insufficient briefs from being falsely made valid by appending raw text.
   if (initialReport.missingRequirements.length > 0) {
     residualUncertainties.push(
-      `Mechanical traceability enforced by appending ${initialReport.missingRequirements.length} omitted requirement(s) (${initialReport.missingRequirements.map((m) => m.id).join(", ")}). Semantic coherence depends on agent execution.`
+      `Candidate instruction omitted ${initialReport.missingRequirements.length} applicable mandatory requirement(s) (${initialReport.missingRequirements.map((m) => m.id).join(", ")}). Raw requirement inventory is not appended to preserve validated brief integrity.`
     );
-    const missingSection = [
-      "",
-      "## Mandatory Requirements (Traceability Enforcement)",
-      "The following explicit requirements from the project specification MUST be implemented as part of this scope:",
-      ...initialReport.missingRequirements.map(
-        (m) => `- **[${m.id}]** ${m.title}`
-      ),
-      "",
-    ].join("\n");
-    corrected = `${corrected}\n${missingSection}`;
   }
 
   // 2. Correct Weakened Constraints
@@ -591,7 +677,9 @@ export function validateAndCorrectPrompt(
   // Re-validate corrected prompt
   const finalReport = validatePromptFidelity(corrected, inventory, options);
 
-  // Even if initial had defects, the corrected prompt now covers the missing requirements and constraints
+  // Constraints and neutralized claims are corrected, but omitted mandatory requirements
+  // are never mechanically appended into the executable prompt. If mandatory requirements
+  // were missing, the prompt remains not passed and defects are honestly reported.
   const finalPassed =
     finalReport.missingRequirements.length === 0 &&
     finalReport.weakenedConstraints.length === 0 &&
@@ -604,7 +692,9 @@ export function validateAndCorrectPrompt(
 
   const summary = initialReport.passed
     ? finalReport.summary
-    : `Prompt corrected and verified (Initial: ${initialReport.score}/100, Corrected: ${adjustedScore}/100 with ${residualUncertainties.length} residual uncertainties noted): ${finalReport.summary}`;
+    : finalPassed
+      ? `Prompt corrected and verified (Initial: ${initialReport.score}/100, Corrected: ${adjustedScore}/100 with ${residualUncertainties.length} residual uncertainties noted): ${finalReport.summary}`
+      : `Prompt fidelity gate flagged unresolved defects (Score: ${finalReport.score}/100 with ${residualUncertainties.length} residual uncertainties noted): ${finalReport.summary}`;
 
   return {
     passed: finalPassed,

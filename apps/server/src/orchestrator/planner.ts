@@ -14,7 +14,7 @@ export interface TaskPlan {
   warning?: string;
 }
 
-const SYSTEM = `You plan one software change. Reply with a single JSON object and nothing else.`;
+const SYSTEM = `You plan one software change. Determine the task title, concrete acceptance criteria, and relevant files to read.`;
 
 function fallbackPlan(taskText: string, warning: string): TaskPlan {
   const firstLine = taskText.trim().split(/\r?\n/)[0];
@@ -48,9 +48,8 @@ export async function planTask(
 ): Promise<TaskPlan> {
   const files = projectFileList(input.workspacePath, 200);
 
-  // For browser-based ChatGPT Web sessions, do not send the preliminary JSON task-planning prompt.
-  // Sending 'You plan one software change. Reply with a single JSON object and nothing else' to ChatGPT Web
-  // pollutes the project conversation with an intermediate task descriptor before the substantive engineering brief is requested.
+  // For browser-based ChatGPT Web sessions, do not send preliminary task-planning prompts.
+  // The full engineering brief is generated directly in natural language to preserve conversation fidelity.
   const isLiveBrowserSession =
     provider.id === "chatgpt-web" &&
     provider.displayName === "ChatGPT Web (Browser)";
@@ -97,7 +96,7 @@ ${blueprintNote}
 PROJECT FILES (${files.length}${files.length >= 200 ? "+" : ""}):
 ${files.join("\n") || "(empty folder)"}
 
-Respond with JSON:
+Provide the task plan using the following structured fields:
 {
   "title": "short imperative title, max 10 words",
   "acceptance_criteria": ["2 to 5 concrete, checkable statements that must be true when the task is done"],
@@ -110,7 +109,7 @@ Only include criteria relevant to the task and project requirements. Do not add 
       operation: "task_planning",
       systemInstruction: SYSTEM,
       messages: [{ role: "user", content: prompt }],
-      json: true,
+      json: false,
       temperature: 0,
       maxOutputTokens: 800,
       projectId: input.projectId,

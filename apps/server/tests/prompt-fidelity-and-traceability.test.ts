@@ -195,11 +195,12 @@ Run npm test to verify.
     expect(report.passed).toBe(false);
     expect(report.missingRequirements.some((m) => m.title.includes("BM25") || m.title.includes("traversal"))).toBe(true);
 
-    // Bounded correction must re-inject the missing mandatory requirements
+    // Missing mandatory requirements are flagged without mechanically appending raw requirement inventory
     const corrected = validateAndCorrectPrompt(incompletePrompt, inventory);
-    expect(corrected.passed).toBe(true);
-    expect(corrected.prompt).toContain("## Mandatory Requirements (Traceability Enforcement)");
-    expect(corrected.prompt).toContain("BM25");
+    expect(corrected.passed).toBe(false);
+    expect(corrected.prompt).not.toContain("## Mandatory Requirements (Traceability Enforcement)");
+    expect(corrected.report.missingRequirements.some((m) => m.title.includes("BM25") || m.title.includes("traversal"))).toBe(true);
+    expect(corrected.residualUncertainties.length).toBeGreaterThan(0);
   });
 
   // Case 4: Unsupported implementation details and invented performance guarantees are flagged or removed

@@ -4,6 +4,27 @@ import type { PreSubmissionState } from "./prompt-sender.js";
 import { PromptSender } from "./prompt-sender.js";
 import { BrowserStateMachine } from "./state-machine.js";
 import { extractJsonFromText } from "../../../prompts/json-extractor.js";
+import { isTaskDescriptor, isThoughtOrStatusFragment } from "../../../prompts/instruction-validator.js";
+import {
+  parseReviewProtocol,
+  type ParsedReview,
+  type ReviewVerdict,
+  type ParsedReviewCriterion,
+  type ParsedReviewFinding,
+  REVIEW_STATUS_PREFIX,
+  REVIEW_MARKER_START,
+  REVIEW_MARKER_END,
+} from "../../../prompts/review-validator.js";
+
+export {
+  parseReviewProtocol,
+  type ParsedReview,
+  type ReviewVerdict,
+  type ParsedReviewCriterion,
+  type ParsedReviewFinding,
+};
+
+export type ProtocolStatus = "INSTRUCT" | "STOP" | "INVALID";
 
 export interface ExtractedInstruction {
   action: "instruct" | "stop";
@@ -13,11 +34,27 @@ export interface ExtractedInstruction {
   isMarkerExtracted: boolean;
   rawText: string;
   durationMs: number;
+  status: ProtocolStatus;
+  validationError?: string;
+  isLegacyJson?: boolean;
+}
+
+export interface ProtocolParseOptions {
+  startTime?: number;
+  allowLegacyJson?: boolean;
+  requireProtocolStatus?: boolean;
 }
 
 export class ResponseReader {
+  public static readonly STATUS_LINE_PREFIX = "ORCHES_STATUS:";
+  public static readonly STATUS_INSTRUCT = "INSTRUCT";
+  public static readonly STATUS_STOP = "STOP";
   public static readonly MARKER_START = "[ORCHES_ANTIGRAVITY_INSTRUCTION]";
   public static readonly MARKER_END = "[/ORCHES_ANTIGRAVITY_INSTRUCTION]";
+
+  public static readonly REVIEW_STATUS_PREFIX = REVIEW_STATUS_PREFIX;
+  public static readonly REVIEW_MARKER_START = REVIEW_MARKER_START;
+  public static readonly REVIEW_MARKER_END = REVIEW_MARKER_END;
 
   /**
    * Patterns indicating the assistant is only asking what to do with attachments/files
@@ -64,8 +101,14 @@ export class ResponseReader {
 
     if (!isNew) return null;
 
-    // Reject attachment-only clarification inquiries
+    // Reject attachment-only clarification inquiries and thought fragments
     if (this.isAttachmentClarification(latestText)) return null;
+    if (isThoughtOrStatusFragment(latestText)) return null;
+
+    // Short text (< 80 chars) without protocol markers is almost certainly an interim status or header
+    if (latestText.length < 80 && !latestText.includes(this.STATUS_LINE_PREFIX) && !latestText.includes(this.MARKER_START)) {
+      return null;
+    }
 
     return latestText;
   }
@@ -142,6 +185,11 @@ export class ResponseReader {
         if (isNewMessage && latestText.length > 20) {
           options.stateMachine?.transition("READING_RESPONSE");
           const isAttachmentQuery = this.isAttachmentClarification(latestText);
+          const isThoughtFragment = isThoughtOrStatusFragment(latestText);
+          const isShortWithoutProtocol =
+            latestText.length < 80 &&
+            !latestText.includes(this.STATUS_LINE_PREFIX) &&
+            !latestText.includes(this.MARKER_START);
 
           if (!generating) {
             if (latestText === lastObservedText) {
@@ -150,6 +198,11 @@ export class ResponseReader {
                 if (isAttachmentQuery) {
                   console.warn(
                     "[ResponseReader] Detected attachment query rather than task response; waiting for task answer."
+                  );
+                } else if (isThoughtFragment || isShortWithoutProtocol) {
+                  // Do not treat interim thoughts or short status fragments as completed responses
+                  console.log(
+                    `[ResponseReader] Observed stabilized interim text (${latestText.length} chars: "${latestText.slice(0, 40)}…"); waiting for full protocol response.`
                   );
                 } else {
                   console.log(
@@ -195,12 +248,13 @@ export class ResponseReader {
       await page.waitForTimeout(stabilizationInterval).catch(() => {});
     }
 
-    // Check if we captured substantive text that is not an attachment query
+    // Check if we captured substantive text that is not an attachment query or thought fragment
     if (
       lastObservedText &&
       lastObservedText.length > 100 &&
       lastObservedText !== baseline.lastAssistantText &&
-      !this.isAttachmentClarification(lastObservedText)
+      !this.isAttachmentClarification(lastObservedText) &&
+      !isThoughtOrStatusFragment(lastObservedText)
     ) {
       console.warn("[ResponseReader] Generation timeout reached, but captured substantive response text.");
       options.stateMachine?.transition("RESPONSE_COMPLETE");
@@ -212,59 +266,307 @@ export class ResponseReader {
   }
 
   /**
-   * Extracts the actual substantive engineering instruction from the raw assistant text.
-   * Handles JSON envelopes (`{ action, instruction, rationale, stop_reason }`),
-   * marker-delimited Markdown (`[ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION]`),
-   * and clean Markdown fallbacks.
+   * Deterministically parses and extracts instruction text from the assistant's response.
+   * Adheres strictly to the natural-language routing protocol:
+   *
+   *   ORCHES_STATUS: INSTRUCT
+   *   [ORCHES_ANTIGRAVITY_INSTRUCTION]
+   *   # Implementation Mission ...
+   *   [/ORCHES_ANTIGRAVITY_INSTRUCTION]
+   *
+   * or:
+   *
+   *   ORCHES_STATUS: STOP
+   *   Reason: ...
+   *
+   * Supports backward compatibility with historical legacy JSON records when configured.
    */
-  public static extractInstruction(rawText: string, startTime: number = Date.now()): ExtractedInstruction {
+  public static extractInstruction(
+    rawText: string,
+    optionsOrStartTime: number | ProtocolParseOptions = Date.now()
+  ): ExtractedInstruction {
+    const opts: ProtocolParseOptions =
+      typeof optionsOrStartTime === "number"
+        ? { startTime: optionsOrStartTime, allowLegacyJson: true }
+        : { allowLegacyJson: true, ...optionsOrStartTime };
+
+    return this.parseProtocol(rawText, opts);
+  }
+
+  /**
+   * Internal deterministic parser enforcing protocol validation, delimiter integrity,
+   * and safe rejection of ambiguous, malformed, or task-descriptor payloads.
+   */
+  public static parseProtocol(rawText: string, options: ProtocolParseOptions = {}): ExtractedInstruction {
+    const startTime = options.startTime ?? Date.now();
     const durationMs = Date.now() - startTime;
     const clean = (rawText || "").trim();
 
-    // 1. Try parsing JSON envelope first
-    const parsed = extractJsonFromText(clean) as Record<string, unknown> | null;
-    if (parsed && typeof parsed === "object") {
-      const action = String(parsed.action || "").toLowerCase().trim();
-      const rationale = String(parsed.rationale || parsed.reason || "Reasoning response from ChatGPT Web").trim();
+    if (!clean) {
+      return {
+        action: "instruct",
+        status: "INVALID",
+        instructionText: "",
+        rationale: "",
+        validationError: "Response text is empty",
+        isMarkerExtracted: false,
+        rawText: clean,
+        durationMs,
+      };
+    }
 
-      if (action === "stop") {
-        const stopReason = String(parsed.stop_reason || parsed.stopReason || rationale || "The model stopped the run.").trim();
+    // 1. Check for protocol status line (ORCHES_STATUS: INSTRUCT | STOP)
+    const statusMatch = clean.match(/(?:^|\r?\n)\s*ORCHES_STATUS:\s*([A-Za-z0-9_-]+)/i);
+
+    if (statusMatch) {
+      const statusValue = statusMatch[1].toUpperCase().trim();
+
+      // Handle ORCHES_STATUS: STOP
+      if (statusValue === this.STATUS_STOP) {
+        // Inspect for contradictory instruction delimiters containing executable payload
+        const markers = this.locateTopLevelDelimiters(clean);
+        if (markers.starts.length > 0 && markers.ends.length > 0) {
+          const innerContent = clean.slice(markers.starts[0] + this.MARKER_START.length, markers.ends[0]).trim();
+          if (innerContent.length > 0) {
+            return {
+              action: "stop",
+              status: "INVALID",
+              instructionText: "",
+              rationale: "",
+              validationError: "Contradictory response: STOP status contains executable instruction payload",
+              isMarkerExtracted: false,
+              rawText: clean,
+              durationMs,
+            };
+          }
+        }
+
+        const reasonMatch = clean.match(/(?:^|\r?\n)\s*Reason:\s*([^\r\n]+(?:\r?\n(?!(?:ORCHES_STATUS|\[ORCHES))[^\r\n]+)*)/i);
+        let reason = reasonMatch ? reasonMatch[1].trim() : "";
+        if (!reason) {
+          // Extract text following status line if Reason label was omitted
+          const afterStatus = clean.slice((statusMatch.index || 0) + statusMatch[0].length).trim();
+          reason = afterStatus || "Operation stopped by reasoning model.";
+        }
+
         return {
           action: "stop",
+          status: "STOP",
           instructionText: "",
-          rationale,
-          stopReason,
+          rationale: reason,
+          stopReason: reason,
           isMarkerExtracted: false,
           rawText: clean,
           durationMs,
         };
       }
 
-      // Action is instruct (or default)
-      let innerText = "";
-      if (typeof parsed.instruction === "string") {
-        innerText = parsed.instruction.trim();
-      } else if (typeof parsed.prompt === "string") {
-        innerText = parsed.prompt.trim();
-      }
+      // Handle ORCHES_STATUS: INSTRUCT
+      if (statusValue === this.STATUS_INSTRUCT) {
+        const markers = this.locateTopLevelDelimiters(clean);
 
-      // Extract markers inside instruction field if present
-      if (innerText) {
-        const markerResult = this.extractFromMarkers(innerText);
-        if (markerResult) {
+        if (markers.starts.length === 0) {
           return {
             action: "instruct",
-            instructionText: markerResult,
-            rationale,
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Missing opening instruction delimiter [ORCHES_ANTIGRAVITY_INSTRUCTION]",
+            isMarkerExtracted: false,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        if (markers.ends.length === 0) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Missing closing instruction delimiter [/ORCHES_ANTIGRAVITY_INSTRUCTION] (response may be truncated)",
+            isMarkerExtracted: false,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        if (markers.ends[0] < markers.starts[0]) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Reversed delimiters: closing delimiter [/ORCHES_ANTIGRAVITY_INSTRUCTION] appears before opening delimiter",
+            isMarkerExtracted: false,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        if (markers.starts.length > 1) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Duplicated opening instruction delimiters detected",
+            isMarkerExtracted: false,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        if (markers.ends.length > 1) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Duplicated closing instruction delimiters detected",
+            isMarkerExtracted: false,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        const rawBody = clean.slice(markers.starts[0] + this.MARKER_START.length, markers.ends[0]);
+        // Strip only leading and trailing newlines, preserving all inner markdown indentation, code blocks, lists
+        const instructionText = rawBody.replace(/^\r?\n+/, "").replace(/\r?\n+$/, "");
+
+        if (!instructionText.trim()) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Instruction body between delimiters is empty",
             isMarkerExtracted: true,
             rawText: clean,
             durationMs,
           };
         }
+
+        if (isThoughtOrStatusFragment(instructionText)) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: `Instruction body is an interim thought fragment or status update ("${instructionText.slice(0, 40)}") rather than an engineering brief`,
+            isMarkerExtracted: true,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        if (isTaskDescriptor(instructionText)) {
+          return {
+            action: "instruct",
+            status: "INVALID",
+            instructionText: "",
+            rationale: "",
+            validationError: "Instruction body is an internal task-planning descriptor rather than a substantive engineering brief",
+            isMarkerExtracted: true,
+            rawText: clean,
+            durationMs,
+          };
+        }
+
+        const rationaleMatch = clean.match(/(?:^|\r?\n)\s*Rationale:\s*([^\r\n]+)/i);
+        const rationale = rationaleMatch ? rationaleMatch[1].trim() : "Engineering implementation brief from ChatGPT Web";
+
         return {
           action: "instruct",
-          instructionText: innerText,
+          status: "INSTRUCT",
+          instructionText,
           rationale,
+          isMarkerExtracted: true,
+          rawText: clean,
+          durationMs,
+        };
+      }
+
+      // Invalid status value
+      return {
+        action: "instruct",
+        status: "INVALID",
+        instructionText: "",
+        rationale: "",
+        validationError: `Invalid protocol status '${statusMatch[1]}': expected INSTRUCT or STOP`,
+        isMarkerExtracted: false,
+        rawText: clean,
+        durationMs,
+      };
+    }
+
+    // 2. No ORCHES_STATUS found — check for explicit model refusal
+    const isRefusal =
+      /^(i (cannot|can't|am unable to|must decline to)|as an ai language model, i (cannot|can't))\b/i.test(clean) ||
+      /i cannot fulfill this request\b/i.test(clean);
+
+    if (isRefusal) {
+      return {
+        action: "stop",
+        status: "STOP",
+        instructionText: "",
+        rationale: clean,
+        stopReason: clean,
+        isMarkerExtracted: false,
+        rawText: clean,
+        durationMs,
+      };
+    }
+
+    // 3. Backward compatibility for legacy JSON envelopes
+    if (options.allowLegacyJson !== false) {
+      const parsed = extractJsonFromText(clean) as Record<string, unknown> | null;
+      if (parsed && typeof parsed === "object") {
+        const action = String(parsed.action || "").toLowerCase().trim();
+        const rationale = String(parsed.rationale || parsed.reason || "Reasoning response from ChatGPT Web").trim();
+
+        if (action === "stop") {
+          const stopReason = String(parsed.stop_reason || parsed.stopReason || rationale || "The model stopped the run.").trim();
+          return {
+            action: "stop",
+            status: "STOP",
+            instructionText: "",
+            rationale,
+            stopReason,
+            isMarkerExtracted: false,
+            rawText: clean,
+            durationMs,
+            isLegacyJson: true,
+          };
+        }
+
+        let innerText = "";
+        if (typeof parsed.instruction === "string") innerText = parsed.instruction.trim();
+        else if (typeof parsed.prompt === "string") innerText = parsed.prompt.trim();
+
+        if (innerText) {
+          const markerResult = this.extractFromMarkers(innerText);
+          return {
+            action: "instruct",
+            status: "INSTRUCT",
+            instructionText: markerResult || innerText,
+            rationale,
+            isMarkerExtracted: !!markerResult,
+            rawText: clean,
+            durationMs,
+            isLegacyJson: true,
+          };
+        }
+      }
+    } else {
+      // Legacy JSON forbidden in strict mode
+      if (clean.startsWith("{") || clean.startsWith("```json")) {
+        return {
+          action: "instruct",
+          status: "INVALID",
+          instructionText: "",
+          rationale: "",
+          validationError: "Active response contract requires natural-language protocol (ORCHES_STATUS: INSTRUCT), not JSON envelope",
           isMarkerExtracted: false,
           rawText: clean,
           durationMs,
@@ -272,11 +574,26 @@ export class ResponseReader {
       }
     }
 
-    // 2. Non-JSON: Check for markers directly in raw text
+    // 4. If strict protocol status is enforced, missing status line is an invalid response
+    if (options.requireProtocolStatus) {
+      return {
+        action: "instruct",
+        status: "INVALID",
+        instructionText: "",
+        rationale: "",
+        validationError: "Missing protocol status line (ORCHES_STATUS: INSTRUCT or ORCHES_STATUS: STOP)",
+        isMarkerExtracted: false,
+        rawText: clean,
+        durationMs,
+      };
+    }
+
+    // 5. Permissive fallback for raw text or markers without status line
     const markerResult = this.extractFromMarkers(clean);
     if (markerResult) {
       return {
         action: "instruct",
+        status: "INSTRUCT",
         instructionText: markerResult,
         rationale: "Engineering implementation brief from ChatGPT Web",
         isMarkerExtracted: true,
@@ -285,7 +602,6 @@ export class ResponseReader {
       };
     }
 
-    // 3. Fallback: Strip common conversational opening/closing if present
     let fallbackText = clean;
     fallbackText = fallbackText.replace(
       /^(certainly|sure|here is|here's|below is|i have created)\s+.*?:[\r\n]+/i,
@@ -295,10 +611,35 @@ export class ResponseReader {
       /[\r\n]+(let me know|hope this helps|feel free to ask).*$/i,
       ""
     );
+    const trimmedFallback = fallbackText.trim();
+
+    // Do not allow hollow stubs, thought fragments, or task descriptors as fallback instructions
+    if (
+      !trimmedFallback ||
+      trimmedFallback.length < 30 ||
+      isThoughtOrStatusFragment(trimmedFallback) ||
+      isTaskDescriptor(trimmedFallback)
+    ) {
+      return {
+        action: "instruct",
+        status: "INVALID",
+        instructionText: "",
+        rationale: "",
+        validationError: isThoughtOrStatusFragment(trimmedFallback)
+          ? `Response is an interim thought fragment or status update ("${trimmedFallback}") rather than an engineering brief`
+          : isTaskDescriptor(trimmedFallback)
+            ? "Response is an internal task-planning descriptor rather than an engineering brief"
+            : `Response body is too brief (${trimmedFallback.length} chars) to constitute an actionable engineering instruction`,
+        isMarkerExtracted: false,
+        rawText: clean,
+        durationMs,
+      };
+    }
 
     return {
       action: "instruct",
-      instructionText: fallbackText.trim(),
+      status: "INSTRUCT",
+      instructionText: trimmedFallback,
       rationale: "Engineering implementation brief from ChatGPT Web",
       isMarkerExtracted: false,
       rawText: clean,
@@ -306,17 +647,75 @@ export class ResponseReader {
     };
   }
 
-  private static extractFromMarkers(text: string): string | null {
-    if (!text) return null;
-    const upper = text.toUpperCase();
-    const startIdx = upper.indexOf(this.MARKER_START.toUpperCase());
-    const endIdx = upper.indexOf(this.MARKER_END.toUpperCase());
+  /**
+   * Discovers top-level delimiter positions while ignoring incidental markers
+   * inside fenced code blocks or inline backticks.
+   */
+  public static locateTopLevelDelimiters(text: string): { starts: number[]; ends: number[] } {
+    const codeRanges: Array<{ start: number; end: number }> = [];
 
-    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-      return text.slice(startIdx + this.MARKER_START.length, endIdx).trim();
-    } else if (startIdx !== -1) {
-      return text.slice(startIdx + this.MARKER_START.length).trim();
+    // Fenced code blocks ```...```
+    const fenceRegex = /```[\s\S]*?(?:```|$)/g;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRegex.exec(text)) !== null) {
+      codeRanges.push({ start: match.index, end: match.index + match[0].length });
+    }
+
+    // Inline code spans `...`
+    const inlineRegex = /`[^`\r\n]+`/g;
+    while ((match = inlineRegex.exec(text)) !== null) {
+      codeRanges.push({ start: match.index, end: match.index + match[0].length });
+    }
+
+    const isInsideCode = (idx: number): boolean => {
+      return codeRanges.some((r) => idx >= r.start && idx < r.end);
+    };
+
+    const upperText = text.toUpperCase();
+    const upperStart = this.MARKER_START.toUpperCase();
+    const upperEnd = this.MARKER_END.toUpperCase();
+
+    const starts: number[] = [];
+    let sIdx = 0;
+    while ((sIdx = upperText.indexOf(upperStart, sIdx)) !== -1) {
+      if (!isInsideCode(sIdx)) {
+        starts.push(sIdx);
+      }
+      sIdx += upperStart.length;
+    }
+
+    const ends: number[] = [];
+    let eIdx = 0;
+    while ((eIdx = upperText.indexOf(upperEnd, eIdx)) !== -1) {
+      if (!isInsideCode(eIdx)) {
+        ends.push(eIdx);
+      }
+      eIdx += upperEnd.length;
+    }
+
+    return { starts, ends };
+  }
+
+  public static extractFromMarkers(text: string): string | null {
+    if (!text) return null;
+    const { starts, ends } = this.locateTopLevelDelimiters(text);
+
+    if (starts.length > 0 && ends.length > 0 && ends[0] > starts[0]) {
+      return text.slice(starts[0] + this.MARKER_START.length, ends[0]).trim();
+    } else if (starts.length > 0) {
+      return text.slice(starts[0] + this.MARKER_START.length).trim();
     }
     return null;
+  }
+
+  /**
+   * Deterministically extracts and validates an independent review response conforming
+   * to the natural-language review protocol (ORCHES_REVIEW_STATUS and [ORCHES_REVIEW]).
+   */
+  public static extractReview(
+    rawText: string,
+    options: { allowLegacyJson?: boolean } = {}
+  ): ParsedReview {
+    return parseReviewProtocol(rawText, options);
   }
 }

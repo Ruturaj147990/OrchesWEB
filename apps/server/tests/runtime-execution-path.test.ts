@@ -199,12 +199,11 @@ module.exports = { RateLimiter };
 
     // 5. Verify Prompt Reaching Dispatch Boundary:
     // Attempt 1 candidate prompt omitted the mandatory requirements and constraints.
-    // The gate corrected it before reaching the agent!
+    // The raw requirement inventory is NOT appended to the executable brief!
     const attempt1Dispatch = agent.dispatchedPrompts[0];
     expect(attempt1Dispatch).toBeDefined();
-    expect(attempt1Dispatch).toContain("Mandatory Requirements (Traceability Enforcement)");
-    expect(attempt1Dispatch).toContain("SQLite");
-    expect(attempt1Dispatch).toContain("tokens per second");
+    expect(attempt1Dispatch).not.toContain("Mandatory Requirements (Traceability Enforcement)");
+    expect(attempt1Dispatch).toContain("RateLimiter");
 
     // 6. Verify Iteration 2 received real failure evidence:
     const attempt2Dispatch = agent.dispatchedPrompts[1];
@@ -216,8 +215,8 @@ module.exports = { RateLimiter };
 
     const fidelityEvents = events.filter((e: any) => e.type === "requirements.fidelity_checked");
     expect(fidelityEvents.length).toBeGreaterThanOrEqual(1);
-    expect(fidelityEvents[0].payload.passed).toBe(true);
-    expect(fidelityEvents[0].payload.score).toBeGreaterThanOrEqual(80);
+    expect(fidelityEvents[0].payload.passed).toBe(false);
+    expect(fidelityEvents[0].payload.missingRequirements.length).toBeGreaterThanOrEqual(1);
 
     const updatedEvents = events.filter((e: any) => e.type === "requirements.updated");
     expect(updatedEvents.length).toBeGreaterThanOrEqual(2);

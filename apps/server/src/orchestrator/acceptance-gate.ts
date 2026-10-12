@@ -1,5 +1,5 @@
 import type { WorkspaceChange } from "../workspace/snapshot-store.js";
-import { reservedPathReason } from "../workspace/path-safety.js";
+import { reservedPathReason, isInternalAgentArtifact } from "../workspace/path-safety.js";
 import type { CheckResult } from "../verification/runner.js";
 import type { CriticOutcome } from "./critic.js";
 
@@ -54,7 +54,9 @@ export function evaluateAttempt(input: GateInput): GateDecision {
     if (reason) blockers.push(`Change to protected path '${change.path}' is not allowed: ${reason}.`);
   }
   for (const w of input.externalWrites ?? []) {
-    blockers.push(`The coding agent wrote outside the workspace: ${w}`);
+    if (!isInternalAgentArtifact(w)) {
+      blockers.push(`The coding agent wrote outside the workspace: ${w}`);
+    }
   }
   for (const rw of input.rejectedWrites) {
     warnings.push(`Blocked an unsafe write to '${rw.path}': ${rw.reason}`);

@@ -12,6 +12,13 @@ export type RequirementClassification =
 
 export type RequirementImportance = "critical" | "high" | "medium" | "low";
 
+export type RequirementScopeStatus =
+  | "in_scope"
+  | "out_of_scope"
+  | "deferred"
+  | "safety_conflict"
+  | "unresolved";
+
 export type RequirementStatus =
   | "not_started"
   | "in_progress"
@@ -29,6 +36,8 @@ export interface ProjectRequirement {
   phase?: string; // e.g. "Milestone 1", "Phase 2"
   dependencies?: string[];
   status: RequirementStatus;
+  scopeStatus?: RequirementScopeStatus;
+  scopeConflictReason?: string;
   evidence?: string[];
   notes?: string;
   contradictionDetails?: {
@@ -145,6 +154,9 @@ export function buildRequirementInventory(input: InventoryBuildInput): Requireme
 
   // 5. Detect Contradictions Across Requirements
   detectContradictions(requirements);
+
+  // 6. Resolve Scope Boundaries and Safety Conflicts
+  resolveScopeBoundaries(requirements, input.taskText, input.projectObjective);
 
   // Compute summary stats
   const byStatus: Record<RequirementStatus, number> = {
@@ -429,6 +441,100 @@ function findContradiction(textA: string, textB: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * Resolves scope boundaries across requirements. Identifies out-of-scope, deferred,
+ * or safety-conflicting requirements (such as physical emitter interception or military receiver hardware
+ * when the declared objective is a synthetic research simulator) without discarding traceability.
+ */
+function resolveScopeBoundaries(
+  requirements: ProjectRequirement[],
+  taskText: string,
+  projectObjective?: string
+): void {
+  const combinedObjective = `${taskText} ${projectObjective || ""}`.toLowerCase();
+
+  // Check if current authorized scope is a safe synthetic simulator or alternative
+  const isSyntheticSimulator =
+    combinedObjective.includes("synthetic") ||
+    combinedObjective.includes("simulator") ||
+    combinedObjective.includes("research alternative") ||
+    combinedObjective.includes("safe alternative") ||
+    combinedObjective.includes("mock environment") ||
+    combinedObjective.includes("non-operational");
+
+  for (const req of requirements) {
+    const lDesc = req.description.toLowerCase();
+    const lTitle = req.title.toLowerCase();
+    const fullText = `${lTitle} ${lDesc}`;
+
+    // Default scope status
+    req.scopeStatus = "in_scope";
+
+    if (isSyntheticSimulator) {
+      // Physical RF receiver control, hardware interception, radar-specific optimization, or weaponized operations
+      const isPhysicalOrMilitaryHardware =
+        fullText.includes("physical receiver") ||
+        fullText.includes("physical rf") ||
+        fullText.includes("rf receiver hardware") ||
+        fullText.includes("physical rf receiver control") ||
+        fullText.includes("physical rf receiver") ||
+        fullText.includes("receiver control") ||
+        fullText.includes("hardware control") ||
+        fullText.includes("intercept operational") ||
+        fullText.includes("operational emitter interception") ||
+        fullText.includes("operational military-emitter interception") ||
+        fullText.includes("operational military emitter interception") ||
+        fullText.includes("operational military-emitter") ||
+        fullText.includes("operational military emitter") ||
+        fullText.includes("military-emitter") ||
+        fullText.includes("military emitter") ||
+        fullText.includes("operational emitter") ||
+        fullText.includes("radar-specific interception optimization") ||
+        fullText.includes("radar-specific interception") ||
+        fullText.includes("radar-specific") ||
+        fullText.includes("interception optimization") ||
+        fullText.includes("radar interception") ||
+        fullText.includes("live emitter interception") ||
+        fullText.includes("operational military") ||
+        fullText.includes("military deployment") ||
+        fullText.includes("weapon system") ||
+        fullText.includes("classified emitter database");
+
+      if (isPhysicalOrMilitaryHardware) {
+        req.scopeStatus = "safety_conflict";
+        req.scopeConflictReason =
+          "Operational hardware / live interception is prohibited: Operational military-emitter interception, radar-specific interception optimization, physical RF receiver control, or military deployment is prohibited under the authorized synthetic scheduling simulator boundary.";
+        continue;
+      }
+    }
+
+    // Deferred or out of scope markers
+    if (
+      fullText.includes("phase 2") ||
+      fullText.includes("future phase") ||
+      fullText.includes("deferred to next release") ||
+      fullText.includes("post-mvp") ||
+      fullText.includes("subsequent phase")
+    ) {
+      req.scopeStatus = "deferred";
+      req.scopeConflictReason = "Deferred to subsequent phase.";
+    } else if (
+      fullText.includes("out of scope") ||
+      fullText.includes("explicitly excluded") ||
+      fullText.includes("excluded from")
+    ) {
+      req.scopeStatus = "out_of_scope";
+      req.scopeConflictReason = "Explicitly excluded from implementation scope.";
+    } else if (
+      fullText.includes("safety conflict") ||
+      fullText.includes("safety boundary conflict")
+    ) {
+      req.scopeStatus = "safety_conflict";
+      req.scopeConflictReason = "Safety boundary conflict noted.";
+    }
+  }
 }
 
 /**
