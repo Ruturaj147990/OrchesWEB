@@ -8,6 +8,7 @@ import { SourceManifestRepository } from "../../../storage/repositories/source-m
 import { SecretRedactor } from "../../../platform/secret-redactor.js";
 import type { ImportedDocument } from "../../../domain/blueprints/importer.js";
 import { SELECTORS } from "./selectors.js";
+import { PromptSender } from "./prompt-sender.js";
 
 export interface DeliveryResult {
   sourceId: string;
@@ -189,6 +190,8 @@ export class AttachmentUploader {
                 page,
                 `[ORCHES SOURCE ATTACHMENT: ${filename}]\nPlease inspect the attached source file. Do not start implementation yet.`
               );
+              // Wait for ChatGPT to finish acknowledging attachment before proceeding
+              await PromptSender.waitForGenerationToFinish(page, 30_000).catch(() => {});
               return true;
             }
           }
@@ -217,8 +220,12 @@ export class AttachmentUploader {
   private async deliverAsChunkedText(page: Page, doc: ImportedDocument, content: string): Promise<boolean> {
     const chunks = AttachmentUploader.chunkContent(content, `${doc.id} | ${doc.filename}`, 4000);
     for (const chunkMsg of chunks) {
+      // Ensure previous generation has stopped before sending next chunk
+      await PromptSender.waitForGenerationToFinish(page, 30_000).catch(() => {});
       await this.submitText(page, chunkMsg);
-      await page.waitForTimeout(2000).catch(() => {});
+      // Wait for ChatGPT to finish generating its chunk receipt/acknowledgement
+      await PromptSender.waitForGenerationToFinish(page, 30_000).catch(() => {});
+      await page.waitForTimeout(1000).catch(() => {});
     }
     return true;
   }
@@ -257,12 +264,12 @@ export class AttachmentUploader {
         break;
       }
     }
-    if (sendLocator) {
+    if (sendLocator && (await sendLocator.isEnabled().catch(() => false))) {
       await sendLocator.click().catch(() => {});
     } else {
       await page.keyboard.press("Enter").catch(() => {});
     }
 
-    await page.waitForTimeout(2500).catch(() => {});
+    await page.waitForTimeout(1500).catch(() => {});
   }
 }

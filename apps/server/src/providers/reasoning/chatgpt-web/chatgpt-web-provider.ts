@@ -116,7 +116,9 @@ export class ChatGPTWebProvider implements ReasoningProvider {
         const blueprints = blueprintRepo.listBlueprints(request.projectId);
         if (blueprints.length > 0) {
           console.log(`[ChatGPTWeb] Verifying delivery of ${blueprints.length} blueprint attachment(s)...`);
+          this.browserManager.getStateMachine().transition("ATTACHMENTS_UPLOADING");
           await attachmentUploader.ensureSourcesDelivered(page, request.projectId, blueprints, { signal });
+          this.browserManager.getStateMachine().transition("ATTACHMENTS_READY");
         }
       } catch (attErr) {
         console.warn(`[ChatGPTWeb] Notice during attachment delivery: ${(attErr as Error).message}`);
@@ -125,13 +127,17 @@ export class ChatGPTWebProvider implements ReasoningProvider {
 
     // 4. Assemble the prompt text
     const promptText = this.assemblePrompt(request);
+    this.browserManager.getStateMachine().transition("PROMPT_READY", `Prompt assembled (${promptText.length} chars)`);
 
     // 5. Capture pre-submission baseline state for stale response protection
     const baseline = await PromptSender.captureBaseline(page);
 
-    // 6. Submit prompt with duplicate prevention
+    // 6. Submit prompt with duplicate prevention & verification
     this.browserManager.getStateMachine().transition("SUBMITTING");
-    await PromptSender.submitPrompt(page, promptText, baseline, { signal });
+    await PromptSender.submitPrompt(page, promptText, baseline, {
+      signal,
+      stateMachine: this.browserManager.getStateMachine(),
+    });
 
     // 7. Wait for generation completion with multi-signal detection
     this.browserManager.getStateMachine().transition("GENERATING");

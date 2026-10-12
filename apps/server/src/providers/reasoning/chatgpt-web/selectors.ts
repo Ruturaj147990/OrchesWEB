@@ -47,6 +47,14 @@ export const SELECTORS = {
     "div:has(> button[aria-label*='Remove'])",
   ],
 
+  // User messages
+  userMessage: [
+    "[data-message-author-role='user']",
+    "article:has([data-message-author-role='user'])",
+    "div[data-testid*='conversation-turn']:has([data-message-author-role='user'])",
+    ".user-turn",
+  ],
+
   // Assistant messages
   assistantMessage: [
     "[data-message-author-role='assistant']",

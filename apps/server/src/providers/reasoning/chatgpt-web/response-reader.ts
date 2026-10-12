@@ -15,8 +15,30 @@ export class ResponseReader {
   public static readonly MARKER_END = "[/ORCHES_ANTIGRAVITY_INSTRUCTION]";
 
   /**
-   * Waits for ChatGPT to finish generating its response, using multi-signal completion
-   * detection (Stop button disappearance, message text stabilization, Send button re-enable).
+   * Patterns indicating the assistant is only asking what to do with attachments/files
+   * and has NOT actually responded to an engineering brief or task instruction.
+   */
+  public static readonly ATTACHMENT_QUERY_PATTERNS = [
+    /what (would|do) you like (me )?to do with (this|these|the) (file|files|document|documents|attachment|attachments)/i,
+    /how (can|should) i (help|assist) you with (this|these|the) (file|files|document|documents)/i,
+    /please let me know what you('d| would) like me to do with/i,
+    /i have received the (file|files|attachment|attachments)\.? what/i,
+    /i've received your (file|files|attachment|attachments)/i,
+  ];
+
+  /**
+   * Checks whether the given text is merely an attachment acknowledgment asking for instructions.
+   */
+  public static isAttachmentClarification(text: string): boolean {
+    const trimmed = (text || "").trim();
+    if (!trimmed) return false;
+    return this.ATTACHMENT_QUERY_PATTERNS.some((pattern) => pattern.test(trimmed));
+  }
+
+  /**
+   * Waits for ChatGPT to finish generating its response to the new user prompt,
+   * using multi-signal completion detection (Stop button disappearance, message text stabilization,
+   * user turn advancement, and rejection of attachment-only inquiries).
    */
   public static async waitForCompletion(
     page: Page,
@@ -63,13 +85,23 @@ export class ResponseReader {
           (currentText.length > 0 && currentText !== baseline.lastAssistantText);
 
         if (isNewMessage && currentText.length > 20) {
+          // Reject if ChatGPT is only asking what to do with attachments
+          const isAttachmentQuery = this.isAttachmentClarification(currentText);
+
           if (!generating) {
             // If stop button is gone, check if text has stabilized
             if (currentText === lastObservedText) {
               stableCount++;
               if (stableCount >= 2) {
-                // Stabilized over 2 intervals after stop button disappeared
-                return currentText;
+                if (isAttachmentQuery) {
+                  // This is an attachment prompt acknowledgment, not the substantive task answer!
+                  console.warn(
+                    "[ResponseReader] Detected attachment query rather than task response; waiting for task answer."
+                  );
+                } else {
+                  // Substantive response stabilized over 2 intervals after stop button disappeared
+                  return currentText;
+                }
               }
             } else {
               lastObservedText = currentText;
@@ -85,8 +117,13 @@ export class ResponseReader {
       await page.waitForTimeout(stabilizationInterval).catch(() => {});
     }
 
-    // Check if we have at least captured substantive text
-    if (lastObservedText && lastObservedText.length > 100 && lastObservedText !== baseline.lastAssistantText) {
+    // Check if we have at least captured substantive text that is not an attachment query
+    if (
+      lastObservedText &&
+      lastObservedText.length > 100 &&
+      lastObservedText !== baseline.lastAssistantText &&
+      !this.isAttachmentClarification(lastObservedText)
+    ) {
       console.warn("[ResponseReader] Generation timeout reached, but captured substantive response text.");
       return lastObservedText;
     }

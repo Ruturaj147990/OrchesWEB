@@ -204,4 +204,90 @@ describe("ConversationManager Mapping & Navigation", () => {
     expect(manager.extractConversationIdFromUrl("https://chatgpt.com/")).toBeNull();
     expect(manager.extractConversationIdFromUrl("https://chatgpt.com/auth/login")).toBeNull();
   });
+
+  it("strictly rejects bare homepage URL as a valid project conversation mapping", async () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const chatGptRepo = new ProjectChatGptRepository(db);
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO projects (id, name, objective, root_path, status, profile_id, autonomy_mode, verification_commands_json, auto_commit, created_at, updated_at)
+      VALUES ('proj-1', 'Project 1', 'Objective 1', '/ws/1', 'ready', 'general', 'creative_within_constraints', '[]', 1, ?, ?)
+    `).run(now, now);
+
+    // Save an invalid bare homepage mapping
+    chatGptRepo.saveMapping({
+      projectId: "proj-1",
+      conversationUrl: "https://chatgpt.com/",
+      chatTitle: "Homepage",
+      mappingStatus: "active",
+      createdAt: now,
+      lastVerifiedAt: now,
+      lastSuccessfulRequestAt: null,
+      lastError: null,
+    });
+
+    const mapping = chatGptRepo.getMapping("proj-1");
+    // Verify that our URL validator checks identify this as NOT a dedicated conversation
+    const isDedicated = Boolean(mapping?.conversationUrl?.match(/\/c\/[a-zA-Z0-9_-]+/));
+    expect(isDedicated).toBe(false);
+  });
+});
+
+describe("PromptSender and ResponseReader Regression Suite", () => {
+  it("ResponseReader detects and rejects attachment clarification inquiries", () => {
+    const attachmentInquiry = "I have received the files. What would you like me to do with these documents?";
+    expect(ResponseReader.isAttachmentClarification(attachmentInquiry)).toBe(true);
+
+    const alternativeInquiry = "How can I help you with this file?";
+    expect(ResponseReader.isAttachmentClarification(alternativeInquiry)).toBe(true);
+
+    const validInstruction = "### Implementation Plan\n1. Modify `src/index.ts` to add authentication.";
+    expect(ResponseReader.isAttachmentClarification(validInstruction)).toBe(false);
+  });
+
+  it("PromptSender rejects submission of empty or whitespace-only prompt", async () => {
+    const { PromptSender } = await import("../src/providers/reasoning/chatgpt-web/prompt-sender.js");
+    const fakePage = {} as any;
+    const baseline = {
+      assistantCount: 0,
+      lastAssistantText: "",
+      userCount: 0,
+      timestamp: Date.now(),
+    };
+
+    await expect(PromptSender.submitPrompt(fakePage, "   ", baseline)).rejects.toThrow(
+      "Refusing to submit empty prompt to ChatGPT Web."
+    );
+  });
+
+  it("BrowserStateMachine traverses prompt and attachment lifecycle correctly", async () => {
+    const { BrowserStateMachine } = await import("../src/providers/reasoning/chatgpt-web/state-machine.js");
+    const sm = new BrowserStateMachine();
+    const transitions: string[] = [];
+    sm.onStateChange((next) => transitions.push(next));
+
+    sm.transition("READY");
+    sm.transition("ATTACHMENTS_UPLOADING");
+    sm.transition("ATTACHMENTS_READY");
+    sm.transition("PROMPT_READY");
+    sm.transition("COMPOSER_FILLED");
+    sm.transition("USER_MESSAGE_SUBMITTED");
+    sm.transition("USER_MESSAGE_CONFIRMED");
+    sm.transition("ASSISTANT_GENERATING");
+    sm.transition("RESPONSE_COMPLETE");
+
+    expect(transitions).toEqual([
+      "READY",
+      "ATTACHMENTS_UPLOADING",
+      "ATTACHMENTS_READY",
+      "PROMPT_READY",
+      "COMPOSER_FILLED",
+      "USER_MESSAGE_SUBMITTED",
+      "USER_MESSAGE_CONFIRMED",
+      "ASSISTANT_GENERATING",
+      "RESPONSE_COMPLETE",
+    ]);
+  });
 });

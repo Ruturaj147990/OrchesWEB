@@ -38,7 +38,13 @@ export class ConversationManager {
     const now = new Date().toISOString();
 
     // 1. If an existing mapped conversation URL is stored in SQLite
-    if (existing?.conversationUrl && existing.conversationUrl.startsWith("https://chatgpt.com")) {
+    // A bare homepage URL (e.g. 'https://chatgpt.com/' or 'https://chatgpt.com') is NEVER valid as a mapped project conversation.
+    const isDedicatedConvUrl =
+      existing?.conversationUrl &&
+      existing.conversationUrl.startsWith("https://chatgpt.com") &&
+      Boolean(existing.conversationUrl.match(/\/c\/[a-zA-Z0-9_-]+/));
+
+    if (isDedicatedConvUrl && existing?.conversationUrl) {
       const currentUrl = page.url();
       if (currentUrl !== existing.conversationUrl) {
         console.log(`[ChatGPTWeb] Navigating to mapped project conversation: ${existing.conversationUrl}`);
@@ -64,7 +70,7 @@ export class ConversationManager {
       console.warn(`[ChatGPTWeb] Mapped conversation ${existing.conversationUrl} did not load cleanly. Attempting safe recovery.`);
     }
 
-    // 2. No valid mapping exists, or previous conversation was deleted/unavailable.
+    // 2. No valid dedicated conversation mapping exists, or previous conversation was deleted/unavailable.
     // Create a new dedicated project conversation on chatgpt.com.
     console.log(`[ChatGPTWeb] Creating or establishing dedicated ChatGPT conversation for project: ${project.projectId}`);
     await page.goto("https://chatgpt.com/", { waitUntil: "domcontentloaded", timeout: 45_000 });
@@ -82,7 +88,7 @@ export class ConversationManager {
     // Wait for URL to update from / to /c/<conversationId>
     let newUrl = page.url();
     const startWait = Date.now();
-    while (Date.now() - startWait < 20_000) {
+    while (Date.now() - startWait < 30_000) {
       if (options.signal?.aborted) throw new Error("Operation cancelled by user.");
       newUrl = page.url();
       if (newUrl.includes("/c/")) {
@@ -91,21 +97,25 @@ export class ConversationManager {
       await page.waitForTimeout(1000).catch(() => {});
     }
 
-    const mappedUrl = newUrl.includes("/c/") ? newUrl : "https://chatgpt.com/";
-    console.log(`[ChatGPTWeb] Persisting mapped conversation URL for project ${project.projectId}: ${mappedUrl}`);
+    if (!newUrl.includes("/c/")) {
+      console.warn(
+        `[ChatGPTWeb] Notice: URL did not promote to /c/<id> within 30s; current URL is ${newUrl}. Conversation established in session.`
+      );
+    } else {
+      console.log(`[ChatGPTWeb] Persisting mapped conversation URL for project ${project.projectId}: ${newUrl}`);
+      this.repo.saveMapping({
+        projectId: project.projectId,
+        conversationUrl: newUrl,
+        chatTitle: titleMarker,
+        mappingStatus: "active",
+        createdAt: now,
+        lastVerifiedAt: now,
+        lastSuccessfulRequestAt: null,
+        lastError: null,
+      });
+    }
 
-    this.repo.saveMapping({
-      projectId: project.projectId,
-      conversationUrl: mappedUrl,
-      chatTitle: titleMarker,
-      mappingStatus: "active",
-      createdAt: now,
-      lastVerifiedAt: now,
-      lastSuccessfulRequestAt: null,
-      lastError: null,
-    });
-
-    return mappedUrl;
+    return newUrl;
   }
 
   /**
