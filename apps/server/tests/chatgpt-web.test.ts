@@ -477,3 +477,306 @@ Implement the authentication service with JWT middleware.
   });
 });
 
+describe("Section 9 Regression Suite: ChatGPT Web Stuck on Brain Instructing Bug Fix", () => {
+  it("parses the reproduced JSON envelope containing marked instruction cleanly", () => {
+    const reproducedResponse = JSON.stringify({
+      action: "instruct",
+      instruction: `[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Core Architectural Implementation Brief
+## 1. Executive Objective & Scope
+Implement the distributed message queue handler.
+## 2. Working Instructions for Antigravity Agent
+- Inspect src/queue/worker.ts and implement FIFO ordering.
+- Ensure automated verification tests pass.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`,
+      rationale: "Queue handler implementation with FIFO semantics",
+    });
+
+    const result = ResponseReader.extractInstruction(reproducedResponse);
+    expect(result.action).toBe("instruct");
+    expect(result.isMarkerExtracted).toBe(true);
+    expect(result.rationale).toBe("Queue handler implementation with FIFO semantics");
+    expect(result.instructionText).toContain("# Core Architectural Implementation Brief");
+    expect(result.instructionText).toContain("Inspect src/queue/worker.ts and implement FIFO ordering.");
+    expect(result.instructionText).not.toContain("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    expect(result.instructionText).not.toContain("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    expect(result.instructionText).toContain("\n");
+    expect(result.instructionText).not.toContain('\\"');
+  });
+
+  it("parses markdown code-block wrapped JSON envelopes", () => {
+    const wrappedJson = `\`\`\`json
+{
+  "action": "instruct",
+  "instruction": "[ORCHES_ANTIGRAVITY_INSTRUCTION]\\n# Title\\nImplement feature.\\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]",
+  "rationale": "Feature implementation"
+}
+\`\`\``;
+
+    const result = ResponseReader.extractInstruction(wrappedJson);
+    expect(result.action).toBe("instruct");
+    expect(result.instructionText).toBe("# Title\nImplement feature.");
+    expect(result.rationale).toBe("Feature implementation");
+    expect(result.isMarkerExtracted).toBe(true);
+  });
+
+  it("handles explicit action: stop with declared stop reason and rationale", () => {
+    const stopJson = JSON.stringify({
+      action: "stop",
+      stop_reason: "External OAuth credentials not configured in environment",
+      rationale: "Cannot proceed with OAuth integration without credentials",
+    });
+
+    const result = ResponseReader.extractInstruction(stopJson);
+    expect(result.action).toBe("stop");
+    expect(result.instructionText).toBe("");
+    expect(result.stopReason).toBe("External OAuth credentials not configured in environment");
+    expect(result.rationale).toBe("Cannot proceed with OAuth integration without credentials");
+  });
+
+  it("handles malformed and truncated JSON gracefully", () => {
+    const malformed = `{"action": "instruct", "instruction": "[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# Truncated Implementation
+Edit src/handler.ts
+`;
+
+    const result = ResponseReader.extractInstruction(malformed);
+    expect(result.action).toBe("instruct");
+    expect(result.instructionText).toContain("# Truncated Implementation");
+    expect(result.instructionText).toContain("Edit src/handler.ts");
+    expect(result.isMarkerExtracted).toBe(true);
+  });
+
+  it("recovers already-completed response immediately from page without unnecessary delay", async () => {
+    const baseline = {
+      assistantCount: 1,
+      lastAssistantText: "I have received the files. How can I help you?",
+      userCount: 2,
+      timestamp: Date.now() - 5000,
+    };
+
+    const mockPage = {
+      locator: () => ({
+        count: async () => 0,
+      }),
+      evaluate: async (fn: any) => {
+        const fnStr = typeof fn === "function" ? fn.toString() : "";
+        if (fnStr.includes("stop-button") || fnStr.includes("Stop")) {
+          return false;
+        }
+        return [
+          "I have received the files. How can I help you?",
+          JSON.stringify({
+            action: "instruct",
+            instruction: "[ORCHES_ANTIGRAVITY_INSTRUCTION]\n# Fast Path Brief\nRun build.\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]",
+            rationale: "Immediate recovery",
+          }),
+        ];
+      },
+    } as any;
+
+    const completed = await ResponseReader.checkForCompletedResponse(mockPage, baseline);
+    expect(completed).not.toBeNull();
+    expect(completed).toContain("Fast Path Brief");
+
+    const extracted = ResponseReader.extractInstruction(completed!);
+    expect(extracted.action).toBe("instruct");
+    expect(extracted.instructionText).toBe("# Fast Path Brief\nRun build.");
+  });
+
+  it("rejects stale baseline response and attachment inquiries during completed response recovery", async () => {
+    const baseline = {
+      assistantCount: 1,
+      lastAssistantText: "I have received the files. What would you like me to do with these documents?",
+      userCount: 2,
+      timestamp: Date.now() - 5000,
+    };
+
+    const mockPageStale = {
+      locator: () => ({ count: async () => 0 }),
+      evaluate: async (fn: any) => {
+        const fnStr = typeof fn === "function" ? fn.toString() : "";
+        if (fnStr.includes("stop-button") || fnStr.includes("Stop")) {
+          return false;
+        }
+        return [
+          "I have received the files. What would you like me to do with these documents?",
+        ];
+      },
+    } as any;
+
+    const notNew = await ResponseReader.checkForCompletedResponse(mockPageStale, baseline);
+    expect(notNew).toBeNull();
+
+    const mockPageAttachmentInquiry = {
+      locator: () => ({ count: async () => 0 }),
+      evaluate: async (fn: any) => {
+        const fnStr = typeof fn === "function" ? fn.toString() : "";
+        if (fnStr.includes("stop-button") || fnStr.includes("Stop")) {
+          return false;
+        }
+        return [
+          "I have received the files. What would you like me to do with these documents?",
+          "Please let me know what you would like me to do with the attachment.",
+        ];
+      },
+    } as any;
+
+    const attachmentOnly = await ResponseReader.checkForCompletedResponse(mockPageAttachmentInquiry, baseline);
+    expect(attachmentOnly).toBeNull();
+  });
+
+  it("detects submission confirmation via composer clearing or stop button", async () => {
+    const { PromptSender } = await import("../src/providers/reasoning/chatgpt-web/prompt-sender.js");
+    let cleared = false;
+
+    const fakeComposer = {
+      evaluate: async () => (cleared ? "" : "staged prompt text"),
+    };
+
+    const baseline = {
+      assistantCount: 0,
+      lastAssistantText: "",
+      userCount: 1,
+      timestamp: Date.now(),
+    };
+
+    const fakePage = {
+      locator: () => ({ count: async () => 0 }),
+      evaluate: async () => 1,
+      waitForTimeout: async () => {
+        cleared = true;
+      },
+    } as any;
+
+    const conf = await PromptSender.confirmSubmissionState(fakePage, fakeComposer, baseline, 3000);
+    expect(conf.confirmed).toBe(true);
+  });
+
+  it("findConversationUrl discovers conversation URL from sidebar navigation links", async () => {
+    const fakePageWithSidebar = {
+      url: () => "https://chatgpt.com/",
+      evaluate: async () => "https://chatgpt.com/c/active-conv-789-uuid",
+    } as any;
+
+    const foundUrl = await ConversationManager.findConversationUrl(fakePageWithSidebar);
+    expect(foundUrl).toBe("https://chatgpt.com/c/active-conv-789-uuid");
+  });
+
+  it("recordSuccess strictly preserves conversation-specific mapping and ignores bare homepage URLs", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const cm = new ConversationManager(db);
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO projects (id, name, objective, root_path, status, profile_id, autonomy_mode, verification_commands_json, auto_commit, created_at, updated_at)
+      VALUES ('proj-reg-1', 'Project Reg', 'Objective', '/ws', 'ready', 'general', 'creative_within_constraints', '[]', 1, ?, ?)
+    `).run(now, now);
+
+    const repo = new ProjectChatGptRepository(db);
+    repo.saveMapping({
+      projectId: "proj-reg-1",
+      conversationUrl: "https://chatgpt.com/c/dedicated-conv-123",
+      chatTitle: "Initial Title",
+      mappingStatus: "active",
+      createdAt: now,
+      lastVerifiedAt: now,
+      lastSuccessfulRequestAt: null,
+      lastError: null,
+    });
+
+    // Attempting to record success with bare homepage MUST NOT overwrite dedicated conversationUrl
+    cm.recordSuccess("proj-reg-1", "https://chatgpt.com/");
+    const reloaded = repo.getMapping("proj-reg-1");
+    expect(reloaded?.conversationUrl).toBe("https://chatgpt.com/c/dedicated-conv-123");
+
+    // Recording success with a promoted conversation URL updates it cleanly
+    cm.recordSuccess("proj-reg-1", "https://chatgpt.com/c/promoted-conv-456");
+    const updated = repo.getMapping("proj-reg-1");
+    expect(updated?.conversationUrl).toBe("https://chatgpt.com/c/promoted-conv-456");
+  });
+
+  it("BrowserStateMachine traverses all states to completion or terminal failure", async () => {
+    const { BrowserStateMachine } = await import("../src/providers/reasoning/chatgpt-web/state-machine.js");
+    const sm = new BrowserStateMachine();
+    const transitions: string[] = [];
+    sm.onStateChange((next) => transitions.push(next));
+
+    sm.transition("READY");
+    sm.transition("SUBMITTING");
+    sm.transition("WAITING_FOR_RESPONSE");
+    sm.transition("READING_RESPONSE");
+    sm.transition("RESPONSE_COMPLETE");
+    sm.transition("VALIDATING_RESPONSE");
+    sm.transition("INSTRUCTION_READY");
+    sm.transition("DISPATCHING_TO_ANTIGRAVITY");
+
+    expect(transitions).toEqual([
+      "READY",
+      "SUBMITTING",
+      "WAITING_FOR_RESPONSE",
+      "READING_RESPONSE",
+      "RESPONSE_COMPLETE",
+      "VALIDATING_RESPONSE",
+      "INSTRUCTION_READY",
+      "DISPATCHING_TO_ANTIGRAVITY",
+    ]);
+
+    sm.transition("FAILED_TERMINAL", "Login session expired");
+    expect(sm.getState()).toBe("FAILED_TERMINAL");
+  });
+
+  it("composeInstruction dispatches substantive markdown instruction to downstream Antigravity agent", async () => {
+    const { composeInstruction } = await import("../src/orchestrator/instructor.js");
+    const { ScriptedProvider } = await import("./helpers.js");
+
+    const provider = new ScriptedProvider();
+    provider.enqueue("code_generation", () => {
+      return JSON.stringify({
+        action: "instruct",
+        instruction: `[ORCHES_ANTIGRAVITY_INSTRUCTION]
+# End-to-End Test Implementation Brief
+## 1. Executive Objective & Scope
+Build the deterministic data aggregator.
+## 2. Working Instructions for Antigravity Agent
+- Implement aggregator in src/aggregator.ts.
+- Verify tests pass with code 0.
+[/ORCHES_ANTIGRAVITY_INSTRUCTION]`,
+        rationale: "Deterministic data aggregator implementation",
+      });
+    });
+
+    const instruction = await composeInstruction(provider, {
+      projectId: "proj-handoff-test",
+      runId: "run-handoff-test",
+      taskText: "Build the deterministic data aggregator",
+      criteria: ["Aggregator combines items without duplicates"],
+      profile: {
+        fileCount: 1,
+        isEmpty: false,
+        languages: ["typescript"],
+        checks: [{ label: "npm test", command: "npm test", source: "package.json", kind: "test" }],
+        testFrameworks: ["vitest"],
+        packageManagers: ["npm"],
+        manifests: ["package.json"],
+        notes: [],
+      },
+      files: ["package.json", "src/aggregator.ts"],
+      iteration: 1,
+      maxIterations: 3,
+      history: [],
+    });
+
+    expect(instruction.action).toBe("instruct");
+    expect(instruction.source).toBe("model");
+    expect(instruction.rationale).toBe("Deterministic data aggregator implementation");
+    expect(instruction.instruction).not.toContain("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    expect(instruction.instruction).not.toContain('{"action":');
+    expect(instruction.instruction).toContain("# End-to-End Test Implementation Brief");
+    expect(instruction.instruction).toContain("Build the deterministic data aggregator.");
+    expect(instruction.fidelityReport?.passed).toBe(true);
+  });
+});
+
+

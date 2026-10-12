@@ -41,6 +41,10 @@ export class ChatGPTWebProvider implements ReasoningProvider {
     return 32_768;
   }
 
+  public getStateMachine() {
+    return this.browserManager.getStateMachine();
+  }
+
   public async healthCheck(): Promise<ProviderHealth> {
     const start = Date.now();
     try {
@@ -132,69 +136,101 @@ export class ChatGPTWebProvider implements ReasoningProvider {
     // 5. Capture pre-submission baseline state for stale response protection
     const baseline = await PromptSender.captureBaseline(page);
 
-    // 6. Submit prompt with duplicate prevention & verification
-    this.browserManager.getStateMachine().transition("SUBMITTING");
-    await PromptSender.submitPrompt(page, promptText, baseline, {
-      signal,
-      stateMachine: this.browserManager.getStateMachine(),
-    });
+    try {
+      // 6. Submit prompt with duplicate prevention & verification
+      this.browserManager.getStateMachine().transition("SUBMITTING");
+      await PromptSender.submitPrompt(page, promptText, baseline, {
+        signal,
+        stateMachine: this.browserManager.getStateMachine(),
+      });
 
-    // 7. Wait for generation completion with multi-signal detection
-    this.browserManager.getStateMachine().transition("GENERATING");
-    const rawResponse = await ResponseReader.waitForCompletion(page, baseline, {
-      timeoutMs: request.timeoutMs || this.timeoutMs,
-      signal,
-    });
+      // 7. Wait for generation completion with multi-signal detection
+      this.browserManager.getStateMachine().transition("WAITING_FOR_RESPONSE");
+      const rawResponse = await ResponseReader.waitForCompletion(page, baseline, {
+        timeoutMs: request.timeoutMs || this.timeoutMs,
+        signal,
+        stateMachine: this.browserManager.getStateMachine(),
+      });
 
-    this.browserManager.getStateMachine().transition("RESPONSE_COMPLETE");
+      this.browserManager.getStateMachine().transition("VALIDATING_RESPONSE");
 
-    // 8. Extract the substantive engineering instruction
-    const extracted = ResponseReader.extractInstruction(rawResponse, startTime);
-    conversationManager.recordSuccess(request.projectId, mappedConversationUrl);
+      // 8. Extract the substantive engineering instruction
+      const extracted = ResponseReader.extractInstruction(rawResponse, startTime);
 
-    // If JSON output was requested, parse or wrap in JSON
-    let parsed: unknown = null;
-    let finalText = extracted.instructionText;
+      // Record success with genuine conversation URL if promoted
+      const currentUrl = page.url();
+      if (currentUrl.includes("/c/")) {
+        conversationManager.recordSuccess(request.projectId, currentUrl);
+      } else if (mappedConversationUrl && mappedConversationUrl.includes("/c/")) {
+        conversationManager.recordSuccess(request.projectId, mappedConversationUrl);
+      } else {
+        conversationManager.recordSuccess(request.projectId);
+      }
 
-    if (request.json) {
-      parsed = extractJsonFromText(finalText);
-      // Check if the parsed object is merely an internal task descriptor rather than an instruction
-      const isDescriptor = parsed && typeof parsed === "object" && (
-        "acceptance_criteria" in (parsed as Record<string, unknown>) ||
-        "files_to_read" in (parsed as Record<string, unknown>) ||
-        ("title" in (parsed as Record<string, unknown>) && !("instruction" in (parsed as Record<string, unknown>)))
-      );
+      // Handle explicit stop action from model
+      if (extracted.action === "stop") {
+        this.browserManager.getStateMachine().transition("FAILED_TERMINAL", extracted.rationale);
+        const stopParsed = {
+          action: "stop",
+          stop_reason: extracted.stopReason || extracted.rationale,
+          rationale: extracted.rationale,
+        };
+        return {
+          text: JSON.stringify(stopParsed),
+          parsed: stopParsed,
+          providerId: this.id,
+          modelId: this.getModel(),
+          usage: {
+            inputTokens: estimateTokens(promptText),
+            outputTokens: estimateTokens(rawResponse),
+            totalTokens: estimateTokens(promptText) + estimateTokens(rawResponse),
+          },
+          durationMs: Date.now() - startTime,
+          warnings: [],
+        };
+      }
 
-      if (isDescriptor) {
-        // Do not wrap an internal task descriptor as a valid Antigravity instruction.
-        // Leave parsed as-is so downstream quality gates detect and reject it appropriately.
-      } else if (!parsed) {
-        // If the model produced pure markdown instruction instead of JSON, wrap it cleanly
+      this.browserManager.getStateMachine().transition("INSTRUCTION_READY");
+
+      let parsed: unknown = null;
+      let finalText = extracted.instructionText;
+
+      if (request.json) {
         parsed = {
           action: "instruct",
-          instruction: finalText,
-          rationale: "Engineering implementation brief from ChatGPT Web",
+          instruction: extracted.instructionText,
+          rationale: extracted.rationale,
         };
         finalText = JSON.stringify(parsed);
       }
+
+      const inputTokens = estimateTokens(promptText);
+      const outputTokens = estimateTokens(finalText);
+
+      return {
+        text: finalText,
+        parsed,
+        providerId: this.id,
+        modelId: this.getModel(),
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens: inputTokens + outputTokens,
+        },
+        durationMs: Date.now() - startTime,
+        warnings: [],
+      };
+    } catch (err) {
+      const errorMsg = (err as Error).message || "Unknown ChatGPT Web provider error";
+      if (signal?.aborted) {
+        this.browserManager.getStateMachine().transition("CLOSED", "Cancelled by user");
+      } else if (errorMsg.includes("login") || errorMsg.includes("auth")) {
+        this.browserManager.getStateMachine().transition("FAILED_TERMINAL", errorMsg);
+      } else {
+        this.browserManager.getStateMachine().transition("FAILED_RECOVERABLE", errorMsg);
+      }
+      throw err;
     }
-
-    const inputTokens = estimateTokens(promptText);
-    const outputTokens = estimateTokens(finalText);
-
-    return {
-      text: finalText,
-      parsed,
-      providerId: this.id,
-      modelId: this.getModel(),
-      usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
-      },
-      durationMs: Date.now() - startTime,
-      warnings: [],
-    };
   }
 
   private assemblePrompt(request: ReasoningRequest): string {

@@ -666,7 +666,15 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
   let rawInstruction = typeof parsed?.instruction === "string" ? parsed.instruction.trim() : typeof parsed?.prompt === "string" ? (parsed.prompt as string).trim() : "";
 
   // Support output markers contract from ChatGPT Web
-  if (!rawInstruction && response.text) {
+  if (rawInstruction) {
+    const markerStart = rawInstruction.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    const markerEnd = rawInstruction.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+    if (markerStart !== -1 && markerEnd !== -1 && markerEnd > markerStart) {
+      rawInstruction = rawInstruction.slice(markerStart + 32, markerEnd).trim();
+    } else if (markerStart !== -1) {
+      rawInstruction = rawInstruction.slice(markerStart + 32).trim();
+    }
+  } else if (response.text) {
     const markerStart = response.text.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
     const markerEnd = response.text.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
     if (markerStart !== -1 && markerEnd !== -1 && markerEnd > markerStart) {

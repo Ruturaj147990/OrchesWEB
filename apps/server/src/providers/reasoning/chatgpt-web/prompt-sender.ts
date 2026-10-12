@@ -15,14 +15,9 @@ export class PromptSender {
    * to guarantee stale responses are never accepted and new user message arrival can be verified.
    */
   public static async captureBaseline(page: Page): Promise<PreSubmissionState> {
-    const assistantLocators = await this.getAssistantLocators(page);
-    const assistantCount = assistantLocators.length;
-    let lastAssistantText = "";
-
-    if (assistantCount > 0) {
-      lastAssistantText = (await assistantLocators[assistantCount - 1].innerText().catch(() => "")).trim();
-    }
-
+    const assistantTexts = await this.getAssistantMessageTexts(page);
+    const assistantCount = assistantTexts.length;
+    const lastAssistantText = assistantCount > 0 ? assistantTexts[assistantCount - 1] : "";
     const userCount = await this.getUserMessageCount(page);
 
     return {
@@ -39,13 +34,25 @@ export class PromptSender {
    */
   public static async isGenerating(page: Page): Promise<boolean> {
     for (const sel of SELECTORS.stopButton) {
-      const count = await page.locator(sel).count().catch(() => 0);
+      const loc = page.locator(sel);
+      const count = await loc.count().catch(() => 0);
       if (count > 0) {
-        const visible = await page.locator(sel).first().isVisible().catch(() => false);
+        const visible = await loc.first().isVisible().catch(() => false);
         if (visible) return true;
       }
     }
-    return false;
+
+    // Secondary DOM check to reliably detect visible stop button
+    const stopVisible = await page.evaluate(() => {
+      const stopBtn = document.querySelector(
+        "button[data-testid='stop-button'], button[aria-label='Stop streaming'], button[aria-label='Stop generating'], button[aria-label='Stop generation']"
+      );
+      if (!stopBtn) return false;
+      const rect = stopBtn.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && window.getComputedStyle(stopBtn).display !== "none";
+    }).catch(() => false);
+
+    return stopVisible;
   }
 
   /**
@@ -56,7 +63,13 @@ export class PromptSender {
       const count = await page.locator(sel).count().catch(() => 0);
       if (count > 0) return count;
     }
-    return 0;
+    const countFromEval = await page.evaluate(() => {
+      const msgs = document.querySelectorAll(
+        "[data-message-author-role='user'], [data-testid*='user'], .user-turn"
+      );
+      return msgs.length;
+    }).catch(() => 0);
+    return countFromEval;
   }
 
   /**
@@ -65,8 +78,7 @@ export class PromptSender {
    * 2. Composer targeting & content insertion (textarea & contenteditable)
    * 3. Composer content verification (non-empty & fingerprinted)
    * 4. Send action invocation
-   * 5. User message appearance confirmation
-   * 6. Generation start confirmation
+   * 5. Multi-signal submission confirmation (composer cleared, user turn incremented, or generation started)
    */
   public static async submitPrompt(
     page: Page,
@@ -171,21 +183,117 @@ export class PromptSender {
       await page.keyboard.press("Enter").catch(() => {});
     }
 
-    // 6. Confirm new user message appears in DOM (or composer clears)
-    const confirmedUserTurn = await this.confirmUserMessageSubmitted(page, baseline.userCount, 15_000);
-    if (confirmedUserTurn) {
+    // 6. Fast, robust multi-signal submission confirmation
+    const confirmation = await this.confirmSubmissionState(
+      page,
+      composerLocator,
+      baseline,
+      12_000,
+      options.signal
+    );
+
+    if (confirmation.confirmed) {
       options.stateMachine?.transition("USER_MESSAGE_CONFIRMED");
+      if (confirmation.alreadyCompleted) {
+        options.stateMachine?.transition("RESPONSE_COMPLETE");
+      } else if (confirmation.isGenerating) {
+        options.stateMachine?.transition("ASSISTANT_GENERATING");
+      }
     } else {
-      console.warn("[PromptSender] User message turn count did not increment immediately; checking generation state.");
+      console.warn(
+        "[PromptSender] Turn count did not increment immediately; proceeding to response reader to inspect active generation state."
+      );
+    }
+  }
+
+  /**
+   * Fast, multi-signal check confirming that the prompt was submitted:
+   * - Composer content cleared/emptied
+   * - User message turn count incremented
+   * - Stop button appeared (generation started)
+   * - Assistant container count incremented or latest assistant text started streaming/completing
+   */
+  public static async confirmSubmissionState(
+    page: Page,
+    composerLocator: any,
+    baseline: PreSubmissionState,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<{ confirmed: boolean; isGenerating: boolean; alreadyCompleted: boolean }> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (signal?.aborted) throw new Error("Submission cancelled by user.");
+
+      // Check 1: Composer cleared (content reduced to empty/whitespace)
+      const currentComposerContent = await composerLocator.evaluate((el: HTMLElement) => {
+        if ("value" in el) return (el as HTMLTextAreaElement).value || "";
+        return el.innerText || "";
+      }).catch(() => "");
+      const composerCleared = currentComposerContent.trim().length === 0;
+
+      // Check 2: User turn appeared in DOM
+      const userCount = await this.getUserMessageCount(page);
+      const userTurnAppeared = userCount > baseline.userCount;
+
+      // Check 3: Generation started (stop button visible)
+      const generating = await this.isGenerating(page);
+
+      // Check 4: Assistant message appeared or text changed
+      const assistantTexts = await this.getAssistantMessageTexts(page);
+      const assistantCountIncreased = assistantTexts.length > baseline.assistantCount;
+      let assistantTextChanged = false;
+      if (assistantTexts.length > 0) {
+        const latestText = assistantTexts[assistantTexts.length - 1];
+        assistantTextChanged = latestText.length > 0 && latestText !== baseline.lastAssistantText;
+      }
+
+      if (composerCleared || userTurnAppeared || generating || assistantCountIncreased || assistantTextChanged) {
+        return {
+          confirmed: true,
+          isGenerating: generating,
+          alreadyCompleted: !generating && (assistantCountIncreased || assistantTextChanged),
+        };
+      }
+
+      await page.waitForTimeout(300).catch(() => {});
     }
 
-    // 7. Confirm generation started (either Stop button appears, new assistant container, or token growth)
-    const started = await this.confirmSubmissionStarted(page, baseline, 20_000);
-    if (started) {
-      options.stateMachine?.transition("ASSISTANT_GENERATING");
-    } else {
-      console.warn("[PromptSender] Did not detect generation start immediately; inspecting page.");
+    return { confirmed: false, isGenerating: false, alreadyCompleted: false };
+  }
+
+  /**
+   * Retrieves all visible assistant message texts, prioritizing locators and falling back
+   * to full DOM evaluate across modern ChatGPT layout structures.
+   */
+  public static async getAssistantMessageTexts(page: Page): Promise<string[]> {
+    const locators = await this.getAssistantLocators(page);
+    if (locators.length > 0) {
+      const texts: string[] = [];
+      for (const loc of locators) {
+        const t = (await loc.innerText().catch(() => "")).trim();
+        if (t) texts.push(t);
+      }
+      if (texts.length > 0) return texts;
     }
+
+    // Evaluate fallback across standard ChatGPT message structures
+    return await page.evaluate(() => {
+      const results: string[] = [];
+      const roleAssistant = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
+      if (roleAssistant.length > 0) {
+        return roleAssistant.map((el) => (el as HTMLElement).innerText.trim()).filter(Boolean);
+      }
+      const turns = Array.from(document.querySelectorAll("article, [data-testid*='conversation-turn']"));
+      for (const turn of turns) {
+        if (!turn.querySelector("[data-message-author-role='user'], [data-testid*='user']")) {
+          const text = (turn as HTMLElement).innerText.trim();
+          if (text) results.push(text);
+        }
+      }
+      if (results.length > 0) return results;
+      const markdowns = Array.from(document.querySelectorAll(".markdown, .prose"));
+      return markdowns.map((el) => (el as HTMLElement).innerText.trim()).filter(Boolean);
+    }).catch(() => []);
   }
 
   /**
@@ -200,7 +308,7 @@ export class PromptSender {
     while (Date.now() - start < timeoutMs) {
       const currentCount = await this.getUserMessageCount(page);
       if (currentCount > baselineUserCount) return true;
-      await page.waitForTimeout(500).catch(() => {});
+      await page.waitForTimeout(300).catch(() => {});
     }
     return false;
   }
@@ -218,7 +326,7 @@ export class PromptSender {
       if (await this.isGenerating(page)) return true;
       const currentLocators = await this.getAssistantLocators(page);
       if (currentLocators.length > baseline.assistantCount) return true;
-      await page.waitForTimeout(500).catch(() => {});
+      await page.waitForTimeout(300).catch(() => {});
     }
     return false;
   }

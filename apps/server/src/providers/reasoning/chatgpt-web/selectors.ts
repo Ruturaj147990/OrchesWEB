@@ -27,9 +27,11 @@ export const SELECTORS = {
   // Stop generation button
   stopButton: [
     "button[data-testid='stop-button']",
-    "button[aria-label*='Stop generating']",
-    "button[aria-label*='Stop']",
+    "button[aria-label='Stop generating']",
+    "button[aria-label='Stop streaming']",
+    "button[aria-label='Stop generation']",
     "button:has-text('Stop generating')",
+    "button:has-text('Stop streaming')",
   ],
 
   // File upload input
@@ -52,6 +54,8 @@ export const SELECTORS = {
     "[data-message-author-role='user']",
     "article:has([data-message-author-role='user'])",
     "div[data-testid*='conversation-turn']:has([data-message-author-role='user'])",
+    "article[data-testid*='user']",
+    "[data-testid*='user-turn']",
     ".user-turn",
   ],
 
@@ -60,7 +64,15 @@ export const SELECTORS = {
     "[data-message-author-role='assistant']",
     "article:has([data-message-author-role='assistant'])",
     "div[data-testid*='conversation-turn']:has([data-message-author-role='assistant'])",
+    "article[data-testid*='conversation-turn']:not(:has([data-message-author-role='user']))",
+    "div[data-testid*='conversation-turn']:not(:has([data-message-author-role='user']))",
+    "[data-testid*='assistant']",
+    "div[class*='agent-turn']",
     ".agent-turn",
+    "article:has(.markdown)",
+    "div[data-testid*='conversation-turn']:has(.markdown)",
+    ".markdown.prose",
+    "div.markdown",
   ],
 
   // Authentication indicators (unauthenticated)

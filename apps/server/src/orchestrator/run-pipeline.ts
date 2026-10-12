@@ -333,6 +333,9 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         db.prepare("UPDATE task_attempts SET instruction_text = ? WHERE id = ?").run(instructionText, attemptId);
         events.record(project.id, "brain.instruction", { attempt, action: "instruct", instruction: instructionText, rationale: instr.rationale, source: instr.source, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
         phase("coding", attempt);
+        if ("getStateMachine" in provider && typeof (provider as any).getStateMachine === "function") {
+          (provider as any).getStateMachine().transition("DISPATCHING_TO_ANTIGRAVITY");
+        }
       }
       const agentResult = await agent.execute({
         projectId: project.id,

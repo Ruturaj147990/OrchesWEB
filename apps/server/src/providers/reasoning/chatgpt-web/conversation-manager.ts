@@ -85,13 +85,15 @@ export class ConversationManager {
     // Send initial project marker to establish the conversation with a clean identifiable title
     await this.submitMessage(page, `Initialize reasoning workspace for Orches.\nProject Marker: ${titleMarker}`);
 
-    // Wait for URL to update from / to /c/<conversationId>
+    // Wait boundedly for URL to promote to /c/<conversationId> or find link in sidebar
     let newUrl = page.url();
+    let detectedUrl: string | null = null;
     const startWait = Date.now();
-    while (Date.now() - startWait < 30_000) {
+    while (Date.now() - startWait < 15_000) {
       if (options.signal?.aborted) throw new Error("Operation cancelled by user.");
-      newUrl = page.url();
-      if (newUrl.includes("/c/")) {
+      detectedUrl = await ConversationManager.findConversationUrl(page);
+      if (detectedUrl) {
+        newUrl = detectedUrl;
         break;
       }
       await page.waitForTimeout(1000).catch(() => {});
@@ -99,7 +101,7 @@ export class ConversationManager {
 
     if (!newUrl.includes("/c/")) {
       console.warn(
-        `[ChatGPTWeb] Notice: URL did not promote to /c/<id> within 30s; current URL is ${newUrl}. Conversation established in session.`
+        `[ChatGPTWeb] Notice: Dedicated URL did not promote to /c/<id> within 15s; current URL is ${newUrl}. Conversation active in session; will update mapping when URL promotes.`
       );
     } else {
       console.log(`[ChatGPTWeb] Persisting mapped conversation URL for project ${project.projectId}: ${newUrl}`);
@@ -119,14 +121,39 @@ export class ConversationManager {
   }
 
   /**
+   * Discovers the dedicated conversation URL by checking page.url() and inspecting
+   * sidebar / navigation links in the ChatGPT DOM.
+   */
+  public static async findConversationUrl(page: Page): Promise<string | null> {
+    const currentUrl = page.url();
+    if (currentUrl.includes("/c/")) return currentUrl;
+
+    // Check sidebar / nav links for the active or newest conversation link
+    const navUrl = await page.evaluate(() => {
+      const activeLink = document.querySelector("nav a[href*='/c/'][aria-current='page'], nav a[href*='/c/'].active, nav a[href*='/c/']");
+      if (activeLink) {
+        const href = activeLink.getAttribute("href");
+        if (href && href.includes("/c/")) {
+          return href.startsWith("http") ? href : `https://chatgpt.com${href}`;
+        }
+      }
+      return null;
+    }).catch(() => null);
+
+    return navUrl;
+  }
+
+  /**
    * Records a successful request in the mapped project conversation.
+   * Strictly ignores bare homepage URLs to prevent corrupting project conversation mappings.
    */
   public recordSuccess(projectId: string, conversationUrl?: string): void {
     const now = new Date().toISOString();
+    const isDedicated = Boolean(conversationUrl && conversationUrl.includes("/c/"));
     this.repo.updateStatus(projectId, {
       lastSuccessfulRequestAt: now,
       lastVerifiedAt: now,
-      ...(conversationUrl ? { conversationUrl } : {}),
+      ...(isDedicated ? { conversationUrl } : {}),
       mappingStatus: "active",
       lastError: null,
     });
