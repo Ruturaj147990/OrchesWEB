@@ -24,6 +24,7 @@ export type BrowserState =
   | "FAILED"
   | "FAILED_RECOVERABLE"
   | "FAILED_TERMINAL"
+  | "STOPPED"
   | "CLOSED";
 
 export class BrowserStateMachine {

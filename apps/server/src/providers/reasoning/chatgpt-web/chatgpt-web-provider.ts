@@ -169,7 +169,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
 
       // Handle explicit stop action from model
       if (extracted.action === "stop") {
-        this.browserManager.getStateMachine().transition("FAILED_TERMINAL", extracted.rationale);
+        console.log(`[ChatGPTWeb] Explicit stop response received: ${extracted.stopReason || extracted.rationale}`);
+        this.browserManager.getStateMachine().transition("STOPPED", extracted.rationale);
         const stopParsed = {
           action: "stop",
           stop_reason: extracted.stopReason || extracted.rationale,

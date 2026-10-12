@@ -692,10 +692,15 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
   }
 
   if (action === "stop") {
+    const stopReason = String(parsed?.stop_reason ?? parsed?.stopReason ?? "").trim();
+    const rationale = String(parsed?.rationale ?? parsed?.reason ?? "").trim();
+    const combinedRationale = stopReason && rationale && stopReason !== rationale
+      ? `${stopReason}: ${rationale}`
+      : stopReason || rationale || "The reasoning model stopped the run.";
     return {
       action: "stop",
       instruction: "",
-      rationale: String(parsed?.stop_reason ?? parsed?.rationale ?? "The reasoning model stopped the run."),
+      rationale: combinedRationale,
       source: "model",
     };
   }

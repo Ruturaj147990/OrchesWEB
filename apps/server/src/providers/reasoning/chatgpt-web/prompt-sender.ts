@@ -9,6 +9,19 @@ export interface PreSubmissionState {
   timestamp: number;
 }
 
+export interface AssistantDiscoveryResult {
+  texts: string[];
+  status:
+    | "discovered"
+    | "awaiting_response"
+    | "empty_conversation"
+    | "dom_extraction_failed"
+    | "auth_required"
+    | "challenge_required"
+    | "page_error";
+  diagnostic?: string;
+}
+
 export class PromptSender {
   /**
    * Captures the baseline state of assistant and user messages before submission
@@ -52,7 +65,7 @@ export class PromptSender {
       return rect.width > 0 && rect.height > 0 && window.getComputedStyle(stopBtn).display !== "none";
     }).catch(() => false);
 
-    return stopVisible;
+    return stopVisible === true;
   }
 
   /**
@@ -64,8 +77,13 @@ export class PromptSender {
       if (count > 0) return count;
     }
     const countFromEval = await page.evaluate(() => {
+      const userHeaders = Array.from(document.querySelectorAll("h4, h5, h6, [data-conversation-role]")).filter(
+        (h) => h.getAttribute("data-conversation-role") === "user" || (h.textContent || "").includes("You said:")
+      );
+      if (userHeaders.length > 0) return userHeaders.length;
+
       const msgs = document.querySelectorAll(
-        "[data-message-author-role='user'], [data-testid*='user'], .user-turn"
+        "[data-markdown-text-style='user-message'], [data-chatgpt-search-unit-key*='user'], [data-message-author-role='user'], [data-testid*='user'], .user-turn, div[class*='user-message']"
       );
       return msgs.length;
     }).catch(() => 0);
@@ -262,38 +280,253 @@ export class PromptSender {
   }
 
   /**
-   * Retrieves all visible assistant message texts, prioritizing locators and falling back
-   * to full DOM evaluate across modern ChatGPT layout structures.
+   * Retrieves structured discovery information for assistant messages, distinguishing
+   * genuinely empty threads, actively generating responses, authentication/challenge walls,
+   * DOM extraction failures, and successfully discovered responses.
    */
-  public static async getAssistantMessageTexts(page: Page): Promise<string[]> {
+  public static async getAssistantDiscovery(page: Page): Promise<AssistantDiscoveryResult> {
+    if (typeof page?.isClosed === "function" && page.isClosed()) {
+      return { texts: [], status: "page_error", diagnostic: "Target page is closed" };
+    }
+
+    // 1. Check for challenge indicators
+    for (const sel of SELECTORS.challenge) {
+      const count = await page.locator(sel).count().catch(() => 0);
+      if (count > 0) {
+        const visible = await page.locator(sel).first().isVisible().catch(() => false);
+        if (visible) {
+          return { texts: [], status: "challenge_required", diagnostic: `Verification challenge active (${sel})` };
+        }
+      }
+    }
+
+    // 2. Check for login indicators
+    for (const sel of SELECTORS.loginButton) {
+      const count = await page.locator(sel).count().catch(() => 0);
+      if (count > 0) {
+        const visible = await page.locator(sel).first().isVisible().catch(() => false);
+        if (visible) {
+          let profileFound = false;
+          for (const profSel of SELECTORS.userProfile) {
+            if ((await page.locator(profSel).count().catch(() => 0)) > 0) {
+              profileFound = true;
+              break;
+            }
+          }
+          if (!profileFound) {
+            return { texts: [], status: "auth_required", diagnostic: "ChatGPT login required" };
+          }
+        }
+      }
+    }
+
+    // 3. Check for page error banners
+    for (const sel of SELECTORS.errorBanner) {
+      const count = await page.locator(sel).count().catch(() => 0);
+      if (count > 0) {
+        const visible = await page.locator(sel).first().isVisible().catch(() => false);
+        if (visible) {
+          const errText = await page.locator(sel).first().innerText().catch(() => "Unknown page error");
+          return { texts: [], status: "page_error", diagnostic: errText };
+        }
+      }
+    }
+
+    // 4. Primary extraction via Playwright Locators
     const locators = await this.getAssistantLocators(page);
     if (locators.length > 0) {
       const texts: string[] = [];
       for (const loc of locators) {
-        const t = (await loc.innerText().catch(() => "")).trim();
-        if (t) texts.push(t);
-      }
-      if (texts.length > 0) return texts;
-    }
-
-    // Evaluate fallback across standard ChatGPT message structures
-    return await page.evaluate(() => {
-      const results: string[] = [];
-      const roleAssistant = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
-      if (roleAssistant.length > 0) {
-        return roleAssistant.map((el) => (el as HTMLElement).innerText.trim()).filter(Boolean);
-      }
-      const turns = Array.from(document.querySelectorAll("article, [data-testid*='conversation-turn']"));
-      for (const turn of turns) {
-        if (!turn.querySelector("[data-message-author-role='user'], [data-testid*='user']")) {
-          const text = (turn as HTMLElement).innerText.trim();
-          if (text) results.push(text);
+        const isUser = await loc.evaluate((node: HTMLElement) => {
+          return (
+            !!node.closest("[data-markdown-text-style='user-message'], [class*='user-message'], [data-chatgpt-search-unit-key*='user']") ||
+            node.querySelector("[data-markdown-text-style='user-message'], [class*='user-message']") !== null
+          );
+        }).catch(() => false);
+        if (!isUser) {
+          const t = (await loc.innerText().catch(() => "")).trim();
+          if (t) texts.push(t);
         }
       }
-      if (results.length > 0) return results;
-      const markdowns = Array.from(document.querySelectorAll(".markdown, .prose"));
-      return markdowns.map((el) => (el as HTMLElement).innerText.trim()).filter(Boolean);
-    }).catch(() => []);
+      if (texts.length > 0) {
+        return { texts, status: "discovered" };
+      }
+    }
+
+    // 5. Bounded, validated DOM-evaluation fallback across modern and classic ChatGPT layouts
+    const evalResult = await page.evaluate(() => {
+      try {
+        const isChallenge = !!document.querySelector("iframe[src*='challenges.cloudflare.com'], #challenge-running");
+        if (isChallenge) return { texts: [], status: "challenge_required" as const, diagnostic: "Cloudflare challenge detected" };
+
+        const isLogin = !!document.querySelector("a[href*='/auth/login'], button[data-testid='login-button']");
+        const hasProfile = !!document.querySelector("button[data-testid='profile-button'], nav[aria-label*='Chat history']");
+        if (isLogin && !hasProfile) return { texts: [], status: "auth_required" as const, diagnostic: "Login required" };
+
+        const errorEl = document.querySelector("[role='alert'], .text-token-text-error");
+        if (errorEl) {
+          const errText = (errorEl as HTMLElement).innerText?.trim();
+          if (errText) return { texts: [], status: "page_error" as const, diagnostic: errText };
+        }
+
+        const texts: string[] = [];
+
+        // Path A: Modern [data-markdown-text-style="assistant-message"]
+        const modernNodes = Array.from(document.querySelectorAll("[data-markdown-text-style='assistant-message']"));
+        if (modernNodes.length > 0) {
+          for (const el of modernNodes) {
+            const t = (el as HTMLElement).innerText?.trim() || "";
+            if (t) texts.push(t);
+          }
+          if (texts.length > 0) return { texts, status: "discovered" as const };
+        }
+
+        // Path B: Semantic assistant headers (ChatGPT said:)
+        const assistantHeaders = Array.from(document.querySelectorAll("h4, h5, h6, [data-conversation-role='assistant']")).filter(
+          (h) => h.getAttribute("data-conversation-role") === "assistant" || (h.textContent || "").includes("ChatGPT said:")
+        );
+        if (assistantHeaders.length > 0) {
+          for (const h of assistantHeaders) {
+            let container: HTMLElement | null = h.parentElement;
+            while (container && container !== document.body) {
+              if (container.classList.contains("block-BQZwFn") || Array.from(container.classList).some((c) => c.startsWith("block-"))) {
+                break;
+              }
+              container = container.parentElement;
+            }
+            if (!container) container = h.parentElement;
+            if (container) {
+              const clone = container.cloneNode(true) as HTMLElement;
+              clone.querySelectorAll("h4, h5, h6, button, svg, form").forEach((n) => n.remove());
+              const t = clone.innerText?.trim() || "";
+              if (t) texts.push(t);
+            }
+          }
+          if (texts.length > 0) return { texts, status: "discovered" as const };
+        }
+
+        // Path C: Deeply inline message ID containers [data-dil-message-id]
+        const dilNodes = Array.from(document.querySelectorAll("[data-dil-message-id]"));
+        if (dilNodes.length > 0) {
+          for (const el of dilNodes) {
+            const t = (el as HTMLElement).innerText?.trim() || "";
+            if (t) texts.push(t);
+          }
+          if (texts.length > 0) return { texts, status: "discovered" as const };
+        }
+
+        // Path D: Writing block / Canvas
+        const writingBlocks = Array.from(document.querySelectorAll("[data-testid='chatgpt-writing-block'], .writing-block-editor, .ProseMirror[contenteditable='true']:not([data-composer-markdown])"));
+        if (writingBlocks.length > 0) {
+          for (const el of writingBlocks) {
+            const t = (el as HTMLElement).innerText?.trim() || "";
+            if (t) texts.push(t);
+          }
+          if (texts.length > 0) return { texts, status: "discovered" as const };
+        }
+
+        // Path E: Classic role="assistant"
+        const classicAssistant = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
+        if (classicAssistant.length > 0) {
+          for (const el of classicAssistant) {
+            const t = (el as HTMLElement).innerText?.trim() || "";
+            if (t) texts.push(t);
+          }
+          if (texts.length > 0) return { texts, status: "discovered" as const };
+        }
+
+        // Path F: Generic conversation turns filtering out user turns
+        const turns = Array.from(document.querySelectorAll("article, [data-testid*='conversation-turn'], div[class*='block-']"));
+        for (const turn of turns) {
+          const hasUser = !!turn.querySelector("[data-markdown-text-style='user-message'], [class*='user-message'], [data-message-author-role='user'], [data-chatgpt-search-unit-key*='user']");
+          const hasUserHeader = Array.from(turn.querySelectorAll("h4, h5, h6")).some((h) => (h.textContent || "").includes("You said:"));
+          if (!hasUser && !hasUserHeader) {
+            const clone = turn.cloneNode(true) as HTMLElement;
+            clone.querySelectorAll("h4, h5, h6, button, svg, form").forEach((n) => n.remove());
+            const t = clone.innerText?.trim() || "";
+            if (t && t.length > 20) texts.push(t);
+          }
+        }
+        if (texts.length > 0) return { texts, status: "discovered" as const };
+
+        // Path G: Markdown / prose containers
+        const markdowns = Array.from(document.querySelectorAll(".markdown, .prose"));
+        for (const md of markdowns) {
+          const t = (md as HTMLElement).innerText?.trim() || "";
+          if (t) texts.push(t);
+        }
+        if (texts.length > 0) return { texts, status: "discovered" as const };
+
+        // 3. No assistant message found. Distinguish empty conversation vs extraction failure
+        const userElements = document.querySelectorAll(
+          "[data-markdown-text-style='user-message'], div.group\\/user-message, [class*='user-message'], [data-message-author-role='user'], [data-chatgpt-search-unit-key*='user']"
+        );
+        const userHeaders = Array.from(document.querySelectorAll("h4, h5, h6")).filter((h) => (h.textContent || "").includes("You said:"));
+        const totalUserIndicators = userElements.length + userHeaders.length;
+
+
+        if (totalUserIndicators > 0) {
+          return {
+            texts: [],
+            status: "dom_extraction_failed" as const,
+            diagnostic: `Conversation contains ${totalUserIndicators} user turn indicator(s), but assistant containers could not be matched by any selector`,
+          };
+        }
+
+        return {
+          texts: [],
+          status: "empty_conversation" as const,
+          diagnostic: "Genuinely empty conversation thread (no user or assistant turns)",
+        };
+      } catch (err: any) {
+        return {
+          texts: [],
+          status: "dom_extraction_failed" as const,
+          diagnostic: `DOM evaluation threw exception: ${err?.message || String(err)}`,
+        };
+      }
+    }).catch((evalErr: any) => ({
+      texts: [],
+      status: "dom_extraction_failed" as const,
+      diagnostic: `Page evaluate failed: ${evalErr?.message || String(evalErr)}`,
+    }));
+
+    if (Array.isArray(evalResult)) {
+      const stringTexts = evalResult.filter((t): t is string => typeof t === "string" && Boolean(t.trim()));
+      return {
+        texts: stringTexts,
+        status: stringTexts.length > 0 ? "discovered" : "empty_conversation",
+      };
+    }
+
+    if (evalResult && typeof evalResult === "object" && "texts" in evalResult && Array.isArray((evalResult as any).texts)) {
+      if ((evalResult as any).status === "dom_extraction_failed") {
+        const generating = await this.isGenerating(page).catch(() => false);
+        if (generating) {
+          return {
+            texts: (evalResult as any).texts,
+            status: "awaiting_response",
+            diagnostic: "Generation is actively streaming in ChatGPT",
+          };
+        }
+      }
+      return evalResult as AssistantDiscoveryResult;
+    }
+
+    return {
+      texts: [],
+      status: "empty_conversation",
+      diagnostic: "Unknown evaluation response structure",
+    };
+  }
+
+  /**
+   * Retrieves all visible assistant message texts, prioritizing locators and falling back
+   * to full DOM evaluate across modern and classic ChatGPT layout structures.
+   */
+  public static async getAssistantMessageTexts(page: Page): Promise<string[]> {
+    const discovery = await this.getAssistantDiscovery(page);
+    return Array.isArray(discovery?.texts) ? discovery.texts : [];
   }
 
   /**

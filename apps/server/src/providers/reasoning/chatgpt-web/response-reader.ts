@@ -100,31 +100,38 @@ export class ResponseReader {
     let lastObservedText = "";
     let stableCount = 0;
     let lastLogTime = Date.now();
+    let domExtractionFailureCount = 0;
 
     while (Date.now() - startTime < timeoutMs) {
       if (options.signal?.aborted) throw new Error("Cancelled by user.");
 
-      // Check for error banners
-      for (const errSel of SELECTORS.errorBanner) {
-        const count = await page.locator(errSel).count().catch(() => 0);
-        if (count > 0) {
-          const visible = await page.locator(errSel).first().isVisible().catch(() => false);
-          if (visible) {
-            const errText = await page.locator(errSel).first().innerText().catch(() => "Unknown page error");
-            options.stateMachine?.transition("FAILED_RECOVERABLE", `Page error: ${errText}`);
-            throw new Error(`ChatGPT Web returned an error: ${errText}`);
-          }
-        }
+      // Check assistant discovery status across modern & classic DOM
+      const discovery = await PromptSender.getAssistantDiscovery(page);
+
+      // Handle critical page states immediately
+      if (discovery.status === "auth_required") {
+        options.stateMachine?.transition("FAILED_TERMINAL", discovery.diagnostic);
+        throw new Error(`ChatGPT Web requires authentication: ${discovery.diagnostic}`);
+      }
+      if (discovery.status === "challenge_required") {
+        options.stateMachine?.transition("FAILED_TERMINAL", discovery.diagnostic);
+        throw new Error(`ChatGPT Web verification challenge detected: ${discovery.diagnostic}`);
+      }
+      if (discovery.status === "page_error") {
+        options.stateMachine?.transition("FAILED_RECOVERABLE", discovery.diagnostic);
+        throw new Error(`ChatGPT Web returned an error: ${discovery.diagnostic}`);
       }
 
       const generating = await PromptSender.isGenerating(page);
       if (generating) {
         options.stateMachine?.transition("ASSISTANT_GENERATING");
+        domExtractionFailureCount = 0;
       }
 
       // Locate assistant messages
-      const currentTexts = await PromptSender.getAssistantMessageTexts(page);
+      const currentTexts = discovery.texts;
       if (currentTexts.length > 0) {
+        domExtractionFailureCount = 0;
         const latestText = currentTexts[currentTexts.length - 1];
 
         // Ensure this is not the stale baseline message
@@ -161,13 +168,27 @@ export class ResponseReader {
             stableCount = 0;
           }
         }
+      } else {
+        // No assistant messages discovered in this poll
+        if (discovery.status === "dom_extraction_failed" && !generating) {
+          domExtractionFailureCount++;
+          // Bounded waiting: allow up to 10 seconds of DOM settling before terminating with diagnostic
+          if (domExtractionFailureCount >= 10) {
+            options.stateMachine?.transition("FAILED_RECOVERABLE", "DOM extraction failure");
+            throw new Error(
+              `ChatGPT assistant response could not be discovered due to DOM extraction failure: ${discovery.diagnostic}`
+            );
+          }
+        } else {
+          domExtractionFailureCount = 0;
+        }
       }
 
       // Periodic logging every 10 seconds to provide visibility into polling
       if (Date.now() - lastLogTime >= 10_000) {
         lastLogTime = Date.now();
         console.log(
-          `[ResponseReader] Polling for response completion (${Math.round((Date.now() - startTime) / 1000)}s elapsed). Generating: ${generating}, messages: ${currentTexts.length}.`
+          `[ResponseReader] Polling for response completion (${Math.round((Date.now() - startTime) / 1000)}s elapsed). Generating: ${generating}, messages: ${currentTexts.length}, status: ${discovery.status}${discovery.diagnostic ? ` (${discovery.diagnostic})` : ""}.`
         );
       }
 

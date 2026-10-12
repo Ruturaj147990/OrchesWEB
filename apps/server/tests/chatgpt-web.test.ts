@@ -777,6 +777,308 @@ Build the deterministic data aggregator.
     expect(instruction.instruction).toContain("Build the deterministic data aggregator.");
     expect(instruction.fidelityReport?.passed).toBe(true);
   });
+
+  describe("Section 11 Regression Suite: Assistant Response Discovery & Termination (Zero-Message Defect Fix)", () => {
+    it("detects real response in modern DOM where old selectors return 0 matches", async () => {
+      const { SELECTORS } = await import("../src/providers/reasoning/chatgpt-web/selectors.js");
+      const { PromptSender } = await import("../src/providers/reasoning/chatgpt-web/prompt-sender.js");
+
+      expect(SELECTORS.assistantMessage).toContain("[data-markdown-text-style='assistant-message']");
+      expect(SELECTORS.assistantMessage).toContain("div:has(> [data-conversation-role='assistant'])");
+      expect(SELECTORS.assistantMessage).toContain("div:has(> h4:has-text('ChatGPT said:'))");
+
+      const fakePage = {
+        locator: (sel: string) => {
+          if (sel === "[data-message-author-role='assistant']" || sel.startsWith("article")) {
+            return { count: async () => 0 };
+          }
+          if (sel === "[data-markdown-text-style='assistant-message']") {
+            return {
+              count: async () => 1,
+              nth: () => ({
+                evaluate: async () => false,
+                innerText: async () => JSON.stringify({
+                  action: "instruct",
+                  instruction: "[ORCHES_ANTIGRAVITY_INSTRUCTION]\n# Modern DOM Brief\nCreate calculator.\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]",
+                  rationale: "Modern DOM extraction succeeded",
+                }),
+              }),
+            };
+          }
+          return { count: async () => 0 };
+        },
+        evaluate: async () => ({ texts: [], status: "empty_conversation" }),
+      } as any;
+
+      const discovery = await PromptSender.getAssistantDiscovery(fakePage);
+      expect(discovery.status).toBe("discovered");
+      expect(discovery.texts.length).toBe(1);
+      expect(discovery.texts[0]).toContain("Modern DOM Brief");
+    });
+
+    it("recovers completed response immediately when generation is inactive", async () => {
+      const { ResponseReader } = await import("../src/providers/reasoning/chatgpt-web/response-reader.js");
+      const { BrowserStateMachine } = await import("../src/providers/reasoning/chatgpt-web/state-machine.js");
+
+      const baseline = {
+        assistantCount: 0,
+        lastAssistantText: "",
+        userCount: 1,
+        timestamp: Date.now() - 5000,
+      };
+
+      const responseText = JSON.stringify({
+        action: "instruct",
+        instruction: "[ORCHES_ANTIGRAVITY_INSTRUCTION]\n# Inactive Generation Brief\nImplement calculator module.\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]",
+        rationale: "Response finished before next polling cycle",
+      });
+
+      const fakePage = {
+        locator: (sel: string) => {
+          if (sel === "[data-markdown-text-style='assistant-message']") {
+            return {
+              count: async () => 1,
+              nth: () => ({
+                evaluate: async () => false,
+                innerText: async () => responseText,
+              }),
+            };
+          }
+          return { count: async () => 0 };
+        },
+        evaluate: async () => false,
+      } as any;
+
+      const sm = new BrowserStateMachine();
+      const result = await ResponseReader.waitForCompletion(fakePage, baseline, {
+        stateMachine: sm,
+        timeoutMs: 5000,
+      });
+
+      expect(result).toBe(responseText);
+      expect(sm.getState()).toBe("RESPONSE_COMPLETE");
+    });
+
+    it("handles DOM evaluation exceptions without silently converting to empty messages", async () => {
+      const { PromptSender } = await import("../src/providers/reasoning/chatgpt-web/prompt-sender.js");
+
+      const fakePageWithException = {
+        locator: () => ({ count: async () => 0 }),
+        evaluate: async () => {
+          throw new Error("SyntaxError: Failed to execute 'querySelectorAll' on 'Document'");
+        },
+      } as any;
+
+      const discovery = await PromptSender.getAssistantDiscovery(fakePageWithException);
+      expect(discovery.status).toBe("dom_extraction_failed");
+      expect(discovery.diagnostic).toContain("SyntaxError");
+    });
+
+    it("terminates with clear diagnostic when challenge or login required", async () => {
+      const { ResponseReader } = await import("../src/providers/reasoning/chatgpt-web/response-reader.js");
+      const { BrowserStateMachine } = await import("../src/providers/reasoning/chatgpt-web/state-machine.js");
+
+      const baseline = { assistantCount: 0, lastAssistantText: "", userCount: 1, timestamp: Date.now() };
+
+      const fakeChallengePage = {
+        locator: (sel: string) => {
+          if (sel.includes("challenges.cloudflare.com") || sel.includes("challenge")) {
+            return {
+              count: async () => 1,
+              first: () => ({ isVisible: async () => true }),
+            };
+          }
+          return { count: async () => 0 };
+        },
+        evaluate: async () => false,
+      } as any;
+
+      const sm = new BrowserStateMachine();
+      await expect(
+        ResponseReader.waitForCompletion(fakeChallengePage, baseline, { stateMachine: sm, timeoutMs: 5000 })
+      ).rejects.toThrow(/verification challenge detected/i);
+
+      expect(sm.getState()).toBe("FAILED_TERMINAL");
+    });
+
+    it("enforces consistency between baseline capture and new-message extraction", async () => {
+      const { PromptSender } = await import("../src/providers/reasoning/chatgpt-web/prompt-sender.js");
+
+      const msg = "Initial assistant reply";
+      const fakePage = {
+        locator: (sel: string) => {
+          if (sel === "[data-markdown-text-style='assistant-message']") {
+            return {
+              count: async () => 1,
+              nth: () => ({
+                evaluate: async () => false,
+                innerText: async () => msg,
+              }),
+            };
+          }
+          if (sel.includes("You said")) {
+            return { count: async () => 1 };
+          }
+          return { count: async () => 0 };
+        },
+        evaluate: async () => false,
+      } as any;
+
+      const baseline = await PromptSender.captureBaseline(fakePage);
+      expect(baseline.assistantCount).toBe(1);
+      expect(baseline.lastAssistantText).toBe(msg);
+
+      const texts = await PromptSender.getAssistantMessageTexts(fakePage);
+      expect(texts.length).toBe(baseline.assistantCount);
+      expect(texts[texts.length - 1]).toBe(baseline.lastAssistantText);
+    });
+
+    it("rejects stale previous assistant response during polling", async () => {
+      const { ResponseReader } = await import("../src/providers/reasoning/chatgpt-web/response-reader.js");
+
+      const staleText = "Previous completed reply from attempt 1";
+      const baseline = {
+        assistantCount: 1,
+        lastAssistantText: staleText,
+        userCount: 2,
+        timestamp: Date.now(),
+      };
+
+      const fakePageStale = {
+        locator: (sel: string) => {
+          if (sel === "[data-markdown-text-style='assistant-message']") {
+            return {
+              count: async () => 1,
+              nth: () => ({
+                evaluate: async () => false,
+                innerText: async () => staleText,
+              }),
+            };
+          }
+          return { count: async () => 0 };
+        },
+        evaluate: async () => false,
+        waitForTimeout: async () => {},
+      } as any;
+
+      const completed = await ResponseReader.checkForCompletedResponse(fakePageStale, baseline);
+      expect(completed).toBeNull();
+    });
+
+    it("extracts JSON envelope for action: instruct and separates markers", async () => {
+      const { ResponseReader } = await import("../src/providers/reasoning/chatgpt-web/response-reader.js");
+
+      const raw = JSON.stringify({
+        action: "instruct",
+        instruction: "[ORCHES_ANTIGRAVITY_INSTRUCTION]\n# Calculator Module\nImplement basic add and subtract functions.\n[/ORCHES_ANTIGRAVITY_INSTRUCTION]",
+        rationale: "Basic math functions implementation",
+      });
+
+      const extracted = ResponseReader.extractInstruction(raw);
+      expect(extracted.action).toBe("instruct");
+      expect(extracted.isMarkerExtracted).toBe(true);
+      expect(extracted.instructionText).toBe("# Calculator Module\nImplement basic add and subtract functions.");
+      expect(extracted.rationale).toBe("Basic math functions implementation");
+    });
+
+    it("handles explicit action: stop preserving both stop_reason and rationale", async () => {
+      const { ResponseReader } = await import("../src/providers/reasoning/chatgpt-web/response-reader.js");
+
+      const rawStop = JSON.stringify({
+        action: "stop",
+        stop_reason: "Model refuses to write exploit code",
+        rationale: "Safety policy restriction on offensive security tools",
+      });
+
+      const extracted = ResponseReader.extractInstruction(rawStop);
+      expect(extracted.action).toBe("stop");
+      expect(extracted.instructionText).toBe("");
+      expect(extracted.stopReason).toBe("Model refuses to write exploit code");
+      expect(extracted.rationale).toBe("Safety policy restriction on offensive security tools");
+    });
+
+    it("terminates in bounded time when response cannot be found in DOM", async () => {
+      const { ResponseReader } = await import("../src/providers/reasoning/chatgpt-web/response-reader.js");
+      const { BrowserStateMachine } = await import("../src/providers/reasoning/chatgpt-web/state-machine.js");
+
+      const baseline = { assistantCount: 0, lastAssistantText: "", userCount: 1, timestamp: Date.now() };
+
+      const fakePageMissingResponse = {
+        locator: () => ({ count: async () => 0 }),
+        evaluate: async (fn: any) => {
+          const fnStr = typeof fn === "function" ? fn.toString() : "";
+          if (fnStr.includes("stop-button") || fnStr.includes("Stop")) {
+            return false;
+          }
+          return {
+            texts: [],
+            status: "dom_extraction_failed",
+            diagnostic: "Conversation contains 1 user turn indicator(s), but assistant containers could not be matched by any selector",
+          };
+        },
+        waitForTimeout: async () => {},
+      } as any;
+
+      const sm = new BrowserStateMachine();
+      await expect(
+        ResponseReader.waitForCompletion(fakePageMissingResponse, baseline, {
+          stateMachine: sm,
+          timeoutMs: 15_000,
+          stabilizationIntervalMs: 10,
+        })
+      ).rejects.toThrow(/DOM extraction failure/i);
+
+      expect(sm.getState()).toBe("FAILED_RECOVERABLE");
+    });
+
+    it("prevents duplicate prompt submission when generation is already in progress", async () => {
+      const { PromptSender } = await import("../src/providers/reasoning/chatgpt-web/prompt-sender.js");
+
+      let waitFinished = false;
+      const fakePageGenerating = {
+        locator: (sel: string) => {
+          if (sel.includes("stop-button")) {
+            return {
+              count: async () => (waitFinished ? 0 : 1),
+              first: () => ({ isVisible: async () => !waitFinished }),
+            };
+          }
+          if (sel === "#prompt-textarea" || sel.includes("textarea")) {
+            return {
+              count: async () => 1,
+              first: () => ({
+                isVisible: async () => true,
+                click: async () => {},
+                fill: async () => {},
+                type: async () => {},
+                evaluate: async () => "Staged prompt text",
+              }),
+            };
+          }
+          if (sel.includes("send-button")) {
+            return {
+              count: async () => 1,
+              first: () => ({
+                isVisible: async () => true,
+                isEnabled: async () => true,
+                click: async () => {},
+              }),
+            };
+          }
+          return { count: async () => 0 };
+        },
+        evaluate: async () => false,
+        keyboard: { press: async () => {} },
+        waitForTimeout: async () => {
+          waitFinished = true;
+        },
+      } as any;
+
+      const baseline = { assistantCount: 0, lastAssistantText: "", userCount: 1, timestamp: Date.now() };
+      await PromptSender.submitPrompt(fakePageGenerating, "Implement calculator", baseline, { timeoutMs: 5000 });
+      expect(waitFinished).toBe(true);
+    });
+  });
 });
 
 

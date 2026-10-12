@@ -51,6 +51,15 @@ export const SELECTORS = {
 
   // User messages
   userMessage: [
+    "div:has(> [data-conversation-role='user'])",
+    "div:has(> h4:has-text('You said:'))",
+    "div:has(> h5:has-text('You said:'))",
+    "div:has(> h6:has-text('You said:'))",
+    "[data-markdown-text-style='user-message']",
+    "[data-chatgpt-search-unit-key*='user']",
+    "div.group\\/user-message",
+    "div[class*='user-message']",
+    "div[class*='bg-user-message']",
     "[data-message-author-role='user']",
     "article:has([data-message-author-role='user'])",
     "div[data-testid*='conversation-turn']:has([data-message-author-role='user'])",
@@ -61,6 +70,17 @@ export const SELECTORS = {
 
   // Assistant messages
   assistantMessage: [
+    "[data-markdown-text-style='assistant-message']",
+    "div:has(> [data-conversation-role='assistant'])",
+    "div:has(> h4:has-text('ChatGPT said:'))",
+    "div:has(> h5:has-text('ChatGPT said:'))",
+    "div:has(> h6:has-text('ChatGPT said:'))",
+    "div[data-dil-message-id]",
+    "div[data-testid='chatgpt-writing-block']",
+    "div.writing-block-editor",
+    "div.group\\/writing-block-surface",
+    "div.ProseMirror[contenteditable='true']:not([data-composer-markdown])",
+    "div[class*='block-']:not(:has([class*='user-message'])):not(:has(h4:has-text('You said:')))",
     "[data-message-author-role='assistant']",
     "article:has([data-message-author-role='assistant'])",
     "div[data-testid*='conversation-turn']:has([data-message-author-role='assistant'])",
