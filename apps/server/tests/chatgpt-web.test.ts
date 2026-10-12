@@ -291,3 +291,189 @@ describe("PromptSender and ResponseReader Regression Suite", () => {
     ]);
   });
 });
+
+describe("Section 10 Regression Suite: Reasoning Prompt Construction & Instruction Generation", () => {
+  it("ResponseReader detects task descriptors and isTaskDescriptor rejects them as instructions", async () => {
+    const { isTaskDescriptor } = await import("../src/orchestrator/instructor.js");
+
+    const taskPlanningJson = JSON.stringify({
+      title: "Start project core architecture",
+      acceptance_criteria: [
+        "A runnable project scaffold is created",
+        "Deterministic simulator inputs and outputs are provided"
+      ],
+      files_to_read: []
+    });
+
+    expect(isTaskDescriptor(taskPlanningJson)).toBe(true);
+
+    const validInstructionMarkdown = `
+# Engineering Implementation Brief
+## 1. Executive Objective
+Implement the authentication service with JWT middleware.
+## 2. Working Instructions for Antigravity Agent
+- Implement token signing with HMAC SHA256.
+- Run tests and verify exit code 0.
+`;
+    expect(isTaskDescriptor(validInstructionMarkdown)).toBe(false);
+  });
+
+  it("planTask for live ChatGPTWebProvider bypasses JSON-only planning to preserve conversation fidelity", async () => {
+    const { planTask } = await import("../src/orchestrator/planner.js");
+    const { ChatGPTWebProvider } = await import("../src/providers/reasoning/chatgpt-web/chatgpt-web-provider.js");
+
+    const liveProvider = new ChatGPTWebProvider({ headless: true });
+    expect(liveProvider.id).toBe("chatgpt-web");
+    expect(liveProvider.displayName).toBe("ChatGPT Web (Browser)");
+
+    const plan = await planTask(liveProvider, {
+      projectId: "proj-browser-test",
+      runId: "run-browser-test",
+      taskText: "Implement Rate Limiter with 5 token capacity",
+      workspacePath: "C:\\mock\\ws",
+      profile: {
+        fileCount: 0,
+        isEmpty: true,
+        languages: [],
+        checks: [],
+        testFrameworks: [],
+        packageManagers: [],
+        manifests: [],
+        notes: [],
+      },
+    });
+
+    expect(plan.title).toBe("Implement Rate Limiter with 5 token capacity");
+    expect(plan.source).toBe("fallback");
+    expect(plan.warning).toContain("Task plan derived internally for browser-based reasoning session");
+  });
+
+  it("composeInstruction uses operation code_generation for iteration 1 and repair_diagnosis for repair iterations", async () => {
+    const { composeInstruction } = await import("../src/orchestrator/instructor.js");
+    const { ScriptedProvider } = await import("./helpers.js");
+
+    const provider = new ScriptedProvider();
+    const recordedOperations: string[] = [];
+
+    provider.enqueue("code_generation", (req) => {
+      recordedOperations.push(req.operation);
+      return JSON.stringify({
+        action: "instruct",
+        instruction: "### Implementation Brief\nImplement initial scaffold.",
+        rationale: "Initial implementation",
+      });
+    });
+
+    provider.enqueue("repair_diagnosis", (req) => {
+      recordedOperations.push(req.operation);
+      return JSON.stringify({
+        action: "instruct",
+        instruction: "### Corrective Brief\nFix failing assertion in test.",
+        rationale: "Repair failing test",
+      });
+    });
+
+    // Iteration 1
+    await composeInstruction(provider, {
+      projectId: "proj-op-test",
+      runId: "run-op-test",
+      taskText: "Build user service",
+      criteria: ["Service handles registration"],
+      profile: {
+        fileCount: 1,
+        isEmpty: false,
+        languages: ["typescript"],
+        checks: [],
+        testFrameworks: [],
+        packageManagers: [],
+        manifests: [],
+        notes: [],
+      },
+      files: ["package.json"],
+      iteration: 1,
+      maxIterations: 3,
+      history: [],
+    });
+
+    // Iteration 2 (Repair)
+    await composeInstruction(provider, {
+      projectId: "proj-op-test",
+      runId: "run-op-test",
+      taskText: "Build user service",
+      criteria: ["Service handles registration"],
+      profile: {
+        fileCount: 1,
+        isEmpty: false,
+        languages: ["typescript"],
+        checks: [],
+        testFrameworks: [],
+        packageManagers: [],
+        manifests: [],
+        notes: [],
+      },
+      files: ["package.json"],
+      iteration: 2,
+      maxIterations: 3,
+      history: [{
+        iteration: 1,
+        instruction: "Initial instruction",
+        agentReply: "Ran into failure",
+        agentState: "failed",
+        changedFiles: ["src/user.ts"],
+        diffExcerpt: "+ broken",
+        checks: [{ label: "npm test", status: "failed", output: "AssertionError: expected true to be false" }],
+        blockers: ["Test failed"],
+        reviewer: "Reviewer rejected: tests failed",
+      }],
+    });
+
+    expect(recordedOperations).toEqual(["code_generation", "repair_diagnosis"]);
+  });
+
+  it("rejects task-planning descriptor as instruction and engages substantive synthesis", async () => {
+    const { composeInstruction } = await import("../src/orchestrator/instructor.js");
+    const { ScriptedProvider } = await import("./helpers.js");
+
+    const provider = new ScriptedProvider();
+    // Return intermediate task descriptor instead of substantive markdown instruction
+    provider.enqueue("code_generation", () => {
+      return JSON.stringify({
+        title: "Start project core architecture",
+        acceptance_criteria: [
+          "A runnable project scaffold is created",
+          "Deterministic simulator inputs and outputs are provided"
+        ],
+        files_to_read: []
+      });
+    });
+
+    const result = await composeInstruction(provider, {
+      projectId: "proj-descriptor-reject",
+      runId: "run-descriptor-reject",
+      taskText: "Create Order Processing System",
+      criteria: ["Orders can be created and fulfilled"],
+      profile: {
+        fileCount: 0,
+        isEmpty: true,
+        languages: ["typescript"],
+        checks: [],
+        testFrameworks: [],
+        packageManagers: [],
+        manifests: [],
+        notes: [],
+      },
+      files: [],
+      iteration: 1,
+      maxIterations: 3,
+      history: [],
+    });
+
+    // The intermediate descriptor must be rejected and synthesized into a substantive brief
+    expect(result.source).toBe("fallback");
+    expect(result.warning).toContain("The reasoning model returned an internal task-planning descriptor rather than a substantive engineering instruction");
+    expect(result.instruction).toContain("Create Order Processing System — Implementation Engineering Brief");
+    expect(result.instruction).toContain("## 1. Executive Objective & Scope");
+    expect(result.instruction).toContain("## 2. Working Instructions for Antigravity Agent");
+  });
+});
+

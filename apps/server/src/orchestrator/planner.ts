@@ -48,6 +48,31 @@ export async function planTask(
 ): Promise<TaskPlan> {
   const files = projectFileList(input.workspacePath, 200);
 
+  // For browser-based ChatGPT Web sessions, do not send the preliminary JSON task-planning prompt.
+  // Sending 'You plan one software change. Reply with a single JSON object and nothing else' to ChatGPT Web
+  // pollutes the project conversation with an intermediate task descriptor before the substantive engineering brief is requested.
+  const isLiveBrowserSession =
+    provider.id === "chatgpt-web" &&
+    provider.displayName === "ChatGPT Web (Browser)";
+
+  if (isLiveBrowserSession) {
+    const firstLine = input.taskText.trim().split(/\r?\n/)[0].replace(/^#+\s*/, "");
+    const title = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
+    const criteria = [input.taskText.trim()];
+    if (input.blueprintRequirements && input.blueprintRequirements.length > 0) {
+      for (const req of input.blueprintRequirements.slice(0, 5)) {
+        criteria.push(`Fulfill [${req.id}]: ${req.title}`);
+      }
+    }
+    return {
+      title: title || "Project Implementation",
+      acceptanceCriteria: criteria,
+      filesToRead: files.slice(0, 10),
+      source: "fallback",
+      warning: "Task plan derived internally for browser-based reasoning session; the full engineering brief will be generated directly.",
+    };
+  }
+
   const objectiveNote = input.projectObjective?.trim()
     ? `\nPROJECT SPECIFICATION & INSTRUCTIONS (Universal Guidelines):\n${input.projectObjective.trim()}`
     : "";

@@ -61,25 +61,31 @@ export interface Instruction {
   residualUncertainties?: string[];
 }
 
-const SYSTEM = `You are the Systems Architect and Technical Lead directing an autonomous coding agent (the Antigravity Agent) operating inside a project workspace.
+const SYSTEM = `ROLE:
+You are the Systems Architect, Technical Lead, and reasoning component of Orches directing the native Antigravity development agent operating in the workspace.
 Your responsibility is to synthesize the comprehensive, production-grade Implementation Prompt (Master Engineering Brief) in Markdown that the Antigravity Agent will directly read and execute.
+You must reason about the real engineering problem and produce a substantive, concrete engineering instruction for the current iteration.
 
 CRITICAL DIRECTIVES:
-1. YOUR OUTPUT IS THE DIRECT IMPLEMENTATION PROMPT FOR THE CODING AGENT.
-   DO NOT output meta-instructions telling the agent to "construct a brief", "write a plan", "draft a proposal", or "implement according to guidelines".
-   YOU MUST WRITE THE ACTUAL SPECIFICATION DIRECTLY.
-2. Supply the actual functional requirements, architectural boundaries, data models, workflows, API contracts, constraints, and acceptance criteria in your Markdown output.
-3. PRESERVE THE USER'S SPECIFICATION AS YOUR SOURCE OF TRUTH:
+1. PRODUCE A SUBSTANTIVE ENGINEERING INSTRUCTION:
+   Do not merely produce a task title, acceptance-criteria JSON, file list, or high-level plan.
+   Do not output meta-instructions telling the agent to "construct a brief", "write a plan", "draft a proposal", or "implement according to guidelines".
+   You must reason about the actual project and current iteration, then return a complete, substantive, directly actionable engineering instruction.
+2. PRESERVE THE USER'S SPECIFICATION AS YOUR SOURCE OF TRUTH:
    - Preserve all explicit functional requirements and non-functional requirements.
-   - Preserve specified technology stacks, versions, database engines, and constraints.
+   - Preserve specified technology stacks, versions, database engines, and architectural boundaries.
    - Clearly distinguish explicit user requirements from derived implementation assumptions.
    - If requirements appear contradictory, surface the ambiguity under "Unresolved Questions" rather than silently inventing an arbitrary choice.
-   - DO NOT invent ungrounded external dependencies, specialized hardware, or extreme numerical guarantees (e.g. 99.999% uptime) that are not established by the source.
-4. DO NOT write the source code yourself. DO NOT output full copy-paste source files or micro-manage single file contents. The agent is a capable engineer that will independently inspect existing code conventions, edit files, and run tests.
-5. When repairing a rejected iteration, conduct a root-cause analysis of the orchestrator's verification failure, quote the exact error output, and provide targeted corrective guidance focused on the unmet requirements.
+   - Do not invent project requirements or ungrounded external dependencies not established by the source.
+3. SPECIFY IMPLEMENTATION, INTEGRATION, AND VERIFICATION:
+   - Specify relevant implementation, integration, and verification expectations.
+   - DO NOT write the source code yourself. DO NOT output full copy-paste source files or micro-manage single file contents. The agent is a capable engineer that will independently inspect existing code conventions, edit files, and run tests.
+   - When repairing a rejected iteration, conduct a root-cause analysis of the orchestrator's verification failure, quote the exact error output, and provide targeted corrective guidance.
 
-Reply with one JSON object only:
-{"action": "instruct" or "stop", "instruction": "the complete substantive markdown implementation prompt for Antigravity", "rationale": "one sentence summary of approach", "stop_reason": "only if action is stop: the genuine blocker"}`;
+OUTPUT CONTRACT:
+Reply with one JSON object:
+{"action": "instruct" or "stop", "instruction": "the complete substantive markdown implementation prompt for Antigravity", "rationale": "one sentence summary of approach", "stop_reason": "only if action is stop: the genuine blocker"}
+Do not return the internal task-planning JSON schema (e.g. title, acceptance_criteria, files_to_read) as the engineering instruction.`;
 
 export const MODE_DIRECTIVES: Record<AutonomyMode, string> = {
   creative_within_constraints: `MODE: Creative within constraints (Default).
@@ -117,6 +123,42 @@ export function isMetaInstruction(text: string): boolean {
 }
 
 /**
+ * Detects whether the text is an internal task-planning descriptor (such as JSON with
+ * title, acceptance_criteria, files_to_read) rather than a substantive engineering instruction.
+ */
+export function isTaskDescriptor(text: string): boolean {
+  if (!text || typeof text !== "string") return true;
+  const trimmed = text.trim();
+
+  // If text starts with '{' or '[' or contains task descriptor fields
+  if (trimmed.startsWith("{") || trimmed.includes('"acceptance_criteria"') || trimmed.includes('"files_to_read"')) {
+    try {
+      const parsed = extractJsonFromText(trimmed) as Record<string, unknown> | null;
+      if (parsed && typeof parsed === "object") {
+        const hasDescriptorFields =
+          "acceptance_criteria" in parsed ||
+          "files_to_read" in parsed ||
+          ("title" in parsed && !("instruction" in parsed) && !("prompt" in parsed));
+        if (hasDescriptorFields && !parsed.instruction && !parsed.prompt) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  // Check for plain text or markdown repeating task descriptor patterns without actual body
+  if (
+    /^(title:\s*|task:\s*).+acceptance criteria:/is.test(trimmed) &&
+    trimmed.length < 300 &&
+    !trimmed.includes("##")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Checks whether an instruction is hollow or lacks adequate specification.
  */
 export function isUnderSpecified(text: string, taskText: string): boolean {
@@ -124,6 +166,7 @@ export function isUnderSpecified(text: string, taskText: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 20) return true;
   if (trimmed.toLowerCase() === taskText.trim().toLowerCase()) return true;
+  if (isTaskDescriptor(trimmed)) return true;
   return false;
 }
 
@@ -533,7 +576,19 @@ ${ctx.blueprintDocuments[0].extractedText.slice(0, 2500)}`
       histArr.length ? `PREVIOUS ITERATIONS:\n${histArr.join("\n\n")}` : "This is the first iteration.",
       ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
       "",
-      `Construct the comprehensive Markdown Implementation Prompt for the Antigravity Agent.
+      `INSTRUCTIONS:
+Determine what engineering work is actually required now.
+Preserve all applicable user requirements, attached-source constraints, and existing architecture.
+Distinguish verified facts from assumptions and unresolved issues.
+Do not invent project requirements or silently override explicit instructions.
+
+Produce a complete, concrete, directly actionable engineering instruction that the native Antigravity agent can execute.
+Specify relevant implementation, integration, and verification expectations. Avoid unnecessary redesign and unrelated work.
+
+Do not merely produce a task title, acceptance-criteria JSON, file list, or high-level plan.
+Do not ask another AI to create a plan or another prompt.
+Do not claim that work has been completed merely because it has been described.
+
 It must communicate:
 1. Executive Objective & Expected Outcome: Restate the full objective, scope boundaries, and target behavior.
 2. Architecture & Design Direction: Outline design patterns, interfaces, integration points, and algorithmic approach.
@@ -547,7 +602,10 @@ CRITICAL RULES:
 - DO NOT emit a meta-instruction telling the agent to "construct a brief" or "write a plan". Write the brief directly!
 - PRESERVE ALL EXPLICIT REQUIREMENTS AND CONSTRAINTS. Do not drop or dilute them.
 - DO NOT output full copy-paste source files. The agent will independently inspect the workspace and write the code.
-- Respond with JSON:
+- DO NOT return the internal task-planning JSON schema (e.g. {"title": "...", "acceptance_criteria": [...], "files_to_read": [...]}).
+
+OUTPUT CONTRACT:
+Respond with JSON:
 {"action": "instruct" or "stop", "instruction": "the complete substantive markdown implementation prompt for Antigravity", "rationale": "one sentence", "stop_reason": "only if action is stop: the genuine blocker"}
 Use "stop" only when the objective cannot be achieved (e.g. it is impossible or requires external human credentials).`,
     ]
@@ -587,9 +645,11 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
     maxOutputTokens = Math.max(500, Math.min(maxOutputTokens, remainingForOutput));
   }
 
+  const operation = ctx.iteration === 1 ? "code_generation" : "repair_diagnosis";
+
   const response = await provider.generate(
     {
-      operation: "repair_diagnosis",
+      operation,
       systemInstruction: SYSTEM,
       messages: [{ role: "user", content: prompt }],
       json: true,
@@ -618,6 +678,11 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
     }
   }
 
+  // Reject internal task descriptors (e.g. JSON with title/acceptance_criteria but no substantive brief)
+  if (rawInstruction && isTaskDescriptor(rawInstruction)) {
+    rawInstruction = "";
+  }
+
   if (action === "stop") {
     return {
       action: "stop",
@@ -633,14 +698,17 @@ BLOCKERS: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (not rejected)"}`
   let source: "model" | "fallback" = "model";
   let warning: string | undefined;
 
-  // Quality Gate: Check if the model emitted a meta-instruction or under-specified brief
-  if (!rawInstruction || rawInstruction.length < 10 || isMetaInstruction(rawInstruction) || isUnderSpecified(rawInstruction, ctx.taskText)) {
+  // Quality Gate: Check if the model emitted a meta-instruction, task descriptor, or under-specified brief
+  const isDescriptor = (response.text && isTaskDescriptor(response.text)) || (rawInstruction && isTaskDescriptor(rawInstruction));
+  if (!rawInstruction || rawInstruction.length < 10 || isDescriptor || isMetaInstruction(rawInstruction) || isUnderSpecified(rawInstruction, ctx.taskText)) {
     source = "fallback";
-    warning = rawInstruction && isMetaInstruction(rawInstruction)
-      ? `The reasoning model returned a meta-instruction ("${rawInstruction.slice(0, 90)}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
-      : rawInstruction && isUnderSpecified(rawInstruction, ctx.taskText)
-        ? "The reasoning model returned an under-specified brief; the orchestrator synthesized a complete, structured engineering brief."
-        : "The reasoning model's instruction was not usable JSON; the orchestrator synthesized a comprehensive engineering brief directly.";
+    warning = isDescriptor
+      ? "The reasoning model returned an internal task-planning descriptor rather than a substantive engineering instruction; the orchestrator synthesized a comprehensive engineering brief directly."
+      : rawInstruction && isMetaInstruction(rawInstruction)
+        ? `The reasoning model returned a meta-instruction ("${rawInstruction.slice(0, 90)}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
+        : rawInstruction && isUnderSpecified(rawInstruction, ctx.taskText)
+          ? "The reasoning model returned an under-specified brief; the orchestrator synthesized a complete, structured engineering brief."
+          : "The reasoning model's instruction was not usable JSON; the orchestrator synthesized a comprehensive engineering brief directly.";
 
     candidateInstruction = ctx.iteration > 1
       ? synthesizeRepairBrief(ctx, inventory)

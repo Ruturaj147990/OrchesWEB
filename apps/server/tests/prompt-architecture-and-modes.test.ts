@@ -416,7 +416,7 @@ describe("Universal Project Specification & Instructions Ingestion", () => {
         files_to_read: ["catalog.ts"],
       });
     });
-    provider.enqueue("repair_diagnosis", (req) => {
+    provider.enqueue("code_generation", (req) => {
       instructionPrompt = req.messages[0].content;
       return JSON.stringify({
         action: "instruct",

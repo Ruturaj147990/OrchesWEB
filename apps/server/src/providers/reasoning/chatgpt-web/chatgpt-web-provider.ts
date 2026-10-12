@@ -158,7 +158,17 @@ export class ChatGPTWebProvider implements ReasoningProvider {
 
     if (request.json) {
       parsed = extractJsonFromText(finalText);
-      if (!parsed) {
+      // Check if the parsed object is merely an internal task descriptor rather than an instruction
+      const isDescriptor = parsed && typeof parsed === "object" && (
+        "acceptance_criteria" in (parsed as Record<string, unknown>) ||
+        "files_to_read" in (parsed as Record<string, unknown>) ||
+        ("title" in (parsed as Record<string, unknown>) && !("instruction" in (parsed as Record<string, unknown>)))
+      );
+
+      if (isDescriptor) {
+        // Do not wrap an internal task descriptor as a valid Antigravity instruction.
+        // Leave parsed as-is so downstream quality gates detect and reject it appropriately.
+      } else if (!parsed) {
         // If the model produced pure markdown instruction instead of JSON, wrap it cleanly
         parsed = {
           action: "instruct",

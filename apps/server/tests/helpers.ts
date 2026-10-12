@@ -70,7 +70,11 @@ export class ScriptedProvider implements ReasoningProvider {
   public async generate(request: ReasoningRequest, signal?: AbortSignal): Promise<ReasoningResult> {
     if (signal?.aborted) throw new Error("Request cancelled.");
     this.requests.push(request);
-    const queued = this.queues[request.operation]?.shift();
+    let queued = this.queues[request.operation]?.shift();
+    if (!queued && (request.operation === "code_generation" || request.operation === "repair_diagnosis")) {
+      const altOp = request.operation === "code_generation" ? "repair_diagnosis" : "code_generation";
+      queued = this.queues[altOp]?.shift();
+    }
     const responder = queued ?? this.defaults[request.operation] ?? defaultResponder(request.operation);
     const text = await responder(request, signal);
     let parsed: unknown;
