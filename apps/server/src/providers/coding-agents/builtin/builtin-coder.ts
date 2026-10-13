@@ -89,7 +89,7 @@ export function buildCoderPrompt(input: AgentExecutionInput): string {
     `AUTOMATED CHECKS THE ORCHESTRATOR WILL RUN AFTERWARDS: ${checks || "none currently (only syntax validation of changed files)"}.`,
     allFiles.length ? `FILES IN PROJECT:\n${allFiles.slice(0, 300).join("\n")}${allFiles.length > 300 ? "\n…" : ""}` : "",
     contents.length ? `CURRENT CONTENT OF RELEVANT FILES:\n${contents.join("\n\n")}` : "",
-    input.previousFailure ? `YOUR PREVIOUS ATTEMPT WAS REJECTED. Its files are still in the project (current content shown above). Fix exactly these problems:\n${input.previousFailure}` : "",
+    input.previousFailure ? `YOUR PREVIOUS ATTEMPT REQUIRED REVISION. Its files are still in the project (current content shown above). Fix exactly these problems:\n${input.previousFailure}` : "",
     notes.length ? `TOOLCHAIN NOTES:\n${notes.join("\n")}` : "",
     input.guidance?.length ? `GUIDANCE FROM THE OPERATOR:\n${input.guidance.map((g) => `- ${g}`).join("\n")}` : "",
     `RESPONSE FORMAT (follow exactly):

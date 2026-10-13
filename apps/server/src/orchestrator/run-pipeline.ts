@@ -16,7 +16,7 @@ import { runChecks, validateChangedFiles, CheckResult } from "../verification/ru
 import { planTask } from "./planner.js";
 import { reviewAttempt, CriticOutcome } from "./critic.js";
 import { evaluateAttempt, GateDecision } from "./acceptance-gate.js";
-import { composeInstruction, IterationEvidence } from "./instructor.js";
+import { composeInstruction, synthesizeSubstantiveBrief, synthesizeRepairBrief, IterationEvidence } from "./instructor.js";
 import { validateInstructionSubstance, isThoughtOrStatusFragment, isTaskDescriptor } from "../prompts/instruction-validator.js";
 import { projectFileList } from "../workspace/project-inspector.js";
 import { missingRequestedFiles } from "../workspace/requested-files.js";
@@ -294,7 +294,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
 
         // Closed loop: the reasoning provider decides what the coding agent does in this iteration.
         phase("instructing", attempt);
-        const instr = await composeInstruction(provider, {
+        const instructionCtx = {
           projectId: project.id,
           runId: run.id,
           taskText: ctx.taskText,
@@ -314,7 +314,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           guidance,
           signal,
           memoryContextSection: memoryContext.promptSection,
-        });
+        };
+        const instr = await composeInstruction(provider, instructionCtx);
         ensureNotCancelled();
         if (instr.warning) {
           warnings.push(instr.warning);
@@ -340,32 +341,32 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         if (instr.action === "stop") {
           db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, instruction_text = ? WHERE id = ?").run(new Date().toISOString(), `(stopped) ${instr.rationale}`, attemptId);
           events.record(project.id, "brain.instruction", { attempt, action: "stop", rationale: instr.rationale, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
+          // GPT-Web made its own decision to refuse/stop the task. Report it accurately as model refusal.
           const rb = rollbackActive("brain-stopped");
           activeSnapshot = null;
-          finish("failed", "rejected", `${provider.displayName} stopped the run: ${instr.rationale} ${describeRollback(rb)}`, { rollback: rb });
+          finish("stopped", "cancelled", `${provider.displayName} declined/stopped the task: ${instr.rationale} ${describeRollback(rb)}`, { rollback: rb });
           return;
         }
         instructionText = instr.instruction?.trim();
 
-        // Final dispatch boundary validation: reject hollow fragments, thought headers, or empty instructions
+        // Final dispatch boundary resilience: Never reject a user task in Orches.
+        // If the instruction is insufficient or an interim fragment, synthesize a substantive brief.
         if (
           !instructionText ||
           instructionText.length < 30 ||
           isThoughtOrStatusFragment(instructionText) ||
           isTaskDescriptor(instructionText)
         ) {
-          const rejectReason = isThoughtOrStatusFragment(instructionText || "")
-            ? `Final dispatch gate rejected interim thought fragment: "${instructionText?.slice(0, 40)}"`
+          const synthesisReason = isThoughtOrStatusFragment(instructionText || "")
+            ? `Dispatched synthesized brief after model returned interim thought fragment: "${instructionText?.slice(0, 40)}"`
             : isTaskDescriptor(instructionText || "")
-              ? "Final dispatch gate rejected internal task descriptor"
-              : `Final dispatch gate rejected empty or insufficient instruction (${instructionText?.length || 0} chars)`;
-          log(`[run-pipeline] ${rejectReason}`, "warn");
-          db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, instruction_text = ? WHERE id = ?").run(new Date().toISOString(), `(dispatch-rejected) ${rejectReason}`, attemptId);
-          events.record(project.id, "brain.instruction", { attempt, action: "failed", rationale: rejectReason, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
-          const rb = rollbackActive("invalid-instruction");
-          activeSnapshot = null;
-          finish("failed", "rejected", rejectReason, { rollback: rb });
-          return;
+              ? "Dispatched synthesized brief after model returned internal task descriptor"
+              : `Dispatched synthesized brief after model returned empty or insufficient instruction (${instructionText?.length || 0} chars)`;
+          log(`[run-pipeline] ${synthesisReason}; synthesizing substantive brief to ensure task proceeds.`, "info");
+          instructionText = attempt > 1
+            ? synthesizeRepairBrief(instructionCtx, inventory)
+            : synthesizeSubstantiveBrief(instructionCtx, inventory, synthesisReason);
+          warnings.push(synthesisReason);
         }
 
         memoryService.recordAgentDispatch(conversation.id, instructionText, { attempt, agent: agent.displayName, runId: run.id });
@@ -475,10 +476,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
             attemptChecks,
             baselineChecks: attempt === 1 ? baselineChecks : [],
             critic,
-            gate: { accepted: false, outcome: "rejected", blockers: [diag], warnings: [critic.error ?? ""], evidence: [] },
+            gate: { accepted: false, outcome: "unverified", blockers: [diag], warnings: [critic.error ?? ""], evidence: [] },
             root,
           });
-          events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: false, outcome: "rejected", blockers: [diag], warnings: [critic.error], files: diff.changes }, run.id, taskId);
+          events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: false, outcome: "unverified", blockers: [diag], warnings: [critic.error], files: diff.changes }, run.id, taskId);
           activeSnapshot = null; // Preserve workspace changes on disk so work is not lost
           finish(
             "blocked",
@@ -626,29 +627,9 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       if (attempt < ctx.maxAttempts) log("Preserving files for the next iteration to address feedback.");
     }
 
-    // When all attempts have concluded:
-    // Determine whether failure was genuine corruption (static syntax error / unparseable files)
-    // or a regression in pre-existing passing tests caused by the built-in coder.
-    const hasPreExistingRegression = lastAttemptChecks.some((c) => {
-      const b = baselineChecks.find((base) => base.checkId === c.checkId);
-      return b && b.status === "passed" && c.status !== "passed";
-    });
-    const hasStaticCorruption = lastStaticResults.some((s) => s.status !== "passed");
-    const isGenuineCorruptionOrRegression = !external && (hasPreExistingRegression || hasStaticCorruption);
-
-    if (isGenuineCorruptionOrRegression) {
-      const rb = rollbackActive("rejected");
-      activeSnapshot = null;
-      if (rb && rb.failed.length > 0) {
-        finish("failed", "error", `All attempts were rejected and rollback was INCOMPLETE for: ${rb.failed.map((f) => `${f.path} (${f.error})`).join(", ")}. Inspect these files manually.`, { rollback: rb });
-        return;
-      }
-      finish("failed", "rejected", `All ${ctx.maxAttempts} attempt(s) were rejected. ${describeRollback(rb)}`, { rollback: rb });
-      return;
-    }
-
-    // Otherwise (critic feedback, unmet acceptance criteria, incomplete evidence, or external agent work):
-    // Orches is the coordinator and middleman, not a judge that discards working code.
+    // Preservation of work & continuous feedback:
+    // Critic findings, failed tests, missing evidence, and shortcomings must not trigger automatic task rejection
+    // or destructive rollback. Preserve workspace changes and task history, explaining unresolved issues.
     const finalDiff = activeSnapshot ? store.diff(activeSnapshot) : null;
     if (finalDiff && finalDiff.changes.length > 0) {
       activeSnapshot = null;
@@ -663,9 +644,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       return;
     }
 
-    const rb = rollbackActive("no-changes");
     activeSnapshot = null;
-    finish("failed", "rejected", `Run concluded after ${ctx.maxAttempts} iteration(s) with no workspace changes.`, { rollback: rb });
+    finish("completed_with_warnings", "unverified", `Run concluded after ${ctx.maxAttempts} iteration(s) with no workspace changes.`);
   } catch (err) {
     if (err instanceof RunCancelled || signal.aborted) {
       const rb = rollbackActive("cancelled");

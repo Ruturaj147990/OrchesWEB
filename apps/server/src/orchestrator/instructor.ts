@@ -94,7 +94,11 @@ CRITICAL DIRECTIVES:
    - Clearly distinguish explicit user requirements from derived implementation assumptions.
    - If requirements appear contradictory, surface the ambiguity under "Unresolved Questions" rather than silently inventing an arbitrary choice.
    - Do not invent project requirements or ungrounded external dependencies not established by the source.
-3. SPECIFY IMPLEMENTATION, INTEGRATION, AND VERIFICATION:
+3. INDEPENDENT ASSESSMENT & ADVISORY CONCERNS:
+   - You may receive advisory concerns identified by Orches analysis (safety concerns, technical limitations, ambiguity, missing information, feasibility issues, conflicting requirements).
+   - These findings are strictly advisory to assist your evaluation. You independently evaluate the complete, unmodified user request and decide how to respond.
+   - If you determine that the request cannot or should not proceed, return ORCHES_STATUS: STOP with your honest reason.
+4. SPECIFY IMPLEMENTATION, INTEGRATION, AND VERIFICATION:
    - Specify relevant implementation, integration, and verification expectations.
    - DO NOT write the source code yourself. DO NOT output full copy-paste source files or micro-manage single file contents. The agent is a capable engineer that will independently inspect existing code conventions, edit files, and run tests.
    - When addressing feedback from a previous iteration, conduct a root-cause analysis of the shortcomings, test outputs, and reviewer requests provided in the iteration history, and provide targeted corrective guidance.
@@ -113,10 +117,10 @@ ORCHES_STATUS: INSTRUCT
 
 [/ORCHES_ANTIGRAVITY_INSTRUCTION]
 
-For an operation that must stop:
+If the operation cannot proceed or you decline/refuse the task:
 ORCHES_STATUS: STOP
 
-Reason: <A concise and truthful explanation of why the operation cannot proceed and, where appropriate, a safe alternative>
+Reason: <A concise and truthful explanation of why the operation cannot proceed or your reason for declining>
 
 CRITICAL PROTOCOL RULES:
 - The substantive engineering brief must be Markdown and natural language.
@@ -421,7 +425,7 @@ export function synthesizeRepairBrief(ctx: InstructionContext, inventory: Requir
       }
     }
     if (lastFailure.blockers.length > 0) {
-      sections.push("### Rejection Reasons:");
+      sections.push("### Unresolved Issues & Feedback to Address:");
       for (const b of lastFailure.blockers) {
         sections.push(`- ${b}`);
       }
@@ -502,17 +506,36 @@ Focus Areas: ${ctx.profileDefinition.focusAreas.join(", ")}`
 ${ctx.projectObjective.trim()}`
     : "";
 
-  const inScopeMandatory = inv.requirements
-    .filter((r) => r.classification === "mandatory_requirement" && r.scopeStatus !== "safety_conflict" && r.scopeStatus !== "out_of_scope")
-    .slice(0, 20);
-  const excludedItems = inv.requirements.filter((r) => r.scopeStatus === "safety_conflict" || r.scopeStatus === "out_of_scope");
+  // All mandatory requirements are preserved without silent dropping
+  const allMandatory = inv.requirements
+    .filter((r) => r.classification === "mandatory_requirement")
+    .slice(0, 25);
+  const flaggedConcerns = inv.requirements.filter((r) => r.scopeStatus === "safety_conflict" || r.scopeStatus === "out_of_scope");
 
   const inventorySection = `STRUCTURED REQUIREMENT INVENTORY (Extracted from source):
 Mandatory Requirements:
-${inScopeMandatory.map((r) => `- [${r.id}] ${r.title}`).join("\n") || "- None explicit"}
+${allMandatory.map((r) => `- [${r.id}] ${r.title}`).join("\n") || "- None explicit"}
 Explicit Constraints:
 ${inv.requirements.filter((r) => r.classification === "explicit_constraint").slice(0, 10).map((r) => `- [${r.id}] STRICT: ${r.description}`).join("\n") || "- None explicit"}
-${excludedItems.length > 0 ? `Excluded / Safety Conflict Scope Boundaries (DO NOT IMPLEMENT):\n${excludedItems.map((r) => `- [${r.id}] (EXCLUDED): ${r.title} — ${r.scopeConflictReason || "Out of scope"}`).join("\n")}\n` : ""}${inv.summary.contradictions > 0 ? `Unresolved Contradictions (Surface, do not invent resolution):\n${inv.requirements.filter((r) => r.classification === "unresolved_contradiction").map((r) => `- [${r.id}] ${r.description}`).join("\n")}` : ""}`;
+${inv.summary.contradictions > 0 ? `Unresolved Contradictions (Surface, do not invent resolution):\n${inv.requirements.filter((r) => r.classification === "unresolved_contradiction").map((r) => `- [${r.id}] ${r.description}`).join("\n")}` : ""}`;
+
+  // Advisory analysis for GPT-Web evaluation: Never blocks or rejects in Orches.
+  const advisoryFindings: string[] = [];
+  for (const item of flaggedConcerns) {
+    advisoryFindings.push(`- Advisory Flag on [${item.id}] ("${item.title}"): ${item.scopeConflictReason || "Out of scope / safety boundary"}`);
+  }
+  if (inv.summary.contradictions > 0) {
+    for (const c of inv.requirements.filter((r) => r.classification === "unresolved_contradiction")) {
+      advisoryFindings.push(`- Potential Specification Contradiction on [${c.id}]: ${c.description}`);
+    }
+  }
+
+  const advisorySection = advisoryFindings.length > 0
+    ? `POTENTIAL CONCERNS FOR GPT-WEB TO EVALUATE:
+(The following concerns were identified during preliminary analysis as advisory findings. Orches never makes the final decision to reject a task. GPT-Web independently evaluates the original request and these concerns, and determines how to proceed or refuse.)
+${advisoryFindings.join("\n")}`
+    : `POTENTIAL CONCERNS FOR GPT-WEB TO EVALUATE:
+None identified by preliminary analysis. (GPT-Web independently evaluates the task and decides how to proceed.)`;
 
   const blueprintSection = ctx.blueprintRequirements && ctx.blueprintRequirements.length > 0
     ? `MASTER BLUEPRINT REQUIREMENTS:
@@ -546,6 +569,8 @@ ${ctx.blueprintDocuments[0].extractedText.slice(0, 2500)}`
     objectiveSection,
     "",
     inventorySection,
+    "",
+    advisorySection,
     "",
     blueprintSection,
     "",

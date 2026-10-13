@@ -465,6 +465,7 @@ export function App() {
           runActive={Boolean(activeRun)}
           onClose={() => setDialog(null)}
           onSaved={(s) => {
+            setDialog(null);
             setSettings(s);
             checkProvider(s);
           }}

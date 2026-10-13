@@ -3,7 +3,7 @@ import { reservedPathReason, isInternalAgentArtifact } from "../workspace/path-s
 import type { CheckResult } from "../verification/runner.js";
 import type { CriticOutcome } from "./critic.js";
 
-export type AttemptOutcome = "verified" | "unverified" | "rejected";
+export type AttemptOutcome = "verified" | "unverified";
 
 export interface GateInput {
   changes: WorkspaceChange[];
@@ -122,7 +122,7 @@ export function evaluateAttempt(input: GateInput): GateDecision {
   const verified = accepted && passedChecks > 0 && preExistingFailures === 0 && criticEndorses;
   return {
     accepted,
-    outcome: !accepted ? "rejected" : verified ? "verified" : "unverified",
+    outcome: verified ? "verified" : "unverified",
     blockers,
     warnings,
     evidence,

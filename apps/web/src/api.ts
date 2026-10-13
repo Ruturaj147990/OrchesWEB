@@ -334,7 +334,7 @@ export function describeRun(run: Pick<Run, "status" | "outcome">): { label: stri
     case "unverified":
       return { label: "Done — not fully verified", tone: "warning" };
     case "rejected":
-      return { label: "Rejected — rolled back", tone: "danger" };
+      return { label: "Needs Revision (Preserved)", tone: "warning" };
     case "cancelled":
       return { label: "Stopped", tone: "neutral" };
     case "error":

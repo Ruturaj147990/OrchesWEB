@@ -119,7 +119,7 @@ export function validatePromptFidelity(
         classification: r.classification,
         isMapped: false,
       })),
-      summary: "Candidate prompt rejected: internal task-planning descriptor cannot be used as an engineering instruction.",
+      summary: "Candidate prompt unverified: internal task-planning descriptor cannot be used as an engineering instruction.",
     };
   }
 
@@ -142,7 +142,7 @@ export function validatePromptFidelity(
         classification: r.classification,
         isMapped: false,
       })),
-      summary: `Candidate prompt rejected: interim thought fragment or stub ("${prompt.trim().slice(0, 40)}") cannot be used as an engineering instruction.`,
+      summary: `Candidate prompt unverified: interim thought fragment or stub ("${prompt.trim().slice(0, 40)}") cannot be used as an engineering instruction.`,
     };
   }
 

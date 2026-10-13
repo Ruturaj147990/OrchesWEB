@@ -177,7 +177,7 @@ function AttemptBlock({ attempt, total, defaultOpen, brainName }: { attempt: Att
           {total > 1 ? ` of ${total}` : ""}
         </span>
         {gate ? (
-          <Badge tone={gate.accepted ? (gate.outcome === "verified" ? "success" : "warning") : "danger"}>{gate.accepted ? "accepted" : "rejected"}</Badge>
+          <Badge tone={gate.accepted ? (gate.outcome === "verified" ? "success" : "warning") : "warning"}>{gate.accepted ? "accepted" : "needs revision"}</Badge>
         ) : (
           <Badge tone="running">{attempt.status}</Badge>
         )}
@@ -186,7 +186,7 @@ function AttemptBlock({ attempt, total, defaultOpen, brainName }: { attempt: Att
       {attempt.agentError && <p className="callout callout-danger small">Coding mechanism: {attempt.agentError}</p>}
       {gate && gate.blockers.length > 0 && (
         <div className="callout callout-danger">
-          <strong>Why it was rejected</strong>
+          <strong>Issues to address in next iteration</strong>
           <ul>
             {gate.blockers.map((b, i) => (
               <li key={i}>{b}</li>
@@ -244,12 +244,11 @@ function AttemptBlock({ attempt, total, defaultOpen, brainName }: { attempt: Att
 
 function nextStep(detail: RunDetail): string | null {
   const { run } = detail;
-  if (run.outcome === "rejected") return "Nothing was kept. Try rephrasing the task more concretely, splitting it into smaller steps, or selecting a stronger model in Settings.";
+  if (run.outcome === "unverified") return "Workspace changes were preserved with outstanding advisory feedback. Review the diff and iteration notes before relying on it.";
   if (run.outcome === "error") {
     if (/provider is not ready|model server|did not answer|unreachable|API key/i.test(run.summary ?? "")) return "Check the reasoning model in Settings (Check connection), then run the task again.";
     return "Review the activity log for details, fix the cause, and run the task again.";
   }
-  if (run.outcome === "unverified") return "The change was kept but could not be fully verified. Review the diff before relying on it.";
   return null;
 }
 

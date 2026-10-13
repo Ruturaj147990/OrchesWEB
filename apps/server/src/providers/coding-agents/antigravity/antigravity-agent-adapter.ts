@@ -73,7 +73,7 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
       isThoughtOrStatusFragment(instruction) ||
       isTaskDescriptor(instruction)
     ) {
-      result.error = `Antigravity boundary rejected non-executable or interim instruction: ${
+      result.error = `Antigravity boundary received non-executable or interim instruction: ${
         isThoughtOrStatusFragment(instruction)
           ? `interim thought fragment "${instruction.slice(0, 40)}"`
           : isTaskDescriptor(instruction)
