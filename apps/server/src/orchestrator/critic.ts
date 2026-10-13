@@ -453,8 +453,15 @@ export async function reviewAttempt(
   input: ReviewAttemptInput
 ): Promise<CriticOutcome> {
   const isWebProvider = provider.id === "chatgpt-web";
+  if (isWebProvider) {
+    // For ChatGPT Web, large diffs are seamlessly digested in a single prompt via the browser's attachment card.
+    // Keep only a single unified prompt containing the complete diff without fragmenting into multiple parts.
+    const prompt = buildReviewPrompt({ ...input, maxDiffChars: Number.MAX_SAFE_INTEGER });
+    return executeSingleReview(provider, prompt, input);
+  }
+
   const contextTokens = typeof provider.getContextWindow === "function" ? provider.getContextWindow() : 32_768;
-  const defaultBudget = isWebProvider ? CHATGPT_WEB_SAFE_DIFF_CHUNK_CHARS : calculateDiffCharBudget(contextTokens);
+  const defaultBudget = calculateDiffCharBudget(contextTokens);
   const diffBudget = input.maxDiffChars || defaultBudget;
 
   const changes = input.changes || input.taskContext?.latestChanges || [];
