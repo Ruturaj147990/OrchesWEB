@@ -107,6 +107,10 @@ export class RunRepository {
     this.db.prepare("UPDATE runs SET iteration_count = iteration_count + 1 WHERE id = ?").run(id);
   }
 
+  public setIterationCount(id: string, count: number): void {
+    this.db.prepare("UPDATE runs SET iteration_count = ? WHERE id = ?").run(count, id);
+  }
+
   private mapRow(row: Record<string, unknown>): Run {
     const s = (k: string) => (row[k] as string) || null;
     return {

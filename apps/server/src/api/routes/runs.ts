@@ -6,7 +6,7 @@ import { RunStartError } from "../../orchestrator/run-manager.js";
 
 const StartRunSchema = z.object({
   task: z.string(),
-  maxAttempts: z.number().int().min(1).max(30).optional(),
+  maxAttempts: z.number().int().min(1).optional(),
 });
 
 function parseJson<T>(raw: unknown, fallback: T): T {

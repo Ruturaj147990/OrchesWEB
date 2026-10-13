@@ -68,7 +68,7 @@ export class RunManager {
     }
 
     const settings = SettingsManager.loadSettings();
-    const effectiveMaxAttempts = typeof options?.maxAttempts === "number" && options.maxAttempts >= 1 && options.maxAttempts <= 30
+    const effectiveMaxAttempts = typeof options?.maxAttempts === "number" && options.maxAttempts >= 1
       ? Math.round(options.maxAttempts)
       : settings.maxAttempts;
     const provider = this.overrides.provider ? this.overrides.provider() : getActiveProvider();

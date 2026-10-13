@@ -33,8 +33,8 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
   const save = async (e?: FormEvent) => {
     e?.preventDefault();
     setError(null);
-    if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 30) {
-      setError("Maximum Agent Iterations must be a whole number between 1 and 30.");
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      setError("Maximum Agent Iterations must be a positive whole number (at least 1).");
       return null;
     }
     setBusy(true);
@@ -187,7 +187,6 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
             <input
               type="number"
               min={1}
-              max={30}
               step={1}
               value={maxAttempts}
               onChange={(e) => {
@@ -197,7 +196,7 @@ export function SettingsDialog({ settings, ide, runActive, onClose, onSaved }: P
               required
             />
             <small>
-              Initial execution is iteration 1. Each subsequent repair/follow-up execution is another iteration (e.g. 4 allows 1 initial + up to 3 repairs; 10 allows 1 initial + up to 9 repairs). (Safety ceiling: 30)
+              Configures the dynamic iteration budget for the complete workflow (initial implementation, post-acceptance full-system audit, and remediation).
             </small>
           </label>
         </section>

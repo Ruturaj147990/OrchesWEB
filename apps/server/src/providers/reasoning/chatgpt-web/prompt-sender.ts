@@ -137,18 +137,31 @@ export class PromptSender {
       throw new Error("Prompt composer not found on ChatGPT page.");
     }
 
-    // 3. Clear existing text and fill composer reliably
+    // 3. Clear existing text and fill composer reliably via clipboard paste or keyboard input
     await composerLocator.click();
     await page.keyboard.press("Control+A").catch(() => {});
     await page.keyboard.press("Backspace").catch(() => {});
 
-    // Try standard Playwright fill first; fallback to evaluate + input event
     let filled = false;
+    // Clipboard paste triggers native input/paste events which ProseMirror monitors to update internal state and enable the Send button
     try {
-      await composerLocator.fill(trimmed, { timeout: 3000 });
+      await page.evaluate((val) => {
+        return navigator.clipboard.writeText(val);
+      }, trimmed);
+      await page.keyboard.press("Control+V");
+      await page.waitForTimeout(300);
       filled = true;
     } catch {
-      // Contenteditable divs or custom components can fail fill()
+      // Fallback if clipboard API is restricted
+    }
+
+    if (!filled) {
+      try {
+        await composerLocator.fill(trimmed, { timeout: 3000 });
+        filled = true;
+      } catch {
+        // Contenteditable divs or custom components can fail fill()
+      }
     }
 
     if (!filled) {
@@ -167,38 +180,163 @@ export class PromptSender {
         },
         { selector: matchedSelector, val: trimmed }
       );
+      // Keyboard space + backspace to ensure ProseMirror event fires
+      await page.keyboard.type(" ", { delay: 10 }).catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
     }
 
-    // Micro key trigger to ensure ProseMirror / React state is synchronized
-    await composerLocator.type(" ", { delay: 10 }).catch(() => {});
+    // 4. Wait for ChatGPT to process the pasted text, generate any attachment pill card, and enable the Send button
+    let composerStaged = false;
+    let sendBtnActive = false;
+    const stagingStart = Date.now();
+    const maxStagingWaitMs = 20_000; // Allow ample time for ChatGPT to digest large multi-kilobyte text and render pills
 
-    // 4. Verify composer contains the intended prompt
-    const composerContent = await composerLocator.evaluate((el: HTMLElement) => {
-      if ("value" in el) return (el as HTMLTextAreaElement).value || "";
-      return el.innerText || "";
-    }).catch(() => "");
+    while (Date.now() - stagingStart < maxStagingWaitMs) {
+      if (options.signal?.aborted) throw new Error("Submission cancelled by user.");
 
-    if (!composerContent.trim()) {
-      throw new Error("Failed to populate ChatGPT composer with prompt text.");
+      const status = await page.evaluate(({ selector }) => {
+        const composerEl = document.querySelector(selector) as HTMLElement | null;
+        const text = composerEl ? (("value" in composerEl ? (composerEl as HTMLTextAreaElement).value : composerEl.innerText) || "") : "";
+        
+        // 1. Check for standard attachment chip / card attributes
+        const hasAttachmentAttr = !!document.querySelector(
+          "[data-testid*='attachment'], [data-testid*='file'], [aria-label*='Remove'], [class*='pill'], [class*='chip'], div[data-testid*='card']"
+        );
+
+        // 2. Check for pills via button / text content (e.g. "Show in text field", "SYSTEM INSTRUC")
+        let hasPillText = false;
+        try {
+          const elements = Array.from(document.querySelectorAll("button, div, span"));
+          for (const el of elements) {
+            const t = el.textContent || "";
+            if (t.includes("Show in text field") || t.includes("SYSTEM INSTRUC") || t.includes("ATTACHMENT")) {
+              hasPillText = true;
+              break;
+            }
+          }
+        } catch {
+          // ignore DOM inspection errors
+        }
+
+        // 3. Check Send button status
+        const sendBtn = document.querySelector(
+          "button[data-testid='send-button'], button[aria-label*='Send'], button[aria-label*='Submit']"
+        ) as HTMLButtonElement | null;
+        const sendExists = !!sendBtn;
+        const sendDisabled = sendBtn
+          ? sendBtn.disabled || sendBtn.hasAttribute("disabled") || sendBtn.getAttribute("aria-disabled") === "true"
+          : true;
+        const sendEnabled = sendExists && !sendDisabled;
+
+        return {
+          hasText: text.trim().length > 0,
+          textLen: text.trim().length,
+          hasPill: hasAttachmentAttr || hasPillText,
+          sendExists,
+          sendEnabled,
+        };
+      }, { selector: matchedSelector }).catch((err) => ({
+        hasText: false,
+        textLen: 0,
+        hasPill: false,
+        sendExists: false,
+        sendEnabled: false,
+        error: String(err),
+      }));
+
+      if (status.sendEnabled || status.hasPill || status.hasText) {
+        composerStaged = true;
+        if (status.sendEnabled) {
+          sendBtnActive = true;
+          break; // Optimal: Send button is fully enabled and ready
+        }
+      }
+
+      await page.waitForTimeout(500).catch(() => {});
+    }
+
+    if (!composerStaged) {
+      // If clipboard paste was triggered earlier, give one final check before failing
+      const finalSendCheck = await page.evaluate(() => {
+        const sendBtn = document.querySelector("button[data-testid='send-button'], button[aria-label*='Send'], button[aria-label*='Submit']") as HTMLButtonElement | null;
+        return sendBtn ? (!sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") : false;
+      }).catch(() => false);
+
+      if (finalSendCheck || filled) {
+        composerStaged = true;
+        sendBtnActive = finalSendCheck;
+      } else {
+        throw new Error("Failed to populate ChatGPT composer with prompt text within timeout.");
+      }
     }
     options.stateMachine?.transition("COMPOSER_FILLED", `Prompt text staged (${trimmed.length} chars)`);
 
-    // 5. Locate Send button
+    // 5. Locate Send button with dedicated polling wait for enablement (pasting/pill generation can take a few seconds before Send becomes clickable)
     let sendLocator = null;
-    for (const sel of SELECTORS.sendButton) {
-      const loc = page.locator(sel).first();
-      if (await loc.isVisible().catch(() => false)) {
-        sendLocator = loc;
+    let isSendEnabled = sendBtnActive;
+    const sendWaitStart = Date.now();
+    const maxSendWaitMs = 15_000;
+
+    while (Date.now() - sendWaitStart < maxSendWaitMs) {
+      if (options.signal?.aborted) throw new Error("Submission cancelled by user.");
+
+      // Check via Playwright locators
+      for (const sel of SELECTORS.sendButton) {
+        const loc = page.locator(sel).first();
+        if (await loc.isVisible().catch(() => false)) {
+          sendLocator = loc;
+          const enabled = await loc.isEnabled().catch(() => false);
+          if (enabled) {
+            isSendEnabled = true;
+            break;
+          }
+        }
+      }
+
+      if (isSendEnabled && sendLocator) break;
+
+      // Also check DOM directly
+      const domSendReady = await page.evaluate(() => {
+        const btn = document.querySelector("button[data-testid='send-button'], button[aria-label*='Send'], button[aria-label*='Submit']") as HTMLButtonElement | null;
+        if (!btn) return false;
+        return !btn.disabled && !btn.hasAttribute("disabled") && btn.getAttribute("aria-disabled") !== "true";
+      }).catch(() => false);
+
+      if (domSendReady) {
+        isSendEnabled = true;
         break;
       }
+
+      await page.waitForTimeout(400).catch(() => {});
     }
 
     // Submit prompt
     options.stateMachine?.transition("USER_MESSAGE_SUBMITTED");
-    if (sendLocator && (await sendLocator.isEnabled().catch(() => false))) {
-      await sendLocator.click().catch(() => {});
+    if (sendLocator && isSendEnabled) {
+      try {
+        await sendLocator.click({ timeout: 5000 });
+      } catch (err) {
+        // If Playwright click fails (e.g. element detached or overlaid), try DOM dispatch
+        await page.evaluate(() => {
+          const btn = document.querySelector("button[data-testid='send-button'], button[aria-label*='Send'], button[aria-label*='Submit']") as HTMLElement | null;
+          if (btn) btn.click();
+        }).catch(() => {});
+      }
     } else {
-      await page.keyboard.press("Enter").catch(() => {});
+      // Fallback: try DOM click first, then Enter key
+      const clickedViaDom = await page.evaluate(() => {
+        const btn = document.querySelector("button[data-testid='send-button'], button[aria-label*='Send'], button[aria-label*='Submit']") as HTMLElement | null;
+        if (btn) {
+          btn.click();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+
+      if (!clickedViaDom) {
+        await composerLocator.press("Enter").catch(() => {});
+        await page.keyboard.press("Enter").catch(() => {});
+      }
     }
 
     // 6. Fast, robust multi-signal submission confirmation

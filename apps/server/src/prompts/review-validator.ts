@@ -193,6 +193,19 @@ export function parseReviewProtocol(
         validationError: `Contradictory review: Verdict is ACCEPT but high/critical findings were reported: ${severeFindings.map((f) => f.message).join("; ")}`,
       };
     }
+
+    if (repairInstructions.length > 0) {
+      return {
+        status: "INVALID",
+        verdict: "repair",
+        criteria,
+        findings,
+        repairInstructions,
+        summary,
+        rawText: clean,
+        validationError: `Contradictory review: Verdict is ACCEPT but actionable repair instructions were provided: ${repairInstructions.join("; ")}`,
+      };
+    }
   }
 
   return {
@@ -348,4 +361,70 @@ function parseLegacyJsonReview(obj: any, rawText: string): ParsedReview {
     rawText,
     isLegacyJson: true,
   };
+}
+
+/**
+ * Checks if raw response contains substantive review commentary despite missing the
+ * protocol status header or delimiters.
+ */
+export function isSubstantiveReviewCommentary(text: string): boolean {
+  const clean = (text || "").trim();
+  if (clean.length < 50) return false;
+
+  const reviewKeywords = [
+    /\b(acceptance criteri[aa]|criterion|criteria)\b/i,
+    /\b(verdict|findings?|repair instructions?|passed|failed|unverified)\b/i,
+    /\b(diff|implementation|code review|audit)\b/i,
+    /\b(ac-\d+|req-\d+)\b/i,
+    /\b(remediat(e|ion)|defect|bug)\b/i,
+  ];
+
+  let matches = 0;
+  for (const re of reviewKeywords) {
+    if (re.test(clean)) matches++;
+  }
+
+  return matches >= 2;
+}
+
+/**
+ * Builds a focused follow-up prompt asking GPT-Web to classify its existing substantive
+ * review commentary into the required review protocol without changing its findings.
+ */
+export function buildProtocolRecoveryPrompt(previousResponseText: string): string {
+  const excerpt = previousResponseText.trim().slice(0, 4_000);
+  return [
+    "PROTOCOL RECOVERY NOTICE:",
+    "You provided substantive code review commentary above, but omitted the mandatory Orches review protocol status header and delimiters.",
+    "",
+    "Based strictly on your evaluation already provided below, classify your assessment using the required Orches review protocol.",
+    "Do NOT fabricate a new verdict. Preserve your exact findings, criticisms, and any uncertainty.",
+    "",
+    "--- YOUR PREVIOUS ASSESSMENT EXCERPT ---",
+    excerpt,
+    "--- END OF PREVIOUS ASSESSMENT ---",
+    "",
+    "You MUST output your response in this EXACT format (select ACCEPT, REPAIR, or BLOCKED based on your assessment):",
+    "",
+    "ORCHES_REVIEW_STATUS: <ACCEPT | REPAIR | BLOCKED>",
+    "",
+    "[ORCHES_REVIEW]",
+    "",
+    "## Verdict",
+    "<ACCEPT | REPAIR | BLOCKED>",
+    "",
+    "## Acceptance Criteria",
+    "- AC-1 — <passed | failed | unverified> — <evidence from diff>",
+    "",
+    "## Findings",
+    "- <Severity (low|medium|high|critical)>, <concrete issue>, <affected component>",
+    "",
+    "## Repair Instructions",
+    "- <Specific actionable fix supported by your assessment, or (none) if ACCEPT>",
+    "",
+    "## Summary",
+    "<One sentence summarizing the review decision>",
+    "",
+    "[/ORCHES_REVIEW]",
+  ].join("\n");
 }

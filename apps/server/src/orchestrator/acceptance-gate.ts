@@ -20,6 +20,8 @@ export interface GateInput {
   missingRequestedFiles?: string[];
   /** Whether this attempt is the final allowed attempt (prevents premature unverified acceptance on intermediate attempts). */
   isFinalAttempt?: boolean;
+  /** Whether zero workspace changes is permissible (e.g. during audit inspection stage). */
+  allowNoChanges?: boolean;
 }
 
 export interface GateDecision {
@@ -44,9 +46,9 @@ export function evaluateAttempt(input: GateInput): GateDecision {
   if (input.agentFailed) {
     blockers.push(`Coding mechanism reported failure: ${input.agentError || "no details"}`);
   }
-  if (input.changes.length === 0) {
+  if (input.changes.length === 0 && !input.allowNoChanges) {
     blockers.push("No files were changed in the workspace, so the task cannot have been completed.");
-  } else {
+  } else if (input.changes.length > 0) {
     evidence.push(`${input.changes.length} file(s) changed: ${input.changes.slice(0, 6).map((c) => `${c.path} (${c.kind})`).join(", ")}${input.changes.length > 6 ? ", …" : ""}`);
   }
   for (const change of input.changes) {
@@ -58,7 +60,7 @@ export function evaluateAttempt(input: GateInput): GateDecision {
       blockers.push(`The coding agent wrote outside the workspace: ${w}`);
     }
   }
-  for (const rw of input.rejectedWrites) {
+  for (const rw of input.rejectedWrites ?? []) {
     warnings.push(`Blocked an unsafe write to '${rw.path}': ${rw.reason}`);
   }
 
@@ -96,6 +98,12 @@ export function evaluateAttempt(input: GateInput): GateDecision {
   if (!critic.available) {
     warnings.push(`Independent review was unavailable: ${critic.error || "unknown error"}.`);
   } else {
+    // If chunked coverage ledger exists, require 100% complete coverage before endorsing
+    if (critic.coverageLedger && !critic.coverageLedger.isComplete()) {
+      const unreviewed = critic.coverageLedger.unreviewedFiles();
+      blockers.push(`Critic review incomplete: ${unreviewed.length} changed files were not successfully reviewed (${unreviewed.join(", ")}).`);
+    }
+
     // Concrete objections count whatever the verdict word says: a reviewer that answers "accept" while
     // marking a criterion failed, or unverified *and* asking for a specific fix, has not accepted it.
     const concrete = [
@@ -107,7 +115,7 @@ export function evaluateAttempt(input: GateInput): GateDecision {
     ];
     if (concrete.length > 0) {
       for (const c of concrete) blockers.push(`Critic: ${c}`);
-    } else if (critic.verdict === "accept") {
+    } else if (critic.verdict === "accept" && (!critic.coverageLedger || critic.coverageLedger.isComplete())) {
       criticEndorses = true;
       evidence.push(`Critic review accepted the change${critic.summary ? `: ${critic.summary}` : "."}`);
     } else {

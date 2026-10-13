@@ -168,15 +168,26 @@ export class ChatGPTWebProvider implements ReasoningProvider {
           conversationManager.recordSuccess(request.projectId);
         }
 
-        if (review.status === "INVALID") {
-          const errorDetail = review.validationError || "Response did not contain a valid natural-language review";
-          console.warn(`[ChatGPTWeb] Review protocol validation failed: ${errorDetail}`);
-          this.browserManager.getStateMachine().transition("FAILED_RECOVERABLE", errorDetail);
-          throw new Error(`ChatGPT Web review protocol validation failed: ${errorDetail}`);
-        }
-
         const inputTokens = estimateTokens(promptText);
         const outputTokens = estimateTokens(rawResponse);
+
+        if (review.status === "INVALID") {
+          const errorDetail = review.validationError || "Response did not contain a valid natural-language review";
+          console.warn(`[ChatGPTWeb] Review protocol validation notice: ${errorDetail}`);
+          // Return raw response text so the critic's protocol recovery mechanism can analyze substantive commentary and issue follow-up
+          return {
+            text: rawResponse,
+            providerId: this.id,
+            modelId: this.getModel(),
+            usage: {
+              inputTokens,
+              outputTokens,
+              totalTokens: inputTokens + outputTokens,
+            },
+            durationMs: Date.now() - startTime,
+            warnings: [errorDetail],
+          };
+        }
 
         return {
           text: rawResponse,

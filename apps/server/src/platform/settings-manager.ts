@@ -11,6 +11,7 @@ export interface PersistedSettings {
   chatgptWebTimeoutMs: number;
   chatgptWebGenerationTimeoutMs: number;
   chatgptWebMaxRetries: number;
+  reviewDiffChunkBudget: number;
   codingAgentId: string;
   maxAttempts: number;
 }
@@ -22,6 +23,7 @@ const DEFAULTS = (): PersistedSettings => ({
   chatgptWebTimeoutMs: config.chatgptWebTimeoutMs,
   chatgptWebGenerationTimeoutMs: 180_000,
   chatgptWebMaxRetries: 3,
+  reviewDiffChunkBudget: 24_000,
   codingAgentId: "builtin",
   maxAttempts: 3,
 });
@@ -73,10 +75,13 @@ export class SettingsManager {
         if (typeof raw.chatgptWebMaxRetries === "number" && raw.chatgptWebMaxRetries >= 1) {
           settings.chatgptWebMaxRetries = raw.chatgptWebMaxRetries;
         }
+        if (typeof raw.reviewDiffChunkBudget === "number" && raw.reviewDiffChunkBudget >= 2_000) {
+          settings.reviewDiffChunkBudget = Math.round(raw.reviewDiffChunkBudget);
+        }
         if (typeof raw.codingAgentId === "string" && raw.codingAgentId) {
           settings.codingAgentId = raw.codingAgentId;
         }
-        if (typeof raw.maxAttempts === "number" && raw.maxAttempts >= 1 && raw.maxAttempts <= 30) {
+        if (typeof raw.maxAttempts === "number" && raw.maxAttempts >= 1) {
           settings.maxAttempts = Math.round(raw.maxAttempts);
         }
       } catch (err) {

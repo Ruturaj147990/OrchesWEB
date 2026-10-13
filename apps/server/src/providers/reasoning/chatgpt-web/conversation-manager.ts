@@ -202,18 +202,16 @@ export class ConversationManager {
     await composerLocator.click();
     await page.keyboard.press("Control+A").catch(() => {});
     await page.keyboard.press("Backspace").catch(() => {});
-    await page.evaluate(
-      ({ selector, val }) => {
-        const el = document.querySelector(selector) as HTMLElement;
-        if (el) {
-          if ("value" in el) (el as HTMLTextAreaElement).value = val;
-          else el.innerText = val;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-      },
-      { selector: SELECTORS.composer[0], val: text }
-    );
-    await composerLocator.type(" ", { delay: 10 }).catch(() => {});
+
+    try {
+      await page.evaluate((val) => {
+        return navigator.clipboard.writeText(val);
+      }, text);
+      await page.keyboard.press("Control+V");
+      await page.waitForTimeout(300);
+    } catch {
+      await composerLocator.fill(text).catch(() => {});
+    }
 
     // Click Send
     let sendLocator = null;
@@ -224,7 +222,7 @@ export class ConversationManager {
         break;
       }
     }
-    if (sendLocator) {
+    if (sendLocator && (await sendLocator.isEnabled().catch(() => false))) {
       await sendLocator.click().catch(() => {});
     } else {
       await page.keyboard.press("Enter").catch(() => {});

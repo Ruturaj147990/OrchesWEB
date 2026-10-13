@@ -65,6 +65,8 @@ export interface InstructionContext {
   signal?: AbortSignal;
   memorySnapshotMarkdown?: string;
   memoryContextSection?: string;
+  stage?: "implementation" | "audit" | "audit_remediation";
+  auditReport?: string;
 }
 
 export interface Instruction {
@@ -76,6 +78,7 @@ export interface Instruction {
   fidelityReport?: PromptFidelityReport;
   initialFidelityReport?: PromptFidelityReport;
   residualUncertainties?: string[];
+  unrecoverable?: boolean;
 }
 
 const SYSTEM = `ROLE:
@@ -453,6 +456,44 @@ export function synthesizeRepairBrief(ctx: InstructionContext, inventory: Requir
 }
 
 /**
+ * Synthesizes a comprehensive, rigorous Full-System Quality & Readiness Audit Brief.
+ * Dispatched to Antigravity following initial requirements acceptance.
+ */
+export function synthesizeSystemAuditBrief(ctx: InstructionContext): string {
+  const title = ctx.taskText.trim().split(/\r?\n/)[0].replace(/^#+\s*/, "").slice(0, 80) || "Project";
+  const checks = ctx.profile.checks.map((c) => c.label).join(", ") || "none detected (standard file and syntax checks)";
+
+  return [
+    `# ${title} — Mandatory Post-Acceptance Full-System Quality & Architecture Audit`,
+    "",
+    "## 1. Executive Mission: Full-System Audit",
+    "The original implementation requirements have passed initial acceptance.",
+    "You are now tasked with executing a comprehensive, evidence-based quality audit across the entire system.",
+    "Do NOT make speculative edits. Inspect the actual workspace files, architecture, test suites, and configurations.",
+    "",
+    "## 2. Required Subsystem Audit Dimensions",
+    "Thoroughly inspect and evaluate each of the following dimensions:",
+    "1. **Frontend Architecture & UX**: Layout integrity, responsive behavior, component contracts, input validation, state transitions, error boundaries, user feedback, and accessibility.",
+    "2. **Backend & Service Layer**: Endpoint contracts, request validation, business logic integrity, error handling, status codes, session management, and boundary resilience.",
+    "3. **Database & Data Persistence**: Schema integrity, constraints, relations, migration validity, transaction safety, query efficiency, and data sanitization.",
+    "4. **AI / ML / Reasoning Integrations (where present)**: Provider adapters, model fallbacks, schema parsing, prompt resilience, token budgeting, and protocol handling.",
+    "5. **Security & Vulnerability Posture**: Injection risks (SQL/XSS/Command), secret handling, credential exposure, path traversal safeguards, authentication/authorization boundaries, and dependency vulnerabilities.",
+    "6. **Architecture & Maintainability**: Modularity, separation of concerns, coupling, code duplication, circular dependencies, type safety, and error propagations.",
+    "7. **Performance & Reliability**: Resource utilization, memory leaks, concurrency handling, database index usage, and edge-case behavior under load.",
+    "8. **Automated Verification & Test Coverage**: Test coverage adequacy, edge case coverage, deterministic test pass rates, mock fidelity, and automated checks (`" + checks + "`).",
+    "9. **Deployment & Runtime Readiness**: Build integrity, environment configuration, container/process management, port safety, logging, and startup diagnostics.",
+    "",
+    "## 3. Required Output: Evidence-Based Audit Report",
+    "Execute all automated checks and inspect workspace files using your tools.",
+    "Provide an exhaustive markdown audit report with:",
+    "- An executive readiness verdict (READINESS_VERDICT: READY | DEFECTS_DETECTED).",
+    "- Concrete findings categorized by subsystem with file paths, line numbers, and root causes.",
+    "- Detailed verification results from running test suites and linters.",
+    "- Clear, prioritized corrective actions for any identified deficiencies.",
+  ].join("\n");
+}
+
+/**
  * Builds the complete, deterministic instruction prompt for the initial brief
  * or iterative repair iterations.
  */
@@ -588,6 +629,26 @@ ${ctx.blueprintDocuments[0].extractedText.slice(0, 2500)}`
     `EXISTING FILES (sample): ${filesStr}`,
     "",
     `ITERATION ${ctx.iteration} of at most ${ctx.maxIterations}.`,
+    ctx.stage === "audit"
+      ? `STAGE: MANDATORY POST-ACCEPTANCE FULL-SYSTEM QUALITY AUDIT
+The implementation requirements have passed initial acceptance. You must now direct the Antigravity agent to conduct a comprehensive, evidence-based quality audit across all system dimensions:
+1. Frontend Architecture & UX
+2. Backend & Service Layer
+3. Database & Data Persistence
+4. AI/ML Components (where present)
+5. Security & Vulnerability Posture
+6. Architecture & Maintainability
+7. Performance & Reliability
+8. Automated Verification & Test Coverage (${checks})
+9. Deployment & Runtime Readiness
+
+Instruct Antigravity to inspect files, execute test suites, and produce an evidence-based audit report.`
+      : ctx.stage === "audit_remediation"
+        ? `STAGE: POST-ACCEPTANCE AUDIT DEFECT REMEDIATION
+The post-acceptance audit identified defects or shortcomings that must be corrected.
+${ctx.auditReport ? `AUDIT REPORT FINDINGS:\n${ctx.auditReport}\n` : ""}
+Provide targeted corrective instructions for Antigravity to resolve each defect and verify fixes with automated checks.`
+        : "",
     histArr.length ? `PREVIOUS ITERATIONS:\n${histArr.join("\n\n")}` : "This is the first iteration.",
     ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
     "",
@@ -710,7 +771,7 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
 
   const operation = ctx.iteration === 1 ? "code_generation" : "repair_diagnosis";
 
-  const response = await provider.generate(
+  let response = await provider.generate(
     {
       operation,
       systemInstruction: SYSTEM,
@@ -725,7 +786,7 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
   );
 
   // 1. Extract instruction using natural-language protocol reader
-  const extracted = ResponseReader.extractInstruction(response.text || "", {
+  let extracted = ResponseReader.extractInstruction(response.text || "", {
     allowLegacyJson: true,
   });
 
@@ -791,28 +852,138 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
   let warning: string | undefined;
 
   // Quality Gate: Check if the model emitted a meta-instruction, task descriptor, thought fragment, or under-specified brief
-  const isRepair = ctx.iteration > 1;
+  const isTargetedStage = ctx.stage === "audit" || ctx.stage === "audit_remediation" || ctx.iteration > 1;
+  const isRepair = ctx.iteration > 1 || ctx.stage === "audit_remediation";
   const isDescriptor = (response.text && isTaskDescriptor(response.text)) || (rawInstruction && isTaskDescriptor(rawInstruction));
   const isThought = (response.text && isThoughtOrStatusFragment(response.text)) || (rawInstruction && isThoughtOrStatusFragment(rawInstruction));
-  const minLength = isRepair ? 15 : 30;
+  const minLength = isTargetedStage ? 15 : 30;
   const isSubstanceInvalid = rawInstruction
-    ? isRepair
+    ? isTargetedStage
       ? rawInstruction.length < minLength
       : !validateInstructionSubstance(rawInstruction, ctx.taskText).valid
     : true;
 
-  if (
+  // Recovery attempt for audit and audit_remediation stages to preserve GPT-Web prompt ownership
+  const isAuditWorkflowStage = ctx.stage === "audit" || ctx.stage === "audit_remediation";
+  let isRawUnusable =
     !rawInstruction ||
     rawInstruction.length < minLength ||
     isDescriptor ||
     isThought ||
     isMetaInstruction(rawInstruction) ||
-    isUnderSpecified(rawInstruction, ctx.taskText, { isRepair }) ||
-    isSubstanceInvalid
+    isUnderSpecified(rawInstruction, ctx.taskText, { isRepair: isTargetedStage }) ||
+    isSubstanceInvalid;
+
+  if (isAuditWorkflowStage && isRawUnusable) {
+    try {
+      const recoveryClarification = isThought
+        ? "Your previous output was an interim thought fragment or status update. You must author the complete, substantive engineering instruction inside [ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION] for Antigravity to execute."
+        : "Your previous response did not provide a usable instruction. You must author the complete, substantive engineering instruction inside [ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION].";
+
+      const retryResponse = await provider.generate(
+        {
+          operation,
+          systemInstruction: SYSTEM,
+          messages: [
+            { role: "user", content: prompt },
+            { role: "assistant", content: response.text || "" },
+            { role: "user", content: recoveryClarification },
+          ],
+          json: false,
+          temperature: 0.1,
+          maxOutputTokens,
+          projectId: ctx.projectId,
+          runId: ctx.runId,
+        },
+        ctx.signal
+      );
+
+      if (retryResponse.text) {
+        response = retryResponse;
+        const retryExtracted = ResponseReader.extractInstruction(retryResponse.text, { allowLegacyJson: true });
+        if (retryExtracted.action === "stop") {
+          return {
+            action: "stop",
+            instruction: "",
+            rationale: retryExtracted.stopReason || retryExtracted.rationale || "The reasoning model stopped the run.",
+            source: "model",
+          };
+        }
+        let retryRaw = retryExtracted.instructionText.trim();
+        const retryParsed = (retryResponse.parsed ?? extractJsonFromText(retryResponse.text)) as Record<string, unknown> | null;
+        if (!retryRaw && retryParsed) {
+          if (typeof retryParsed.instruction === "string") retryRaw = retryParsed.instruction.trim();
+          else if (typeof retryParsed.prompt === "string") retryRaw = retryParsed.prompt.trim();
+        }
+        if (retryRaw) {
+          const mStart = retryRaw.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+          const mEnd = retryRaw.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+          if (mStart !== -1 && mEnd !== -1 && mEnd > mStart) {
+            retryRaw = retryRaw.slice(mStart + 32, mEnd).trim();
+          } else if (mStart !== -1) {
+            retryRaw = retryRaw.slice(mStart + 32).trim();
+          }
+        }
+        if (retryRaw && !isTaskDescriptor(retryRaw)) {
+          rawInstruction = retryRaw;
+          candidateInstruction = retryRaw;
+          extracted = retryExtracted;
+        }
+      }
+    } catch {
+      // Recovery attempt failed; handled below
+    }
+
+    const postDescriptor = (response.text && isTaskDescriptor(response.text)) || (rawInstruction && isTaskDescriptor(rawInstruction));
+    const postThought = (response.text && isThoughtOrStatusFragment(response.text)) || (rawInstruction && isThoughtOrStatusFragment(rawInstruction));
+    const postSubstanceInvalid = rawInstruction ? rawInstruction.length < minLength : true;
+    const postMeta = isMetaInstruction(rawInstruction);
+    const postUnder = isUnderSpecified(rawInstruction, ctx.taskText, { isRepair: true });
+
+    if (
+      !rawInstruction ||
+      rawInstruction.length < minLength ||
+      postDescriptor ||
+      postThought ||
+      postMeta ||
+      postUnder ||
+      postSubstanceInvalid
+    ) {
+      // GPT-Web prompt ownership strictly enforced:
+      // Never substitute a locally synthesized brief for GPT-Web-authored audit/remediation prompt.
+      // Mark as unrecoverable so the workflow preserves work and concludes incomplete/unverified.
+      return {
+        action: "instruct",
+        instruction: "",
+        rationale: `GPT-Web did not author a usable prompt for ${ctx.stage} after recovery attempt`,
+        source: "model",
+        unrecoverable: true,
+        warning: `GPT-Web response for ${ctx.stage} was empty, malformed, or unusable after recovery attempt`,
+      };
+    }
+  }
+
+  const currentDescriptor = (response.text && isTaskDescriptor(response.text)) || (rawInstruction && isTaskDescriptor(rawInstruction));
+  const currentThought = (response.text && isThoughtOrStatusFragment(response.text)) || (rawInstruction && isThoughtOrStatusFragment(rawInstruction));
+  const currentSubstanceInvalid = rawInstruction
+    ? isTargetedStage
+      ? rawInstruction.length < minLength
+      : !validateInstructionSubstance(rawInstruction, ctx.taskText).valid
+    : true;
+
+  if (
+    !isAuditWorkflowStage &&
+    (!rawInstruction ||
+      rawInstruction.length < minLength ||
+      currentDescriptor ||
+      currentThought ||
+      isMetaInstruction(rawInstruction) ||
+      isUnderSpecified(rawInstruction, ctx.taskText, { isRepair: isTargetedStage }) ||
+      currentSubstanceInvalid)
   ) {
     source = "fallback";
     const fragmentSnippet = (rawInstruction || response.text || "").trim().slice(0, 90);
-    warning = isThought
+    warning = currentThought
       ? `The reasoning model returned an interim thought fragment or status update ("${fragmentSnippet}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
       : isDescriptor
         ? "The reasoning model returned an internal task-planning descriptor rather than a substantive engineering instruction; the orchestrator synthesized a comprehensive engineering brief directly."

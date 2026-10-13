@@ -16,7 +16,7 @@ import { runChecks, validateChangedFiles, CheckResult } from "../verification/ru
 import { planTask } from "./planner.js";
 import { reviewAttempt, CriticOutcome } from "./critic.js";
 import { evaluateAttempt, GateDecision } from "./acceptance-gate.js";
-import { composeInstruction, synthesizeSubstantiveBrief, synthesizeRepairBrief, IterationEvidence } from "./instructor.js";
+import { composeInstruction, synthesizeSubstantiveBrief, synthesizeRepairBrief, synthesizeSystemAuditBrief, IterationEvidence } from "./instructor.js";
 import { validateInstructionSubstance, isThoughtOrStatusFragment, isTaskDescriptor } from "../prompts/instruction-validator.js";
 import { projectFileList } from "../workspace/project-inspector.js";
 import { missingRequestedFiles } from "../workspace/requested-files.js";
@@ -256,6 +256,14 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     const external = !agent.usesReasoningProvider;
     let lastStaticResults: CheckResult[] = [];
     let lastAttemptChecks: CheckResult[] = [];
+
+    // Continuous Quality Loop & Mandatory Post-Acceptance Audit State:
+    // When initial requirements receive an ACCEPT verdict, the run does NOT terminate.
+    // Instead it transitions into post-acceptance audit (and remediation if defects remain).
+    // The user's configured ctx.maxAttempts is strictly preserved and counts both stages.
+    let stage: "implementation" | "audit" | "audit_remediation" = "implementation";
+    let auditConducted = false;
+    let latestAuditReport: string | undefined;
     for (let attempt = 1; attempt <= ctx.maxAttempts; attempt++) {
       ensureNotCancelled();
       if (provider.privacyClass === "cloud" && provider.id !== "chatgpt-web") {
@@ -277,6 +285,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         INSERT INTO task_attempts (id, task_id, attempt_number, adapter_id, provider_id, model_id, base_commit, task_branch, snapshot_id, status, started_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
       `).run(attemptId, taskId, attempt, agent.id, provider.id, provider.getModel(), gitStart.headCommit, gitStart.activeBranch, activeSnapshot.id, new Date().toISOString());
+      runs.setIterationCount(run.id, attempt);
       events.record(project.id, "attempt.started", { attempt, attemptId, maxAttempts: ctx.maxAttempts }, run.id, taskId);
 
       const changedSoFar = store.diff(activeSnapshot).changes.filter((c) => c.kind !== "deleted").map((c) => c.path);
@@ -314,7 +323,13 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           guidance,
           signal,
           memoryContextSection: memoryContext.promptSection,
+          stage,
+          auditReport: latestAuditReport,
         };
+        phase("instructing", attempt);
+        if (stage === "audit") {
+          log(`[run-pipeline] Transitioning into full-system quality & architecture audit (Iteration ${attempt} of ${ctx.maxAttempts})`, "info");
+        }
         const instr = await composeInstruction(provider, instructionCtx);
         ensureNotCancelled();
         if (instr.warning) {
@@ -347,16 +362,37 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           finish("stopped", "cancelled", `${provider.displayName} declined/stopped the task: ${instr.rationale} ${describeRollback(rb)}`, { rollback: rb });
           return;
         }
+        if (instr.unrecoverable) {
+          log(`[run-pipeline] GPT-Web prompt ownership: ${instr.warning || instr.rationale}. Preserving all workspace changes and marking workflow unverified.`, "warn");
+          activeSnapshot = null;
+          finish(
+            "completed_with_warnings",
+            "unverified",
+            `Workflow incomplete: ${instr.warning || instr.rationale}. All workspace changes and audit evidence were preserved.`
+          );
+          return;
+        }
+
         instructionText = instr.instruction?.trim();
 
         // Final dispatch boundary resilience: Never reject a user task in Orches.
-        // If the instruction is insufficient or an interim fragment, synthesize a substantive brief.
+        // For audit and audit_remediation stages, GPT-Web must author instructions; never substitute locally synthesized briefs.
         if (
           !instructionText ||
-          instructionText.length < 30 ||
+          instructionText.length < (stage === "audit" || stage === "audit_remediation" || attempt > 1 ? 15 : 30) ||
           isThoughtOrStatusFragment(instructionText) ||
           isTaskDescriptor(instructionText)
         ) {
+          if (stage === "audit" || stage === "audit_remediation") {
+            log(`[run-pipeline] GPT-Web prompt ownership: response for ${stage} was unusable after recovery. Preserving all workspace changes and marking workflow unverified.`, "warn");
+            activeSnapshot = null;
+            finish(
+              "completed_with_warnings",
+              "unverified",
+              `Workflow incomplete: GPT-Web response for ${stage} was unusable after recovery attempt. All workspace changes and audit evidence were preserved.`
+            );
+            return;
+          }
           const synthesisReason = isThoughtOrStatusFragment(instructionText || "")
             ? `Dispatched synthesized brief after model returned interim thought fragment: "${instructionText?.slice(0, 40)}"`
             : isTaskDescriptor(instructionText || "")
@@ -439,14 +475,25 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
 
       let critic: CriticOutcome = { available: false, error: "not run because the attempt already failed deterministic checks", verdict: "repair", criteria: [], findings: [], repairInstructions: [], summary: "" };
       const missingFiles = missingRequestedFiles(ctx.taskText, store.listWorkspaceFiles().files);
+      if (stage === "audit") {
+        const reportText = (agentResult.transcript?.finalReply || agentResult.summary || "").trim();
+        if (reportText.length >= 20) {
+          auditConducted = true;
+          latestAuditReport = reportText;
+        } else {
+          log("[run-pipeline] Audit report from agent was empty or insufficient evidence was returned.", "warn");
+          auditConducted = false;
+        }
+      }
       const deterministicFailure =
         agentResult.status !== "completed" ||
-        diff.changes.length === 0 ||
+        (diff.changes.length === 0 && stage !== "audit") ||
         staticFailed ||
         missingFiles.length > 0 ||
         attemptChecks.some((c) => c.status !== "passed" && baselineChecks.find((b) => b.checkId === c.checkId)?.status !== c.status);
       if (!deterministicFailure) {
         phase("reviewing", attempt);
+        const settings = SettingsManager.loadSettings();
         critic = await reviewAttempt(provider, {
           projectId: project.id,
           runId: run.id,
@@ -460,6 +507,9 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           checks: attemptChecks,
           agentReport: agentResult.transcript?.finalReply,
           signal,
+          maxDiffChars: settings.reviewDiffChunkBudget,
+          auditStage: stage === "audit" || stage === "audit_remediation",
+          auditReport: latestAuditReport || agentResult.transcript?.finalReply,
         });
         ensureNotCancelled();
         log(critic.available ? `Review verdict: ${critic.verdict}${critic.summary ? ` — ${critic.summary}` : ""}` : `Review unavailable: ${critic.error}`, critic.available ? "info" : "warn");
@@ -503,6 +553,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         externalWrites: agentResult.transcript?.writesOutsideWorkspace ?? [],
         missingRequestedFiles: missingFiles,
         isFinalAttempt: attempt === ctx.maxAttempts,
+        allowNoChanges: stage === "audit",
       });
 
       lastStaticResults = staticResults;
@@ -558,22 +609,49 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       const prevDiffExcerpt = history[history.length - 1]?.diffExcerpt;
       const isRepeatedAttempt = attempt > 1 && diff.diffText.slice(0, 6000) === prevDiffExcerpt;
 
-      // Acceptance handling:
-      // An attempt concludes if:
-      // 1. It is accepted AND verified (has passing checks and critic endorsed), OR
-      // 2. It is not an external agent (e.g. built-in coder), OR
-      // 3. It has reached the maximum allowed attempts (ctx.maxAttempts), OR
-      // 4. A repeated ineffective attempt was detected where no new files or changes were made.
-      const canConclude = gate.accepted && (
-        gate.outcome === "verified" ||
-        !external ||
-        attempt >= ctx.maxAttempts ||
-        isRepeatedAttempt
-      );
+      // Continuous Quality & Post-Acceptance Improvement Workflow:
+      // An initial ACCEPT verdict on implementation requirements does NOT terminate the session.
+      // Instead, it confirms requirement acceptance and triggers the mandatory full-system audit.
+      // Final conclusion requires:
+      // 1. Full-system audit has actually been conducted.
+      // 2. Its report has been returned to GPT-Web.
+      // 3. GPT-Web explicitly returns ACCEPT for the audit assessment.
+      // 4. No actionable implementation/repair instructions contradict the ACCEPT verdict.
+      const hasActionableRepairs = critic.repairInstructions.length > 0;
+      const isInitialAccept = gate.accepted && stage === "implementation";
+      const isAuditAccept = stage === "audit" &&
+        auditConducted &&
+        critic.verdict === "accept" &&
+        !hasActionableRepairs;
 
-      if (canConclude) {
+      if (isInitialAccept) {
+        log(`[run-pipeline] Initial requirements accepted by reviewer on iteration ${attempt}. Mandatory full-system audit triggered.`, "info");
+        stage = "audit";
+        auditConducted = false;
+        latestAuditReport = undefined;
+        if (attempt === ctx.maxAttempts) {
+          log(`[run-pipeline] Configured maximum iterations (${ctx.maxAttempts}) reached upon initial acceptance; audit cannot be performed within budget.`, "warn");
+        }
+      } else if (stage === "audit") {
+        if (isAuditAccept) {
+          log(`[run-pipeline] Post-acceptance full-system audit ACCEPTED with no outstanding defects on iteration ${attempt}.`, "info");
+        } else {
+          log(`[run-pipeline] Post-acceptance full-system audit identified items to remediate (${critic.repairInstructions.length} instruction(s)). Transitioning to audit remediation.`, "info");
+          stage = "audit_remediation";
+        }
+      } else if (stage === "audit_remediation") {
+        log(`[run-pipeline] Post-acceptance audit remediation cycle completed on iteration ${attempt}. Transitioning back to fresh mandatory full-system audit.`, "info");
+        stage = "audit";
+        auditConducted = false;
+        latestAuditReport = undefined;
+      }
+
+      // Successful termination is allowed ONLY when the mandatory audit has been conducted
+      // and GPT-Web issues a qualifying final ACCEPT without contradictory repair instructions.
+      const qualifiesForFinalAccept = isAuditAccept;
+
+      if (qualifiesForFinalAccept) {
         activeSnapshot = null;
-        runs.incrementIteration(run.id);
         warnings.push(...gate.warnings);
         let commitSha: string | null = null;
         if (gitStart.isGitRepo && project.autoCommit) {
@@ -592,11 +670,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         }
         if (commitSha) runs.updateFields(run.id, { commitSha });
         store.prune();
-        const verb = gate.outcome === "verified" ? "Verified" : "Completed without full verification";
         finish(
-          gate.outcome === "verified" ? "completed" : "completed_with_warnings",
-          gate.outcome,
-          `${verb} on attempt ${attempt}: ${diff.changes.length} file(s) changed.${gate.outcome === "unverified" ? ` ${gate.warnings[0] ?? ""}` : ""}`.trim(),
+          "completed",
+          "verified",
+          `Verified on iteration ${attempt} of ${ctx.maxAttempts}: Full-system audit accepted and verified with ${diff.changes.length} file(s) changed.`,
           { evidence: gate.evidence }
         );
         return;
@@ -604,7 +681,6 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
 
       if (gate.accepted && gate.outcome === "unverified" && attempt < ctx.maxAttempts) {
         log(`The project has no automated checks the orchestrator could run, so behaviour was not tested. Continuing feedback loop (${attempt} of ${ctx.maxAttempts}) so tests can be implemented and validated.`, "info");
-        runs.incrementIteration(run.id);
         previousFailure = "The project currently has no automated checks, so behaviour was not tested. Implement automated verification tests (e.g. test suite or verification script) to validate the system, and complete any remaining requirements.";
       } else {
         log(`Iteration ${attempt} completed with items to address: ${gate.blockers.join(" | ")}`, "info");
@@ -628,24 +704,33 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     }
 
     // Preservation of work & continuous feedback:
-    // Critic findings, failed tests, missing evidence, and shortcomings must not trigger automatic task rejection
-    // or destructive rollback. Preserve workspace changes and task history, explaining unresolved issues.
+    // If the maximum configured attempts is reached before GPT-Web issues a qualifying final ACCEPT:
+    // 1. Preserve all workspace changes, audit reports, implementation history, and outstanding findings.
+    // 2. Mark the quality workflow as incomplete or unverified using the repository's existing status conventions.
+    // 3. Report how many iterations were configured and consumed.
+    // 4. Identify outstanding fixes, missing verification, and the reason the loop could not continue.
+    // 5. Never manufacture an ACCEPT verdict or claim production readiness without evidence.
     const finalDiff = activeSnapshot ? store.diff(activeSnapshot) : null;
-    if (finalDiff && finalDiff.changes.length > 0) {
-      activeSnapshot = null;
-      store.prune();
-      const lastHistory = history[history.length - 1];
-      const outstandingItems = lastHistory?.blockers ?? [];
-      finish(
-        "completed_with_warnings",
-        "unverified",
-        `Concluded ${ctx.maxAttempts} iteration(s) with ${finalDiff.changes.length} file(s) changed. All files were preserved. Outstanding items to address: ${outstandingItems.join("; ") || "unverified"}.`
-      );
-      return;
-    }
+    const consumedAttempts = Math.min(ctx.maxAttempts, history.length);
+    const lastHistory = history[history.length - 1];
+    const outstandingItems = lastHistory?.blockers ?? [];
+    const reason = !auditConducted
+      ? (history.length > 1)
+        ? `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached before mandatory full-system re-audit could be conducted.`
+        : `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached before mandatory full-system audit could be conducted.`
+      : stage === "audit_remediation"
+        ? `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached while remediation items remained outstanding.`
+        : `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached before qualifying final audit acceptance.`;
 
     activeSnapshot = null;
-    finish("completed_with_warnings", "unverified", `Run concluded after ${ctx.maxAttempts} iteration(s) with no workspace changes.`);
+    store.prune();
+    const changesCount = finalDiff?.changes.length ?? 0;
+    finish(
+      "completed_with_warnings",
+      "unverified",
+      `${reason} All workspace changes (${changesCount} file(s)) and audit history were preserved. Outstanding items to address: ${outstandingItems.join("; ") || "verification pending"}.`
+    );
+    return;
   } catch (err) {
     if (err instanceof RunCancelled || signal.aborted) {
       const rb = rollbackActive("cancelled");

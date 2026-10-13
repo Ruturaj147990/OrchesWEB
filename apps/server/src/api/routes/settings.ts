@@ -11,8 +11,9 @@ const UpdateSettingsSchema = z.object({
   chatgptWebHeadless: z.boolean().optional(),
   chatgptWebProfileDir: z.string().trim().optional(),
   chatgptWebTimeoutMs: z.number().int().min(10_000).max(900_000).optional(),
+  reviewDiffChunkBudget: z.number().int().min(2_000).max(100_000).optional(),
   codingAgentId: z.string().trim().min(1).optional(),
-  maxAttempts: z.number().int().min(1).max(30).optional(),
+  maxAttempts: z.number().int().min(1).optional(),
 });
 
 async function settingsView() {
@@ -36,6 +37,7 @@ async function settingsView() {
       timeoutMs: s.chatgptWebTimeoutMs,
       browserState: BrowserManager.getShared().getState(),
     },
+    reviewDiffChunkBudget: s.reviewDiffChunkBudget,
     codingAgentId: agents.some((a) => a.id === s.codingAgentId) ? s.codingAgentId : "builtin",
     codingAgents: agents,
     maxAttempts: s.maxAttempts,

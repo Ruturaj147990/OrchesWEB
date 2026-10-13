@@ -105,6 +105,7 @@ export class BrowserManager {
         args: launchArgs,
         timeout: this.timeoutMs,
         executablePath: this.executablePath || undefined,
+        permissions: ["clipboard-read", "clipboard-write"],
       });
 
       // Find an existing tab or open a dedicated tab

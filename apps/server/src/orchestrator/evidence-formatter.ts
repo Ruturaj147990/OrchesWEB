@@ -21,11 +21,78 @@ export function calculateDiffCharBudget(contextWindowTokens = 32_768): number {
 
 export const DEFAULT_MAX_DIFF_CHARS = calculateDiffCharBudget();
 
+export const CHATGPT_WEB_SAFE_DIFF_CHUNK_CHARS = 24_000;
+
 export interface ReviewDiffChunk {
+  chunkId: string;
   chunkIndex: number;
   totalChunks: number;
   files: string[];
+  lineRangeDesc?: string;
   formattedEvidence: string;
+}
+
+export interface ChunkCoverageRecord {
+  chunkId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  files: string[];
+  lineRangeDesc?: string;
+  submitted: boolean;
+  usableAssessment: boolean;
+  verdict?: "accept" | "repair" | "blocked";
+  findings: Array<{ severity: string; message: string }>;
+  unresolvedIssues: string[];
+  error?: string;
+}
+
+export interface ReviewCoverageLedger {
+  manifest: Array<{ path: string; kind: string; additions?: number; deletions?: number }>;
+  allFiles: string[];
+  chunks: ChunkCoverageRecord[];
+  isComplete(): boolean;
+  unreviewedFiles(): string[];
+  failedChunks(): ChunkCoverageRecord[];
+}
+
+export function createCoverageLedger(
+  changes: Array<{ path: string; kind: string; additions?: number; deletions?: number }>,
+  chunks: ReviewDiffChunk[]
+): ReviewCoverageLedger {
+  const allFiles = changes.map((c) => c.path);
+  const records: ChunkCoverageRecord[] = chunks.map((ch) => ({
+    chunkId: ch.chunkId,
+    chunkIndex: ch.chunkIndex,
+    totalChunks: ch.totalChunks,
+    files: [...ch.files],
+    lineRangeDesc: ch.lineRangeDesc,
+    submitted: false,
+    usableAssessment: false,
+    findings: [],
+    unresolvedIssues: [],
+  }));
+
+  return {
+    manifest: [...changes],
+    allFiles,
+    chunks: records,
+    isComplete() {
+      if (this.chunks.length === 0) return true;
+      return this.chunks.every((c) => c.submitted && c.usableAssessment && !c.error);
+    },
+    unreviewedFiles() {
+      const reviewed = new Set<string>();
+      for (const c of this.chunks) {
+        if (c.submitted && c.usableAssessment && !c.error) {
+          for (const f of c.files) reviewed.add(f);
+        }
+      }
+      return this.allFiles.filter((f) => !reviewed.has(f));
+    },
+    failedChunks() {
+      return this.chunks.filter((c) => !c.submitted || !c.usableAssessment || !!c.error);
+    },
+  };
 }
 
 /**
@@ -81,14 +148,6 @@ export function formatDiffEvidence(
       includedChunks.push(chunk.text);
       filesIncluded.push(chunk.path);
       currentBudget -= chunk.text.length;
-    } else if (currentBudget > 800 && filesIncluded.length === 0) {
-      // If even the first file exceeds budget, include bounded excerpt of it
-      const boundedLines = chunk.text.slice(0, currentBudget).split("\n");
-      boundedLines.pop(); // avoid broken last line
-      const boundedText = `${boundedLines.join("\n")}\n\n[Diff for ${chunk.path} truncated at context budget — remaining lines omitted for review]`;
-      includedChunks.push(boundedText);
-      filesIncluded.push(chunk.path);
-      currentBudget = 0;
     } else {
       filesOmitted.push(chunk.path);
     }
@@ -117,72 +176,9 @@ export function formatDiffEvidence(
 }
 
 /**
- * Splits diff into multi-chunk review packages when total diff exceeds single-turn budget.
- */
-export function splitDiffIntoReviewChunks(
-  changes: Array<{ path: string; kind: string; additions?: number; deletions?: number }>,
-  diffText: string,
-  maxCharsPerChunk = DEFAULT_MAX_DIFF_CHARS
-): ReviewDiffChunk[] {
-  const fileChunks = splitDiffByFiles(diffText);
-  if (fileChunks.length === 0) {
-    return [{
-      chunkIndex: 1,
-      totalChunks: 1,
-      files: [],
-      formattedEvidence: formatDiffEvidence(changes, diffText, maxCharsPerChunk).formattedText,
-    }];
-  }
-
-  const manifestHeader = [
-    "COMPLETE CHANGED FILES MANIFEST:",
-    ...changes.map(
-      (c) =>
-        `- ${c.path} (${c.kind}${c.additions !== undefined && c.deletions !== undefined ? `, +${c.additions}/-${c.deletions}` : ""})`
-    ),
-    "",
-  ].join("\n");
-
-  const chunks: Array<{ files: string[]; diffText: string }> = [];
-  let currentFiles: string[] = [];
-  let currentDiffs: string[] = [];
-  let currentSize = manifestHeader.length + 500;
-
-  for (const fc of fileChunks) {
-    if (currentDiffs.length > 0 && currentSize + fc.text.length > maxCharsPerChunk) {
-      chunks.push({ files: [...currentFiles], diffText: currentDiffs.join("\n\n") });
-      currentFiles = [fc.path];
-      currentDiffs = [fc.text];
-      currentSize = manifestHeader.length + 500 + fc.text.length;
-    } else {
-      currentFiles.push(fc.path);
-      currentDiffs.push(fc.text);
-      currentSize += fc.text.length;
-    }
-  }
-
-  if (currentDiffs.length > 0) {
-    chunks.push({ files: [...currentFiles], diffText: currentDiffs.join("\n\n") });
-  }
-
-  return chunks.map((c, idx) => ({
-    chunkIndex: idx + 1,
-    totalChunks: chunks.length,
-    files: c.files,
-    formattedEvidence: [
-      `DIFF STATUS: CHUNKED REVIEW (Part ${idx + 1} of ${chunks.length}: files ${c.files.join(", ")})`,
-      "",
-      manifestHeader,
-      `INCLUDED DIFFS FOR CHUNK ${idx + 1} OF ${chunks.length}:`,
-      c.diffText,
-    ].join("\n"),
-  }));
-}
-
-/**
  * Splits unified diff text into individual file chunks.
  */
-function splitDiffByFiles(diffText: string): Array<{ path: string; text: string }> {
+export function splitDiffByFiles(diffText: string): Array<{ path: string; text: string }> {
   const lines = diffText.split("\n");
   const chunks: Array<{ path: string; text: string }> = [];
 
@@ -211,6 +207,174 @@ function splitDiffByFiles(diffText: string): Array<{ path: string; text: string 
   }
 
   return chunks.length > 0 ? chunks : [{ path: "changes", text: diffText }];
+}
+
+/**
+ * Splits a single oversized file diff into ordered logical hunk / line-range subchunks.
+ * Preserves 100% of diff lines without loss or truncation.
+ */
+export function splitSingleFileDiffIntoSubchunks(
+  filePath: string,
+  fileDiffText: string,
+  maxChars: number
+): Array<{ path: string; text: string; lineRangeDesc: string }> {
+  if (fileDiffText.length <= maxChars) {
+    return [{ path: filePath, text: fileDiffText, lineRangeDesc: "all lines" }];
+  }
+
+  const lines = fileDiffText.split("\n");
+  const headerLines: string[] = [];
+  const bodyLines: string[] = [];
+
+  let inHeader = true;
+  for (const line of lines) {
+    if (inHeader && (line.startsWith("diff --git ") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file mode ") || line.startsWith("deleted file mode "))) {
+      headerLines.push(line);
+    } else {
+      inHeader = false;
+      bodyLines.push(line);
+    }
+  }
+
+  const fileHeader = headerLines.join("\n");
+  const subchunks: Array<{ path: string; text: string; lineRangeDesc: string }> = [];
+  let currentHunkLines: string[] = [];
+  let startLineNum = 1;
+  let currentLineCount = 0;
+
+  const headerReserve = fileHeader ? fileHeader.length + 200 : 200;
+  const effectiveBudget = Math.max(2_000, maxChars - headerReserve);
+
+  const flush = () => {
+    if (currentHunkLines.length === 0) return;
+    const endLineNum = startLineNum + currentLineCount - 1;
+    const rangeDesc = `lines ${startLineNum}-${endLineNum}`;
+    const chunkBody = currentHunkLines.join("\n");
+    const fullText = fileHeader
+      ? `${fileHeader}\n[File ${filePath} (Section ${rangeDesc})]:\n${chunkBody}`
+      : `[File ${filePath} (Section ${rangeDesc})]:\n${chunkBody}`;
+    subchunks.push({ path: filePath, text: fullText, lineRangeDesc: rangeDesc });
+    startLineNum = endLineNum + 1;
+    currentHunkLines = [];
+    currentLineCount = 0;
+  };
+
+  for (const line of bodyLines) {
+    const isHunkHeader = line.startsWith("@@ ");
+    const wouldExceed = currentHunkLines.join("\n").length + line.length + 1 > effectiveBudget;
+
+    if (wouldExceed && currentHunkLines.length > 0) {
+      flush();
+    }
+    currentHunkLines.push(line);
+    currentLineCount++;
+  }
+
+  flush();
+  return subchunks.length > 0 ? subchunks : [{ path: filePath, text: fileDiffText, lineRangeDesc: "all lines" }];
+}
+
+/**
+ * Splits diff into multi-chunk review packages when total diff exceeds single-turn budget.
+ * Handles both multi-file diffs and oversized individual files by splitting into ordered subchunks.
+ * Guarantees zero evidence reduction, zero file omissions, and full coverage ledger support.
+ */
+export function splitDiffIntoReviewChunks(
+  changes: Array<{ path: string; kind: string; additions?: number; deletions?: number }>,
+  diffText: string,
+  maxCharsPerChunk = CHATGPT_WEB_SAFE_DIFF_CHUNK_CHARS,
+  reviewId = "rev"
+): ReviewDiffChunk[] {
+  const fileChunks = splitDiffByFiles(diffText);
+  if (fileChunks.length === 0 || !diffText.trim()) {
+    return [{
+      chunkId: `${reviewId}-c1`,
+      chunkIndex: 1,
+      totalChunks: 1,
+      files: [],
+      formattedEvidence: formatDiffEvidence(changes, diffText, maxCharsPerChunk).formattedText,
+    }];
+  }
+
+  const manifestHeader = [
+    "COMPLETE CHANGED FILES MANIFEST:",
+    ...changes.map(
+      (c) =>
+        `- ${c.path} (${c.kind}${c.additions !== undefined && c.deletions !== undefined ? `, +${c.additions}/-${c.deletions}` : ""})`
+    ),
+    "",
+  ].join("\n");
+
+  const headerOverhead = manifestHeader.length + 400;
+  // Ensure at least 65% of maxCharsPerChunk is dedicated to diff content rather than header overhead
+  const effectiveMaxChunk = Math.max(6_000, maxCharsPerChunk - Math.min(headerOverhead, Math.floor(maxCharsPerChunk * 0.35)));
+
+  // Expand any oversized files into subchunks
+  const atomicChunks: Array<{ path: string; text: string; lineRangeDesc?: string }> = [];
+  for (const fc of fileChunks) {
+    if (fc.text.length > effectiveMaxChunk) {
+      const sub = splitSingleFileDiffIntoSubchunks(fc.path, fc.text, effectiveMaxChunk);
+      atomicChunks.push(...sub);
+    } else {
+      atomicChunks.push(fc);
+    }
+  }
+
+  const intermediatePackages: Array<{ files: string[]; diffText: string; lineRangeDesc?: string }> = [];
+  let currentFiles: string[] = [];
+  let currentDiffs: string[] = [];
+  let currentSize = 0;
+  let currentRanges: string[] = [];
+
+  for (const item of atomicChunks) {
+    const itemSize = item.text.length + 10;
+    if (currentDiffs.length > 0 && currentSize + itemSize > effectiveMaxChunk) {
+      intermediatePackages.push({
+        files: [...new Set(currentFiles)],
+        diffText: currentDiffs.join("\n\n"),
+        lineRangeDesc: currentRanges.filter(Boolean).join("; ") || undefined,
+      });
+      currentFiles = [item.path];
+      currentDiffs = [item.text];
+      currentRanges = item.lineRangeDesc ? [item.lineRangeDesc] : [];
+      currentSize = itemSize;
+    } else {
+      currentFiles.push(item.path);
+      currentDiffs.push(item.text);
+      if (item.lineRangeDesc) currentRanges.push(item.lineRangeDesc);
+      currentSize += itemSize;
+    }
+  }
+
+  if (currentDiffs.length > 0) {
+    intermediatePackages.push({
+      files: [...new Set(currentFiles)],
+      diffText: currentDiffs.join("\n\n"),
+      lineRangeDesc: currentRanges.filter(Boolean).join("; ") || undefined,
+    });
+  }
+
+  const totalChunks = intermediatePackages.length;
+
+  return intermediatePackages.map((pkg, idx) => {
+    const chunkNum = idx + 1;
+    const chunkId = `${reviewId}-c${chunkNum}`;
+    const rangeNote = pkg.lineRangeDesc ? ` (Sections: ${pkg.lineRangeDesc})` : "";
+    return {
+      chunkId,
+      chunkIndex: chunkNum,
+      totalChunks,
+      files: pkg.files,
+      lineRangeDesc: pkg.lineRangeDesc,
+      formattedEvidence: [
+        `DIFF STATUS: CHUNKED REVIEW (Part ${chunkNum} of ${totalChunks}: files ${pkg.files.join(", ")}${rangeNote})`,
+        "",
+        manifestHeader,
+        `INCLUDED DIFF EVIDENCE FOR CHUNK ${chunkNum} OF ${totalChunks}:`,
+        pkg.diffText,
+      ].join("\n"),
+    };
+  });
 }
 
 /**
