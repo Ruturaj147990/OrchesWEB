@@ -3,6 +3,7 @@ import { SELECTORS } from "./selectors.js";
 import type { PreSubmissionState } from "./prompt-sender.js";
 import { PromptSender } from "./prompt-sender.js";
 import { BrowserStateMachine } from "./state-machine.js";
+import { AuthDetector } from "./auth-detector.js";
 import { extractJsonFromText } from "../../../prompts/json-extractor.js";
 import { isTaskDescriptor, isThoughtOrStatusFragment } from "../../../prompts/instruction-validator.js";
 import {
@@ -78,6 +79,19 @@ export class ResponseReader {
   }
 
   /**
+   * Checks whether the given text is an Orches project workspace initialization acknowledgment or echo.
+   */
+  public static isWorkspaceInitializationEcho(text: string): boolean {
+    const trimmed = (text || "").trim();
+    if (!trimmed) return false;
+    return (
+      trimmed.includes("[ORCHES PROJECT:") ||
+      trimmed.includes("Reasoning workspace initialized") ||
+      trimmed.includes("Initialize reasoning workspace")
+    );
+  }
+
+  /**
    * Checks whether a new, completed assistant response already exists in the conversation
    * compared to the pre-submission baseline.
    */
@@ -101,12 +115,13 @@ export class ResponseReader {
 
     if (!isNew) return null;
 
-    // Reject attachment-only clarification inquiries and thought fragments
+    // Reject attachment-only clarification inquiries, workspace initialization echoes, and thought fragments
     if (this.isAttachmentClarification(latestText)) return null;
+    if (this.isWorkspaceInitializationEcho(latestText)) return null;
     if (isThoughtOrStatusFragment(latestText)) return null;
 
-    // Short text (< 80 chars) without protocol markers is almost certainly an interim status or header
-    if (latestText.length < 80 && !latestText.includes(this.STATUS_LINE_PREFIX) && !latestText.includes(this.MARKER_START)) {
+    // Short text (< 30 chars) without protocol markers is almost certainly an interim status or header
+    if (latestText.length < 30 && !latestText.includes(this.STATUS_LINE_PREFIX) && !latestText.includes(this.MARKER_START)) {
       return null;
     }
 
@@ -157,8 +172,17 @@ export class ResponseReader {
         throw new Error(`ChatGPT Web requires authentication: ${discovery.diagnostic}`);
       }
       if (discovery.status === "challenge_required") {
-        options.stateMachine?.transition("FAILED_TERMINAL", discovery.diagnostic);
-        throw new Error(`ChatGPT Web verification challenge detected: ${discovery.diagnostic}`);
+        options.stateMachine?.transition("FAILED_RECOVERABLE", discovery.diagnostic);
+        console.warn(`[ResponseReader] Verification challenge detected (${discovery.diagnostic}). Waiting up to 60s for human/browser resolution...`);
+        const resolved = await AuthDetector.waitForAuth(page, {
+          timeoutMs: 60_000,
+          signal: options.signal,
+          onStatus: (st, msg) => console.log(`[ResponseReader] Challenge status: ${st} - ${msg}`),
+        }).catch(() => false);
+        if (!resolved) {
+          options.stateMachine?.transition("FAILED_TERMINAL", discovery.diagnostic);
+          throw new Error(`ChatGPT Web verification challenge detected: ${discovery.diagnostic}`);
+        }
       }
       if (discovery.status === "page_error") {
         options.stateMachine?.transition("FAILED_RECOVERABLE", discovery.diagnostic);
@@ -176,6 +200,14 @@ export class ResponseReader {
       if (currentTexts.length > 0) {
         domExtractionFailureCount = 0;
         const latestText = currentTexts[currentTexts.length - 1];
+
+        // 1. If this message is an Orches workspace initialization greeting, it belongs to thread setup,
+        // NOT to the new user prompt. Filter it out so we never treat it as the prompt's answer!
+        if (this.isWorkspaceInitializationEcho(latestText)) {
+          // If the only message is the workspace init echo, then no new response has started yet
+          await page.waitForTimeout(stabilizationInterval).catch(() => {});
+          continue;
+        }
 
         // Ensure this is not the stale baseline message
         const isNewMessage =
@@ -199,10 +231,10 @@ export class ResponseReader {
                   console.warn(
                     "[ResponseReader] Detected attachment query rather than task response; waiting for task answer."
                   );
-                } else if (isThoughtFragment || isShortWithoutProtocol) {
-                  // Do not treat interim thoughts or short status fragments as completed responses
+                } else if ((isThoughtFragment || isShortWithoutProtocol) && stableCount < 6) {
+                  // Give ChatGPT up to 6 seconds in case it paused mid-stream before outputting more tokens
                   console.log(
-                    `[ResponseReader] Observed stabilized interim text (${latestText.length} chars: "${latestText.slice(0, 40)}…"); waiting for full protocol response.`
+                    `[ResponseReader] Observed stabilized interim text (${latestText.length} chars: "${latestText.slice(0, 40)}…"); waiting briefly for full protocol response (${stableCount}/6).`
                   );
                 } else {
                   console.log(
@@ -237,6 +269,18 @@ export class ResponseReader {
         }
       }
 
+      // If generation hasn't started and no new message has appeared after 35 seconds of submission:
+      if (!generating && !lastObservedText && Date.now() - startTime > 35_000) {
+        const pageError = await page.evaluate(() => {
+          const banner = document.querySelector("[role='alert'], .text-token-text-error, div[class*='error']");
+          return banner ? (banner as HTMLElement).innerText?.trim() : null;
+        }).catch(() => null);
+        if (pageError) {
+          options.stateMachine?.transition("FAILED_RECOVERABLE", pageError);
+          throw new Error(`ChatGPT Web returned an error after submission: ${pageError}`);
+        }
+      }
+
       // Periodic logging every 10 seconds to provide visibility into polling
       if (Date.now() - lastLogTime >= 10_000) {
         lastLogTime = Date.now();
@@ -248,13 +292,13 @@ export class ResponseReader {
       await page.waitForTimeout(stabilizationInterval).catch(() => {});
     }
 
-    // Check if we captured substantive text that is not an attachment query or thought fragment
+    // Check if we captured substantive text that is not an attachment query or workspace initialization echo
     if (
       lastObservedText &&
-      lastObservedText.length > 100 &&
+      lastObservedText.length > 20 &&
       lastObservedText !== baseline.lastAssistantText &&
       !this.isAttachmentClarification(lastObservedText) &&
-      !isThoughtOrStatusFragment(lastObservedText)
+      !this.isWorkspaceInitializationEcho(lastObservedText)
     ) {
       console.warn("[ResponseReader] Generation timeout reached, but captured substantive response text.");
       options.stateMachine?.transition("RESPONSE_COMPLETE");

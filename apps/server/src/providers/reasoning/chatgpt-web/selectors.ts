@@ -116,7 +116,10 @@ export const SELECTORS = {
   // Challenge / CAPTCHA indicators
   challenge: [
     "iframe[src*='challenges.cloudflare.com']",
+    "iframe[src*='turnstile']",
     "#challenge-running",
+    "#cf-turnstile",
+    ".cf-turnstile",
     "text='Verify you are human'",
     "text='Checking your browser'",
     "text='Just a moment...'",

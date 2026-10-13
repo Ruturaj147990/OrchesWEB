@@ -28,7 +28,12 @@ export class PromptSender {
    * to guarantee stale responses are never accepted and new user message arrival can be verified.
    */
   public static async captureBaseline(page: Page): Promise<PreSubmissionState> {
-    const assistantTexts = await this.getAssistantMessageTexts(page);
+    let assistantTexts = await this.getAssistantMessageTexts(page);
+    // If on a dedicated conversation thread and texts are not yet rendered, allow brief hydration
+    if (assistantTexts.length === 0 && page.url().includes("/c/")) {
+      await page.waitForTimeout(1000).catch(() => {});
+      assistantTexts = await this.getAssistantMessageTexts(page);
+    }
     const assistantCount = assistantTexts.length;
     const lastAssistantText = assistantCount > 0 ? assistantTexts[assistantCount - 1] : "";
     const userCount = await this.getUserMessageCount(page);
@@ -88,6 +93,96 @@ export class PromptSender {
       return msgs.length;
     }).catch(() => 0);
     return countFromEval;
+  }
+
+  /**
+   * Retrieves all visible user message texts from the active conversation.
+   */
+  /**
+   * Retrieves all visible user message texts from the active conversation.
+   */
+  public static async getUserMessageTexts(page: Page): Promise<string[]> {
+    const res = await page.evaluate(() => {
+      const texts: string[] = [];
+
+      // Strategy 1: Elements with user markdown attribute
+      const userNodes = Array.from(
+        document.querySelectorAll("[data-markdown-text-style='user-message'], div.group\\/user-message, [data-chatgpt-search-unit-key*='user'], [data-message-author-role='user']")
+      );
+      if (userNodes.length > 0) {
+        for (const el of userNodes) {
+          const t = (el as HTMLElement).innerText?.trim();
+          if (t) texts.push(t);
+        }
+        if (texts.length > 0) return texts;
+      }
+
+      // Strategy 2: User semantic headers ("You said:")
+      const userHeaders = Array.from(document.querySelectorAll("h4, h5, h6, [data-conversation-role='user']")).filter(
+        (h) => h.getAttribute("data-conversation-role") === "user" || (h.textContent || "").includes("You said:")
+      );
+      for (const h of userHeaders) {
+        let container: HTMLElement | null = h.parentElement;
+        while (container && container !== document.body) {
+          if (container.classList.contains("block-BQZwFn") || Array.from(container.classList).some((c) => c.startsWith("block-"))) {
+            break;
+          }
+          container = container.parentElement;
+        }
+        if (!container) container = h.parentElement;
+        if (container) {
+          const clone = container.cloneNode(true) as HTMLElement;
+          clone.querySelectorAll("h4, h5, h6, button, svg").forEach((n) => n.remove());
+          const t = clone.innerText?.trim();
+          if (t) texts.push(t);
+        }
+      }
+      return texts;
+    }).catch(() => []);
+
+    return Array.isArray(res) ? res.filter((t): t is string => typeof t === "string") : [];
+  }
+
+  /**
+   * Reconciles whether the current prompt was already submitted into ChatGPT Web prior to a crash.
+   * Compares prompt prefix / signature against existing user messages and generation state.
+   */
+  public static async reconcileExistingUserSubmission(
+    page: Page,
+    promptText: string
+  ): Promise<{ alreadySubmitted: boolean; isGenerating: boolean; diagnostic?: string }> {
+    const trimmedPrompt = (promptText || "").trim();
+    if (!trimmedPrompt) {
+      return { alreadySubmitted: false, isGenerating: false };
+    }
+
+    const isGenerating = await this.isGenerating(page);
+    const userTexts = await this.getUserMessageTexts(page);
+
+    if (Array.isArray(userTexts) && userTexts.length > 0) {
+      const latestUserText = (userTexts[userTexts.length - 1] || "").trim();
+
+      // Normalized comparison: compare first 300 chars or prefix signature
+      const promptSnippet = trimmedPrompt.slice(0, 300).replace(/\s+/g, " ").trim();
+      const userSnippet = latestUserText.slice(0, 300).replace(/\s+/g, " ").trim();
+
+      const exactOrPrefixMatch =
+        latestUserText === trimmedPrompt ||
+        latestUserText.startsWith(promptSnippet) ||
+        trimmedPrompt.startsWith(userSnippet) ||
+        (userSnippet.length > 40 && promptSnippet.includes(userSnippet)) ||
+        (promptSnippet.length > 40 && userSnippet.includes(promptSnippet));
+
+      if (exactOrPrefixMatch) {
+        return {
+          alreadySubmitted: true,
+          isGenerating,
+          diagnostic: `Matched existing user message in thread (user turns=${userTexts.length}, generating=${isGenerating})`,
+        };
+      }
+    }
+
+    return { alreadySubmitted: false, isGenerating };
   }
 
   /**
@@ -494,7 +589,9 @@ export class PromptSender {
     // 5. Bounded, validated DOM-evaluation fallback across modern and classic ChatGPT layouts
     const evalResult = await page.evaluate(() => {
       try {
-        const isChallenge = !!document.querySelector("iframe[src*='challenges.cloudflare.com'], #challenge-running");
+        const isChallenge = !!document.querySelector(
+          "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], #challenge-running, #cf-turnstile, .cf-turnstile, div[class*='turnstile']"
+        );
         if (isChallenge) return { texts: [], status: "challenge_required" as const, diagnostic: "Cloudflare challenge detected" };
 
         const isLogin = !!document.querySelector("a[href*='/auth/login'], button[data-testid='login-button']");

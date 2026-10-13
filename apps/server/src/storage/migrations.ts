@@ -191,5 +191,33 @@ export function runMigrations(db: DatabaseSync): void {
     `);
     mark("0006_chatgpt_web_and_source_manifest");
   }
+
+  if (!applied("0007_idempotent_operations")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS idempotent_operations (
+        idempotency_key TEXT PRIMARY KEY,
+        project_id TEXT,
+        run_id TEXT,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        stage TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'prepared',
+        response_text TEXT,
+        parsed_json TEXT,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_idempotent_ops_run_id ON idempotent_operations(run_id);
+      CREATE INDEX IF NOT EXISTS idx_idempotent_ops_status ON idempotent_operations(status);
+    `);
+    mark("0007_idempotent_operations");
+  }
 }
 

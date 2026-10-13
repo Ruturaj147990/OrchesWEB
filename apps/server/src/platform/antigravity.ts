@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { runCommand } from "./process-runner.js";
 import { getBridgeStatus } from "./antigravity-agent.js";
@@ -29,15 +30,16 @@ function samePath(a: string, b: string): boolean {
 }
 
 export function findAntigravityCli(): string | null {
+  const home = os.homedir();
   const candidates =
     process.platform === "win32"
       ? [
-          path.join(process.env.LOCALAPPDATA || "", "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-          path.join(process.env.ProgramFiles || "", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-          path.join(process.env["ProgramFiles(x86)"] || "", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+          path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+          path.join(process.env.ProgramFiles || "C:\\Program Files", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+          path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
         ]
       : [
-          path.join(process.env.HOME || "", ".local", "bin", "antigravity-ide"),
+          path.join(home, ".local", "bin", "antigravity-ide"),
           "/usr/local/bin/antigravity-ide",
           "/usr/bin/antigravity-ide",
           "/snap/bin/antigravity-ide",
@@ -56,7 +58,10 @@ function fileUriToPath(uri: string): string | null {
 }
 
 export function readOpenFolders(storageDir?: string): string[] {
-  const appData = process.env.APPDATA || path.join(process.env.HOME || "", ".config");
+  const appData =
+    process.platform === "win32"
+      ? (process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"))
+      : (process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"));
   const file = path.join(storageDir ?? path.join(appData, "Antigravity IDE", "User"), "globalStorage", "storage.json");
   try {
     const data = JSON.parse(fs.readFileSync(file, "utf8")) as {

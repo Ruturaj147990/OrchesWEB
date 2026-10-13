@@ -15,6 +15,7 @@ import {
   parseReviewProtocol,
   isSubstantiveReviewCommentary,
   buildProtocolRecoveryPrompt,
+  buildContradictoryVerdictRecoveryPrompt,
   type ParsedReview,
   type ParsedReviewCriterion,
   type ParsedReviewFinding,
@@ -320,7 +321,12 @@ export function normalizeCriticJson(raw: unknown): Omit<CriticOutcome, "availabl
 async function executeSingleReview(
   provider: ReasoningProvider,
   prompt: string,
-  input: ReviewAttemptInput
+  input: ReviewAttemptInput,
+  options: {
+    chunkIndex?: number;
+    totalChunks?: number;
+    operationId?: string;
+  } = {}
 ): Promise<CriticOutcome> {
   let lastError = "";
   const conversationMessages: Array<{ role: "user" | "assistant"; content: string }> = [
@@ -332,6 +338,10 @@ async function executeSingleReview(
       const response = await provider.generate(
         {
           operation: "result_review",
+          operationId: options.operationId || "result_review",
+          attempt: input.iteration ?? input.taskContext?.iteration ?? 1,
+          stage: input.auditStage ? "audit" : "implementation",
+          chunkIdentity: options.chunkIndex ? { chunkIndex: options.chunkIndex, totalChunks: options.totalChunks ?? 1 } : undefined,
           systemInstruction: REVIEWER_SYSTEM,
           messages: [...conversationMessages],
           json: false, // MANDATORY: ChatGPT Web must never be told to produce JSON-only responses
@@ -367,10 +377,16 @@ async function executeSingleReview(
         };
       }
 
-      // Protocol missing or malformed: Check if model produced substantive review commentary
-      if (isSubstantiveReviewCommentary(response.text) && attempt === 1 && !input.signal?.aborted) {
-        console.log("[critic] GPT-Web returned substantive commentary without protocol header. Initiating protocol recovery...");
-        const recoveryPrompt = buildProtocolRecoveryPrompt(response.text);
+      // Protocol recovery: Handle either missing protocol delimiters OR contradictory review verdicts
+      const isContradictory = parsedReview.validationError && parsedReview.validationError.includes("Contradictory review:");
+      const needsRecovery = (isContradictory || isSubstantiveReviewCommentary(response.text)) && attempt === 1 && !input.signal?.aborted;
+
+      if (needsRecovery) {
+        const recoveryReason = isContradictory ? "contradictory verdict" : "missing protocol header";
+        console.log(`[critic] GPT-Web returned ${recoveryReason}. Initiating protocol recovery...`);
+        const recoveryPrompt = isContradictory
+          ? buildContradictoryVerdictRecoveryPrompt(response.text, parsedReview.validationError || "")
+          : buildProtocolRecoveryPrompt(response.text);
         conversationMessages.push({ role: "assistant", content: response.text });
         conversationMessages.push({ role: "user", content: recoveryPrompt });
 
@@ -492,7 +508,11 @@ export async function reviewAttempt(
       maxDiffChars: diffBudget,
     });
 
-    let chunkResult = await executeSingleReview(provider, chunkPrompt, input);
+    let chunkResult = await executeSingleReview(provider, chunkPrompt, input, {
+      chunkIndex: chunk.chunkIndex,
+      totalChunks: chunk.totalChunks,
+      operationId: `chunk_review_${chunk.chunkIndex}`,
+    });
 
     // Retry further splitting if this specific chunk triggers a size error
     const isChunkTooLong = chunkResult.error && (
@@ -627,7 +647,9 @@ export async function reviewAttempt(
     ].join("\n");
 
     try {
-      const synthesisResult = await executeSingleReview(provider, crossFileSynthesisPrompt, input);
+      const synthesisResult = await executeSingleReview(provider, crossFileSynthesisPrompt, input, {
+        operationId: "cross_file_synthesis",
+      });
       if (synthesisResult.available) {
         // Merge synthesis criteria & findings
         for (const c of synthesisResult.criteria) {
@@ -654,8 +676,16 @@ export async function reviewAttempt(
   const hasFailedCriterion = allCriteria.some((c) => c.status === "failed");
   const hasUnverifiedCriterion = allCriteria.some((c) => c.status === "unverified");
   const hasCriticalFinding = aggregatedFindings.some((f) => f.severity === "high" || f.severity === "critical");
+  const hasRepairs = aggregatedRepairs.size > 0;
+  const anyChunkSummaryDemandsChanges = summaries.some((s) =>
+    /before (?:it can be accepted|acceptance|accepting)/i.test(s) ||
+    /cannot be accepted/i.test(s) ||
+    /remains (?:unmet|failed)/i.test(s) ||
+    /must (?:be reduced|be removed|be fixed|remove|fix) before/i.test(s) ||
+    /fundamental (?:defect|violation)/i.test(s)
+  );
 
-  const verdict = (hasFailedCriterion || hasCriticalFinding)
+  const verdict = (hasFailedCriterion || hasCriticalFinding || hasRepairs || anyChunkSummaryDemandsChanges)
     ? "repair"
     : hasUnverifiedCriterion
       ? "repair"

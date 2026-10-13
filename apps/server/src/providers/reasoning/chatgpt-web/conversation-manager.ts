@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { DatabaseSync } from "node:sqlite";
 import { ProjectChatGptRepository } from "../../../storage/repositories/project-chatgpt-repository.js";
 import { SELECTORS } from "./selectors.js";
+import { PromptSender } from "./prompt-sender.js";
 
 export interface ProjectConversationInfo {
   projectId: string;
@@ -59,6 +60,7 @@ export class ConversationManager {
       // Verify that the conversation loaded and the composer is available
       const composerReady = await this.waitForComposer(page, 15_000);
       if (composerReady) {
+        await page.waitForTimeout(1000).catch(() => {});
         this.repo.updateStatus(project.projectId, {
           lastVerifiedAt: now,
           mappingStatus: "active",
@@ -98,6 +100,10 @@ export class ConversationManager {
       }
       await page.waitForTimeout(1000).catch(() => {});
     }
+
+    // Ensure initialization reply is fully generated so composer is idle and ready for subsequent prompts
+    await PromptSender.waitForGenerationToFinish(page, 30_000, options.signal).catch(() => {});
+    await this.waitForComposer(page, 15_000).catch(() => {});
 
     if (!newUrl.includes("/c/")) {
       console.warn(

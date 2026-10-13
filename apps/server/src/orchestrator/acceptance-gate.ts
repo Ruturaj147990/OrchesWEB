@@ -113,6 +113,19 @@ export function evaluateAttempt(input: GateInput): GateDecision {
         : []),
       ...critic.findings.filter((f) => f.severity === "high" || f.severity === "critical").map((f) => `${f.severity} issue — ${f.message}`),
     ];
+
+    // Check if critic summary contains explicit statements that changes/removal are required before acceptance
+    const summaryContradicts = critic.summary && (
+      /before (?:it can be accepted|acceptance|accepting)/i.test(critic.summary) ||
+      /cannot be accepted/i.test(critic.summary) ||
+      /remains (?:unmet|failed)/i.test(critic.summary) ||
+      /must (?:be reduced|be removed|be fixed|remove|fix) before/i.test(critic.summary) ||
+      /fundamental (?:defect|violation)/i.test(critic.summary)
+    );
+    if (summaryContradicts) {
+      concrete.push(`summary requires changes before acceptance — ${critic.summary}`);
+    }
+
     if (concrete.length > 0) {
       for (const c of concrete) blockers.push(`Critic: ${c}`);
     } else if (critic.verdict === "accept" && (!critic.coverageLedger || critic.coverageLedger.isComplete())) {

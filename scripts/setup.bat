@@ -21,7 +21,12 @@ if %NODE_MAJOR% LSS 22 (
     exit /b 1
 )
 
-echo Node.js version OK.
+if %NODE_MAJOR% EQU 22 if %NODE_MINOR% LSS 5 (
+    echo [ERROR] Node.js version is v%NODE_MAJOR%.%NODE_MINOR%. Orches requires Node.js >= 22.5.0.
+    exit /b 1
+)
+
+echo Node.js version OK (v%NODE_MAJOR%.%NODE_MINOR%).
 
 echo [2/4] Installing project dependencies...
 call npm install

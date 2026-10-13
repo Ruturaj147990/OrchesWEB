@@ -774,6 +774,9 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
   let response = await provider.generate(
     {
       operation,
+      operationId: operation,
+      attempt: ctx.iteration,
+      stage: ctx.stage || (ctx.iteration === 1 ? "implementation" : "repair"),
       systemInstruction: SYSTEM,
       messages: [{ role: "user", content: prompt }],
       json: false,
@@ -849,7 +852,7 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
 
   let candidateInstruction = rawInstruction;
   let source: "model" | "fallback" = "model";
-  let warning: string | undefined;
+  let warning: string | undefined = response.warnings?.length ? response.warnings.join("; ") : undefined;
 
   // Quality Gate: Check if the model emitted a meta-instruction, task descriptor, thought fragment, or under-specified brief
   const isTargetedStage = ctx.stage === "audit" || ctx.stage === "audit_remediation" || ctx.iteration > 1;
@@ -983,7 +986,7 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
   ) {
     source = "fallback";
     const fragmentSnippet = (rawInstruction || response.text || "").trim().slice(0, 90);
-    warning = currentThought
+    const fallbackWarning = currentThought
       ? `The reasoning model returned an interim thought fragment or status update ("${fragmentSnippet}…"); the orchestrator synthesized a comprehensive, substantive engineering brief from the project specification and requirement inventory.`
       : isDescriptor
         ? "The reasoning model returned an internal task-planning descriptor rather than a substantive engineering instruction; the orchestrator synthesized a comprehensive engineering brief directly."
@@ -994,6 +997,7 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
             : extracted.validationError
               ? `The reasoning model's response did not adhere to the natural-language protocol (${extracted.validationError}); the orchestrator synthesized a comprehensive engineering brief directly.`
               : "The reasoning model did not produce a usable natural-language instruction; the orchestrator synthesized a comprehensive engineering brief directly.";
+    warning = warning ? `${warning}; ${fallbackWarning}` : fallbackWarning;
 
     candidateInstruction = ctx.iteration > 1
       ? synthesizeRepairBrief(ctx, inventory)

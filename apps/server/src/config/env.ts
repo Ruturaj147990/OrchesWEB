@@ -16,13 +16,23 @@ export interface AppConfig {
 /** Repository root of this orchestrator installation (src/ and dist/ are both three levels deep). */
 export const ORCHESTRATOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
-const defaultDataDir = path.join(
-  process.env.APPDATA ||
-    (process.platform === "darwin"
-      ? path.join(os.homedir(), "Library", "Application Support")
-      : (process.env.XDG_DATA_HOME || path.join(os.homedir(), ".config"))),
-  "AutonomousDevOrchestrator"
-);
+function getDefaultDataDir(): string {
+  if (process.platform === "win32") {
+    return path.join(
+      process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"),
+      "AutonomousDevOrchestrator"
+    );
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "AutonomousDevOrchestrator");
+  }
+  return path.join(
+    process.env.XDG_CONFIG_HOME || process.env.XDG_DATA_HOME || path.join(os.homedir(), ".config"),
+    "AutonomousDevOrchestrator"
+  );
+}
+
+const defaultDataDir = getDefaultDataDir();
 
 export const config: AppConfig = {
   host: process.env.ORCHESTRATOR_HOST || "127.0.0.1",

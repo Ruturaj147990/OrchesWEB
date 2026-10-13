@@ -206,6 +206,22 @@ export function parseReviewProtocol(
         validationError: `Contradictory review: Verdict is ACCEPT but actionable repair instructions were provided: ${repairInstructions.join("; ")}`,
       };
     }
+
+    // Semantic Contradiction Detection: Check if summary or substantive review commentary
+    // explicitly declares unmet criteria, required changes before acceptance, or fundamental defects.
+    const contradiction = detectAcceptContradiction(summary, reviewBody, criteria, findings);
+    if (contradiction) {
+      return {
+        status: "INVALID",
+        verdict: "repair",
+        criteria,
+        findings,
+        repairInstructions,
+        summary,
+        rawText: clean,
+        validationError: `Contradictory review: Verdict is ACCEPT but substantive review states: ${contradiction}`,
+      };
+    }
   }
 
   return {
@@ -427,4 +443,118 @@ export function buildProtocolRecoveryPrompt(previousResponseText: string): strin
     "",
     "[/ORCHES_REVIEW]",
   ].join("\n");
+}
+
+/**
+ * Builds a focused protocol recovery prompt when GPT-Web returned ORCHES_REVIEW_STATUS: ACCEPT,
+ * but its summary or body substantively stated that acceptance criteria are unmet or changes are required.
+ */
+export function buildContradictoryVerdictRecoveryPrompt(
+  rawResponseText: string,
+  contradictionReason: string
+): string {
+  const excerpt = rawResponseText.trim().slice(0, 4_000);
+  return [
+    "PROTOCOL CONSISTENCY RECOVERY NOTICE:",
+    `Your review indicated an 'ACCEPT' verdict, but your substantive review assessment explicitly noted that changes or unmet requirements remain:`,
+    `"${contradictionReason}"`,
+    "",
+    "Under Orches review protocol, an ACCEPT verdict cannot contradict your own substantive findings or acceptance criteria status.",
+    "Please reconcile your review verdict with your substantive assessment below.",
+    "If requirements or criteria remain unmet, or changes are required before acceptance, the verdict MUST be REPAIR.",
+    "If the implementation is genuinely complete and acceptable as-is, your summary must reflect that.",
+    "",
+    "--- YOUR PREVIOUS ASSESSMENT EXCERPT ---",
+    excerpt,
+    "--- END OF PREVIOUS ASSESSMENT ---",
+    "",
+    "Return a reconciled, consistent response using this EXACT format (select ACCEPT, REPAIR, or BLOCKED):",
+    "",
+    "ORCHES_REVIEW_STATUS: <ACCEPT | REPAIR | BLOCKED>",
+    "",
+    "[ORCHES_REVIEW]",
+    "",
+    "## Verdict",
+    "<ACCEPT | REPAIR | BLOCKED>",
+    "",
+    "## Acceptance Criteria",
+    "- AC-1 — <passed | failed | unverified> — <evidence from diff>",
+    "",
+    "## Findings",
+    "- <Severity (low|medium|high|critical)>, <concrete issue>, <affected component>",
+    "",
+    "## Repair Instructions",
+    "- <Specific actionable fix supported by your assessment, or (none) if ACCEPT>",
+    "",
+    "## Summary",
+    "<Reconciled one sentence summarizing the review decision>",
+    "",
+    "[/ORCHES_REVIEW]",
+  ].join("\n");
+}
+
+/**
+ * Detects whether an ACCEPT verdict contradicts the substantive text in the summary or review body.
+ * Distinguishes genuine defects / unmet requirements from benign historical remarks or suggestions.
+ */
+export function detectAcceptContradiction(
+  summary: string,
+  reviewBody: string,
+  criteria: ParsedReviewCriterion[],
+  findings: ParsedReviewFinding[]
+): string | null {
+  // Check criteria reasons for unmet/failed statements even if status was labeled 'passed'
+  for (const c of criteria) {
+    const reasonLower = (c.reason || "").toLowerCase();
+    if (
+      reasonLower.includes("unmet") ||
+      reasonLower.includes("not met") ||
+      reasonLower.includes("remains unmet") ||
+      reasonLower.includes("remains failed") ||
+      reasonLower.includes("criterion failed") ||
+      reasonLower.includes("does not satisfy") ||
+      reasonLower.includes("must be removed before") ||
+      reasonLower.includes("must be fixed before")
+    ) {
+      return `Criterion ${c.id} indicates an unmet requirement: "${c.reason}"`;
+    }
+  }
+
+  // Check findings for critical remarks
+  for (const f of findings) {
+    const fLower = f.message.toLowerCase();
+    if (
+      fLower.includes("fundamental defect") ||
+      fLower.includes("fundamental violation") ||
+      fLower.includes("must be removed before acceptance") ||
+      fLower.includes("cannot be accepted")
+    ) {
+      return `Finding states: "${f.message}"`;
+    }
+  }
+
+  const combined = `${summary}\n${reviewBody}`.toLowerCase();
+
+  // Explicit statements that acceptance is not yet possible
+  const explicitBlockers = [
+    /before (?:it can be accepted|acceptance|accepting)/i,
+    /cannot be accepted/i,
+    /can(?:not|'t) accept/i,
+    /must (?:be reduced|be removed|be fixed|be changed|remove|fix|eliminate) before (?:it can be accepted|acceptance)/i,
+    /core acceptance criterion remains (?:unmet|failed)/i,
+    /primary acceptance criterion remains (?:unmet|failed)/i,
+    /acceptance criterion remains (?:unmet|failed)/i,
+    /fundamental (?:defect|violation)/i,
+    /changes are required before (?:acceptance|accepting)/i,
+    /not (?:ready for|eligible for) acceptance/i,
+  ];
+
+  for (const pattern of explicitBlockers) {
+    const match = summary.match(pattern) || reviewBody.match(pattern);
+    if (match) {
+      return `Review explicitly states: "${match[0]}"`;
+    }
+  }
+
+  return null;
 }

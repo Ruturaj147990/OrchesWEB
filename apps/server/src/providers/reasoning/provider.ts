@@ -21,10 +21,17 @@ export interface ReasoningRequest {
   temperature?: number;
   timeoutMs?: number;
   maxOutputTokens?: number;
-  dataClassification?: "public" | "internal" | "sensitive";
   projectId: string;
   runId?: string;
   taskId?: string;
+  attempt?: number;
+  stage?: string;
+  operationId?: string;
+  chunkIdentity?: {
+    chunkIndex: number;
+    totalChunks: number;
+    fingerprint?: string;
+  };
 }
 
 export interface ReasoningResult {

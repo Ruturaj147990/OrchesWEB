@@ -1,21 +1,23 @@
 // Packages the Orches Bridge and installs it into Antigravity IDE using the IDE's own CLI.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const vsix = execFileSync(process.execPath, [path.join(here, "package-vsix.mjs")], { encoding: "utf8" }).trim();
 
+const home = os.homedir();
 const candidates =
   process.platform === "win32"
     ? [
-        path.join(process.env.LOCALAPPDATA || "", "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-        path.join(process.env.ProgramFiles || "", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-        path.join(process.env["ProgramFiles(x86)"] || "", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+        path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+        path.join(process.env.ProgramFiles || "C:\\Program Files", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
+        path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
       ]
     : [
-        path.join(process.env.HOME || "", ".local", "bin", "antigravity-ide"),
+        path.join(home, ".local", "bin", "antigravity-ide"),
         "/usr/local/bin/antigravity-ide",
         "/usr/bin/antigravity-ide",
         "/snap/bin/antigravity-ide",

@@ -207,7 +207,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       });
     } catch (err) {
       ensureNotCancelled();
-      finish("failed", "error", `Planning failed: ${(err as Error).message}`);
+      const diag = diagnoseProviderError((err as Error).message, provider);
+      finish("failed", "error", `Planning failed: ${diag}`);
       return;
     }
     if (plan.warning) {
@@ -869,16 +870,17 @@ function isProviderOutageOrConfigError(error?: string): boolean {
   );
 }
 
-function diagnoseProviderError(error: string, provider: ReasoningProvider): string {
+function diagnoseProviderError(error: string, provider?: ReasoningProvider): string {
+  const name = provider?.displayName || "ChatGPT Web";
   const lower = error.toLowerCase();
   if (lower.includes("login") || lower.includes("auth") || lower.includes("unauthorized")) {
-    return `ChatGPT Web session is not authenticated. Please sign in to chatgpt.com in the open browser window.`;
+    return `${name} session is not authenticated. Please sign in to chatgpt.com in the open browser window.`;
   }
   if (lower.includes("timeout") || lower.includes("timed out")) {
-    return `ChatGPT Web response timed out. Check browser connection or generation status.`;
+    return `${name} response timed out. Check browser connection or generation status.`;
   }
   if (lower.includes("browser") || lower.includes("crash") || lower.includes("closed")) {
-    return `ChatGPT Web browser connection lost. Safe recovery will be attempted on next request.`;
+    return `${name} browser connection lost. Safe recovery will be attempted on next request.`;
   }
   return error;
 }
