@@ -101,7 +101,7 @@ To redistribute or run Orches on a clean machine:
 
 ## Testing & Quality Gates
 ```bash
-npm test           # 20 test suites / 247 unit and integration tests (including 17 Prompt Regression Gates)
+npm test           # 21 test suites / 261 unit and integration tests (including production readiness & prompt regression gates)
 npm run diagnose   # Environment and prerequisites diagnostic self-check
 npm run build      # Full production TypeScript compile and Vite asset bundle
 ```
@@ -113,13 +113,15 @@ apps/server/src
   workspace/      path-safety, snapshot-store, project-inspector, text-diff
   verification/   runner (project checks, static validation)
   providers/      reasoning (chatgpt-web) and coding-agents (builtin, antigravity-bridge)
-  platform/       process-runner, settings-manager, diagnose, secret-redaction
+  platform/       process-runner, settings-manager, diagnose, secret-redactor
   api/routes/     REST + server-sent events
 apps/web/src      React dashboard (App.tsx + components/)
 packages/shared-types   shared zod schemas
 ```
 
-## Known limitations
-- The built-in coder rewrites whole files, so it suits small and medium files; very large files are shown with file-aware chunking and should be modified incrementally.
-- Snapshots hash tracked files per attempt; very large workspaces (tens of thousands of files) make runs slower.
-- One active run at a time per project folder. Loopback-only binding ensures local machine security.
+## Operational Safety & Middleman Protocol
+- **No JSON Instructions to ChatGPT Web**: ChatGPT Web operates strictly via natural language Markdown protocols (Initial implementation brief and Iteration review protocol).
+- **Middleman Architecture**: Quality feedback and critic repair requests do not reject iterations or trigger destructive rollbacks. All findings are structured as actionable feedback for subsequent iterations, preserving user and agent work.
+- **Dynamic Context Budgeting**: Diff evidence is calculated against model context limits (~100,000 characters for 32k tokens), with deterministic multi-chunk review synthesis for very large multi-file diffs.
+- **Path Boundary Safety**: IDE internal operational artifacts (`.gemini/antigravity-ide/brain/...`) are distinguished from genuine unauthorized workspace escapes.
+- **Loopback-only binding**: Guarantees local machine security without remote exposure.

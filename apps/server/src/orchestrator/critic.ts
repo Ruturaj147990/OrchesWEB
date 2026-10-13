@@ -1,6 +1,11 @@
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
 import type { CheckResult } from "../verification/runner.js";
-import { formatDiffEvidence, formatChecksEvidence } from "./evidence-formatter.js";
+import {
+  formatDiffEvidence,
+  formatChecksEvidence,
+  calculateDiffCharBudget,
+  splitDiffIntoReviewChunks,
+} from "./evidence-formatter.js";
 import {
   parseReviewProtocol,
   type ParsedReview,
@@ -55,6 +60,7 @@ export interface ReviewAttemptInput {
   agentReply?: string;
   previousFindings?: CriticFinding[];
   signal?: AbortSignal;
+  maxDiffChars?: number;
 }
 
 export const REVIEWER_SYSTEM = `You are an independent, rigorous code reviewer in the Orches autonomous development system.
@@ -106,7 +112,7 @@ export function buildReviewPrompt(input: ReviewAttemptInput): string {
   } else {
     const changes = input.changes || input.taskContext?.latestChanges || [{ path: "workspace", kind: "modified" }];
     const rawDiff = input.diffText ?? input.taskContext?.latestDiffText ?? "";
-    formattedDiffText = formatDiffEvidence(changes, rawDiff).formattedText;
+    formattedDiffText = formatDiffEvidence(changes, rawDiff, input.maxDiffChars).formattedText;
   }
 
   // 4. Automated Checks Formatting
@@ -286,14 +292,14 @@ export function normalizeCriticJson(raw: unknown): Omit<CriticOutcome, "availabl
 
 /**
  * Independent review of an attempt using the deterministic natural-language review protocol.
- * Evaluates the actual diff and automated checks without demanding JSON from ChatGPT Web.
+/**
+ * Executes a single review prompt against the reasoning provider with retry handling.
  */
-export async function reviewAttempt(
+async function executeSingleReview(
   provider: ReasoningProvider,
+  prompt: string,
   input: ReviewAttemptInput
 ): Promise<CriticOutcome> {
-  const prompt = buildReviewPrompt(input);
-
   let lastError = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -351,5 +357,87 @@ export async function reviewAttempt(
     findings: [],
     repairInstructions: [],
     summary: "",
+  };
+}
+
+/**
+ * Independent review of an attempt using the deterministic natural-language review protocol.
+ * Evaluates the actual diff and automated checks without demanding JSON from ChatGPT Web.
+ * Uses dynamic context budgeting and chunked review for large diffs.
+ */
+export async function reviewAttempt(
+  provider: ReasoningProvider,
+  input: ReviewAttemptInput
+): Promise<CriticOutcome> {
+  const contextTokens = typeof provider.getContextWindow === "function" ? provider.getContextWindow() : 32_768;
+  const diffBudget = input.maxDiffChars || calculateDiffCharBudget(contextTokens);
+
+  const changes = input.changes || input.taskContext?.latestChanges || [];
+  const rawDiff = input.diffText ?? input.taskContext?.latestDiffText ?? "";
+
+  // Check if chunked review is needed
+  const chunks = splitDiffIntoReviewChunks(changes, rawDiff, diffBudget);
+
+  if (chunks.length <= 1) {
+    const prompt = buildReviewPrompt({ ...input, maxDiffChars: diffBudget });
+    return executeSingleReview(provider, prompt, input);
+  }
+
+  // Multi-chunk review: review all chunks and synthesize evidence
+  const aggregatedCriteria: Map<string, CriticCriterion> = new Map();
+  const aggregatedFindings: CriticFinding[] = [];
+  const aggregatedRepairs: Set<string> = new Set();
+  const summaries: string[] = [];
+  const reviewedFiles: string[] = [];
+
+  for (const chunk of chunks) {
+    if (input.signal?.aborted) break;
+    const chunkPrompt = buildReviewPrompt({
+      ...input,
+      diffEvidence: chunk.formattedEvidence,
+      maxDiffChars: diffBudget,
+    });
+    const chunkResult = await executeSingleReview(provider, chunkPrompt, input);
+    if (!chunkResult.available) {
+      return chunkResult; // Return early if provider unavailable
+    }
+    reviewedFiles.push(...chunk.files);
+    for (const c of chunkResult.criteria) {
+      const existing = aggregatedCriteria.get(c.id);
+      if (!existing || c.status === "failed") {
+        aggregatedCriteria.set(c.id, c);
+      } else if (existing.status === "unverified" && c.status === "passed") {
+        aggregatedCriteria.set(c.id, c);
+      }
+    }
+    for (const f of chunkResult.findings) {
+      if (!aggregatedFindings.some((af) => af.message === f.message)) {
+        aggregatedFindings.push(f);
+      }
+    }
+    for (const r of chunkResult.repairInstructions) {
+      aggregatedRepairs.add(r);
+    }
+    if (chunkResult.summary) summaries.push(`[Part ${chunk.chunkIndex}/${chunk.totalChunks}]: ${chunkResult.summary}`);
+  }
+
+  const allCriteria = [...aggregatedCriteria.values()];
+  const hasFailedCriterion = allCriteria.some((c) => c.status === "failed");
+  const hasUnverifiedCriterion = allCriteria.some((c) => c.status === "unverified");
+  const hasCriticalFinding = aggregatedFindings.some((f) => f.severity === "high" || f.severity === "critical");
+
+  const verdict = (hasFailedCriterion || hasCriticalFinding)
+    ? "repair"
+    : hasUnverifiedCriterion
+      ? "repair"
+      : "accept";
+
+  return {
+    available: true,
+    verdict,
+    criteria: allCriteria,
+    findings: aggregatedFindings,
+    repairInstructions: [...aggregatedRepairs],
+    summary: summaries.join("; ") || (verdict === "accept" ? "All diff chunks reviewed and criteria verified." : "Review completed across chunks with repair items noted."),
   };
 }

@@ -8,7 +8,25 @@ export interface FormattedDiffResult {
   filesOmitted: string[];
 }
 
-export const DEFAULT_MAX_DIFF_CHARS = 24_000;
+/**
+ * Calculates a dynamic diff character budget based on model context window.
+ * Allocates available context tokens to diff payload while reserving room for
+ * system prompt, task text, active criteria, check outputs, and reviewer response.
+ */
+export function calculateDiffCharBudget(contextWindowTokens = 32_768): number {
+  const reserveTokens = 6_000;
+  const availableTokens = Math.max(8_000, contextWindowTokens - reserveTokens);
+  return Math.max(32_000, Math.floor(availableTokens * 3.8));
+}
+
+export const DEFAULT_MAX_DIFF_CHARS = calculateDiffCharBudget();
+
+export interface ReviewDiffChunk {
+  chunkIndex: number;
+  totalChunks: number;
+  files: string[];
+  formattedEvidence: string;
+}
 
 /**
  * Deterministic, file-aware diff formatting that explicitly states whether the diff
@@ -96,6 +114,69 @@ export function formatDiffEvidence(
     filesIncluded,
     filesOmitted,
   };
+}
+
+/**
+ * Splits diff into multi-chunk review packages when total diff exceeds single-turn budget.
+ */
+export function splitDiffIntoReviewChunks(
+  changes: Array<{ path: string; kind: string; additions?: number; deletions?: number }>,
+  diffText: string,
+  maxCharsPerChunk = DEFAULT_MAX_DIFF_CHARS
+): ReviewDiffChunk[] {
+  const fileChunks = splitDiffByFiles(diffText);
+  if (fileChunks.length === 0) {
+    return [{
+      chunkIndex: 1,
+      totalChunks: 1,
+      files: [],
+      formattedEvidence: formatDiffEvidence(changes, diffText, maxCharsPerChunk).formattedText,
+    }];
+  }
+
+  const manifestHeader = [
+    "COMPLETE CHANGED FILES MANIFEST:",
+    ...changes.map(
+      (c) =>
+        `- ${c.path} (${c.kind}${c.additions !== undefined && c.deletions !== undefined ? `, +${c.additions}/-${c.deletions}` : ""})`
+    ),
+    "",
+  ].join("\n");
+
+  const chunks: Array<{ files: string[]; diffText: string }> = [];
+  let currentFiles: string[] = [];
+  let currentDiffs: string[] = [];
+  let currentSize = manifestHeader.length + 500;
+
+  for (const fc of fileChunks) {
+    if (currentDiffs.length > 0 && currentSize + fc.text.length > maxCharsPerChunk) {
+      chunks.push({ files: [...currentFiles], diffText: currentDiffs.join("\n\n") });
+      currentFiles = [fc.path];
+      currentDiffs = [fc.text];
+      currentSize = manifestHeader.length + 500 + fc.text.length;
+    } else {
+      currentFiles.push(fc.path);
+      currentDiffs.push(fc.text);
+      currentSize += fc.text.length;
+    }
+  }
+
+  if (currentDiffs.length > 0) {
+    chunks.push({ files: [...currentFiles], diffText: currentDiffs.join("\n\n") });
+  }
+
+  return chunks.map((c, idx) => ({
+    chunkIndex: idx + 1,
+    totalChunks: chunks.length,
+    files: c.files,
+    formattedEvidence: [
+      `DIFF STATUS: CHUNKED REVIEW (Part ${idx + 1} of ${chunks.length}: files ${c.files.join(", ")})`,
+      "",
+      manifestHeader,
+      `INCLUDED DIFFS FOR CHUNK ${idx + 1} OF ${chunks.length}:`,
+      c.diffText,
+    ].join("\n"),
+  }));
 }
 
 /**

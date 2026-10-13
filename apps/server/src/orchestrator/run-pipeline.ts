@@ -20,6 +20,7 @@ import { composeInstruction, IterationEvidence } from "./instructor.js";
 import { validateInstructionSubstance, isThoughtOrStatusFragment, isTaskDescriptor } from "../prompts/instruction-validator.js";
 import { projectFileList } from "../workspace/project-inspector.js";
 import { missingRequestedFiles } from "../workspace/requested-files.js";
+import { calculateDiffCharBudget } from "./evidence-formatter.js";
 import { ReasoningUsageLedger } from "../domain/budgets/usage-ledger.js";
 import { SettingsManager } from "../platform/settings-manager.js";
 import { BlueprintRepository } from "../storage/repositories/blueprint-repository.js";
@@ -253,6 +254,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     let previousFailure: string | undefined;
     const history: IterationEvidence[] = [];
     const external = !agent.usesReasoningProvider;
+    let lastStaticResults: CheckResult[] = [];
+    let lastAttemptChecks: CheckResult[] = [];
     for (let attempt = 1; attempt <= ctx.maxAttempts; attempt++) {
       ensureNotCancelled();
       if (provider.privacyClass === "cloud" && provider.id !== "chatgpt-web") {
@@ -501,6 +504,9 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         isFinalAttempt: attempt === ctx.maxAttempts,
       });
 
+      lastStaticResults = staticResults;
+      lastAttemptChecks = attemptChecks;
+
       persistAttempt(db, { taskId, attemptId, agentResult, diff, staticResults, attemptChecks, baselineChecks: attempt === 1 ? baselineChecks : [], critic, gate, root });
       events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: gate.accepted, outcome: gate.outcome, blockers: gate.blockers, warnings: gate.warnings, files: diff.changes }, run.id, taskId);
 
@@ -537,11 +543,12 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         unverified: inventory.requirements.filter((r) => r.status !== "verified").map((r) => ({ id: r.id, status: r.status, title: r.title })),
       }, run.id, taskId);
 
+      const diffBudget = calculateDiffCharBudget(typeof provider.getContextWindow === "function" ? provider.getContextWindow() : 32_768);
       taskContext = updateAuthoritativeTaskContext(taskContext, {
         iteration: attempt,
         changes: diff.changes,
         diffText: diff.diffText,
-        diffTruncated: diff.diffText.length > 24000,
+        diffTruncated: diff.diffText.length > diffBudget,
         checks: attemptChecks,
         findings: critic.findings,
         criteriaReviews: critic.criteria,
@@ -619,13 +626,46 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       if (attempt < ctx.maxAttempts) log("Preserving files for the next iteration to address feedback.");
     }
 
-    const rb = rollbackActive("rejected");
-    activeSnapshot = null;
-    if (rb && rb.failed.length > 0) {
-      finish("failed", "error", `All attempts were rejected and rollback was INCOMPLETE for: ${rb.failed.map((f) => `${f.path} (${f.error})`).join(", ")}. Inspect these files manually.`, { rollback: rb });
+    // When all attempts have concluded:
+    // Determine whether failure was genuine corruption (static syntax error / unparseable files)
+    // or a regression in pre-existing passing tests caused by the built-in coder.
+    const hasPreExistingRegression = lastAttemptChecks.some((c) => {
+      const b = baselineChecks.find((base) => base.checkId === c.checkId);
+      return b && b.status === "passed" && c.status !== "passed";
+    });
+    const hasStaticCorruption = lastStaticResults.some((s) => s.status !== "passed");
+    const isGenuineCorruptionOrRegression = !external && (hasPreExistingRegression || hasStaticCorruption);
+
+    if (isGenuineCorruptionOrRegression) {
+      const rb = rollbackActive("rejected");
+      activeSnapshot = null;
+      if (rb && rb.failed.length > 0) {
+        finish("failed", "error", `All attempts were rejected and rollback was INCOMPLETE for: ${rb.failed.map((f) => `${f.path} (${f.error})`).join(", ")}. Inspect these files manually.`, { rollback: rb });
+        return;
+      }
+      finish("failed", "rejected", `All ${ctx.maxAttempts} attempt(s) were rejected. ${describeRollback(rb)}`, { rollback: rb });
       return;
     }
-    finish("failed", "rejected", `All ${ctx.maxAttempts} attempt(s) were rejected. ${describeRollback(rb)}`, { rollback: rb });
+
+    // Otherwise (critic feedback, unmet acceptance criteria, incomplete evidence, or external agent work):
+    // Orches is the coordinator and middleman, not a judge that discards working code.
+    const finalDiff = activeSnapshot ? store.diff(activeSnapshot) : null;
+    if (finalDiff && finalDiff.changes.length > 0) {
+      activeSnapshot = null;
+      store.prune();
+      const lastHistory = history[history.length - 1];
+      const outstandingItems = lastHistory?.blockers ?? [];
+      finish(
+        "completed_with_warnings",
+        "unverified",
+        `Concluded ${ctx.maxAttempts} iteration(s) with ${finalDiff.changes.length} file(s) changed. All files were preserved. Outstanding items to address: ${outstandingItems.join("; ") || "unverified"}.`
+      );
+      return;
+    }
+
+    const rb = rollbackActive("no-changes");
+    activeSnapshot = null;
+    finish("failed", "rejected", `Run concluded after ${ctx.maxAttempts} iteration(s) with no workspace changes.`, { rollback: rb });
   } catch (err) {
     if (err instanceof RunCancelled || signal.aborted) {
       const rb = rollbackActive("cancelled");

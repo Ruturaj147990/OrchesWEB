@@ -4,7 +4,7 @@ export interface ModelPricing {
   modelId: string;
   inputPerMillionUsd: number;
   outputPerMillionUsd: number;
-  provider: "openai" | "local" | "unknown";
+  provider: "chatgpt-web" | "local" | "unknown";
 }
 
 export const DEFAULT_PRICING_CATALOGUE: Record<string, ModelPricing> = {
