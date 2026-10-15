@@ -15,6 +15,8 @@ export interface ReconstructionInput {
   projectId: string;
   conversationId: string;
   currentTaskText: string;
+  /** Messages of the run in progress are already in the reasoning thread; only earlier runs are memory. */
+  currentRunId?: string;
   requirementInventory?: RequirementInventory | null;
   latestSnapshot?: ConversationMemorySnapshot | null;
   recentMessages: ConversationMessage[];
@@ -43,7 +45,14 @@ export class ContextReconstructor {
     } = input;
 
     // Filter messages to ensure strict conversation isolation
-    const validMessages = recentMessages.filter((m) => m.conversationId === conversationId);
+    // The current request is already in the prompt verbatim; repeating it here only adds words.
+    const currentTask = (currentTaskText ?? "").trim();
+    const validMessages = recentMessages.filter(
+      (m) =>
+        m.conversationId === conversationId &&
+        !(currentTask && m.content.trim() === currentTask) &&
+        !(input.currentRunId && (m.meta as Record<string, unknown> | undefined)?.runId === input.currentRunId)
+    );
 
     const sections: string[] = [];
     let currentTokens = 0;
@@ -51,21 +60,8 @@ export class ContextReconstructor {
     let snapshotIncluded = false;
     let snapshotId: string | null = null;
 
-    // 1 & 2: Current Task & Authoritative Requirements are handled in the main prompt/inventory,
-    // but we reinforce non-negotiable constraints if available.
-    if (requirementInventory) {
-      const constraints = requirementInventory.requirements.filter(
-        (r) => r.classification === "explicit_constraint"
-      );
-      if (constraints.length > 0) {
-        const constraintBlock = [
-          "### NON-NEGOTIABLE REQUIREMENTS & CONSTRAINTS (Authoritative Inventory):",
-          ...constraints.map((c) => `- [${c.id}] STRICT: ${c.description} (Ref: ${c.sourceReference})`),
-        ].join("\n");
-        sections.push(constraintBlock);
-        currentTokens += estimateTokens(constraintBlock);
-      }
-    }
+    // 1 & 2: The current task and the requirement register (constraints included) are already in the main prompt.
+    void requirementInventory;
 
     // 3: Latest Context-Memory Snapshot
     if (latestSnapshot?.snapshotMarkdown) {

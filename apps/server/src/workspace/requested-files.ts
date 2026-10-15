@@ -2,6 +2,7 @@ import path from "node:path";
 
 const FILE_TOKEN = /(?<![\w./\\-])([\w.-]+(?:[\\/][\w.-]+)*\.(?:js|mjs|cjs|jsx|ts|tsx|py|json|md|txt|html|css|scss|go|rs|java|toml|ya?ml|sh|ps1|sql))(?![\w-])/gi;
 const NEGATING = /(delete|remove|rename|without|instead of|don't|do not|never|avoid|not)\s+(?:(?:create|add|write|touch|modify|edit|change|use)\s+)?(?:the\s+|a\s+|an\s+|any\s+)?(?:file\s+)?$/i;
+const REFERENCING = /\b(from|in|into|inside|within|to|of|on|at|via|using|by)\s+(?:the\s+|a\s+|an\s+|its\s+|their\s+)?(?:existing\s+)?(?:file\s+)?[`'"]?$/i;
 
 /** Product names that look like file names ("Node.js") but are not files. */
 const TECHNOLOGY_NAMES = new Set(
@@ -23,6 +24,9 @@ export function missingRequestedFiles(taskText: string, existingFiles: string[])
     if (TECHNOLOGY_NAMES.has(token.toLowerCase())) continue;
     const before = taskText.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
     if (NEGATING.test(before)) continue;
+    // "removes tasks from tasks.json", "stored in config.json": a location or runtime data the work refers to,
+    // not a file the task asks to deliver. The reviewer still judges these.
+    if (REFERENCING.test(before)) continue;
     const lower = token.toLowerCase();
     const found = lower.includes("/") ? existing.some((f) => f === lower || f.endsWith(`/${lower}`)) : basenames.has(lower);
     if (!found && !missing.includes(token)) missing.push(token);

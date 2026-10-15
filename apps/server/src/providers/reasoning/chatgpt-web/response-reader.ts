@@ -357,7 +357,13 @@ export class ResponseReader {
    * Parses the routing protocol and then classifies refusals, so a reply such as "I can’t help build
    * that, but I can help you build a simulator" is never treated as an instruction for the agent.
    */
+  /** ChatGPT renders citations of a long pasted prompt as "Pasted text" chips; their text is UI, not the reply. */
+  public static stripUiChips(text: string): string {
+    return (text || "").replace(/^[ \t]*Pasted text[ \t]*\r?\n/gm, "").replace(/[ \t]*\r?\n[ \t]*Pasted text[ \t]*$/g, "");
+  }
+
   public static parseProtocol(rawText: string, options: ProtocolParseOptions = {}): ExtractedInstruction {
+    rawText = this.stripUiChips(rawText);
     const result = this.parseProtocolCore(rawText, options);
     const clean = (rawText || "").trim();
 

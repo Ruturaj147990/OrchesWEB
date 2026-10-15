@@ -219,8 +219,9 @@ export class ConversationMemoryService {
     currentTaskText: string;
     requirementInventory?: RequirementInventory | null;
     provider: ReasoningProvider;
+    currentRunId?: string;
   }): ReconstructedContext {
-    const { conversationId, projectId, currentTaskText, requirementInventory, provider } = params;
+    const { conversationId, projectId, currentTaskText, requirementInventory, provider, currentRunId } = params;
 
     const conversation = this.repo.findById(conversationId);
     if (!conversation || conversation.projectId !== projectId) {
@@ -243,6 +244,7 @@ export class ConversationMemoryService {
       projectId,
       conversationId,
       currentTaskText,
+      currentRunId,
       requirementInventory,
       latestSnapshot,
       recentMessages,

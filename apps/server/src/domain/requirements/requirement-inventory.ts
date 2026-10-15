@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { ImportedDocument } from "../blueprints/importer.js";
 import type { CandidateRequirement } from "../blueprints/requirement-extractor.js";
 
@@ -27,13 +26,14 @@ export type RequirementStatus =
   | "blocked";
 
 export interface ProjectRequirement {
-  id: string; // Stable identifier, e.g. "REQ-001"
+  /** Stable identifier for the run: R-n (requirement), C-n (constraint), AC-n (acceptance criterion), Q-n (open question). */
+  id: string;
   title: string;
   description: string;
   classification: RequirementClassification;
   importance: RequirementImportance;
-  sourceReference: string; // e.g. "Specification: Section 2" or "blueprint.md: Line 15"
-  phase?: string; // e.g. "Milestone 1", "Phase 2"
+  sourceReference: string;
+  phase?: string;
   dependencies?: string[];
   status: RequirementStatus;
   scopeStatus?: RequirementScopeStatus;
@@ -44,6 +44,12 @@ export interface ProjectRequirement {
     conflictingText: string;
     conflictingSource: string;
   };
+  /** Acceptance criteria only: the requirement/constraint IDs this criterion verifies. */
+  covers?: string[];
+  /** Open questions only: the assumption to use unless the user decides otherwise. */
+  assumption?: string;
+  /** Where the item came from: the reasoning model's requirements analysis, or Orches' scan of the user's sources. */
+  origin?: "analysis" | "source";
 }
 
 export interface RequirementInventory {
@@ -58,488 +64,333 @@ export interface RequirementInventory {
     contradictions: number;
     phases: string[];
     byStatus: Record<RequirementStatus, number>;
+    /** Extraction notes (truncation, ignored rejected items, …); never silent. */
+    warnings?: string[];
   };
+  /** One-paragraph goal (present when the register came from the reasoning model's analysis). */
+  goal?: string;
+  /** "analysis" (reasoning model, checked by Orches), "cache" (an earlier identical analysis) or "source" (Orches' scan only). */
+  origin?: "analysis" | "cache" | "source";
 }
 
 export interface InventoryBuildInput {
   taskText: string;
   projectObjective?: string;
   blueprintDocuments?: ImportedDocument[];
+  /** Requirements recorded at blueprint import; ones the user REJECTED are excluded everywhere. */
   candidateRequirements?: CandidateRequirement[];
 }
 
-/**
- * Builds a structured, complete requirement inventory from the user's specification,
- * task description, and any uploaded blueprint documents without silently truncating sections.
- */
-export function buildRequirementInventory(input: InventoryBuildInput): RequirementInventory {
-  const requirements: ProjectRequirement[] = [];
-  const seenKeys = new Set<string>();
-  let reqCounter = 1;
+// --------------------------------------------------------------------------------------------------
+// Source scanning: understands document structure (headings, sections, lists, tables, code blocks).
+// It is the fallback register when the reasoning model's analysis is unavailable, and the completeness
+// checklist the analysis is verified against.
+// --------------------------------------------------------------------------------------------------
 
-  const nextId = () => `REQ-${String(reqCounter++).padStart(3, "0")}`;
-  const makeKey = (phase: string | undefined, title: string) => `${phase || "general"}:${title.toLowerCase().trim()}`;
+type SectionKind = "requirements" | "constraints" | "criteria" | "out_of_scope" | "deferred" | "optional" | "info" | "general";
 
-  // 1. Ingest existing blueprint candidate requirements if already parsed
-  if (input.candidateRequirements && input.candidateRequirements.length > 0) {
-    for (const c of input.candidateRequirements) {
-      const key = makeKey(undefined, c.title);
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-
-      const isConstraint = isConstraintText(c.title + " " + c.description);
-      requirements.push({
-        id: c.id || nextId(),
-        title: c.title,
-        description: c.description || c.title,
-        classification: isConstraint ? "explicit_constraint" : c.provenanceKind === "explicit" ? "mandatory_requirement" : "reasonable_inference",
-        importance: isConstraint ? "critical" : "high",
-        sourceReference: c.sourceReference || "Blueprint",
-        status: "not_started",
-      });
-    }
-  }
-
-  // 2. Ingest Universal Project Specification & Instructions (unrestricted text)
-  if (input.projectObjective && input.projectObjective.trim()) {
-    const specReqs = extractRequirementsFromText(input.projectObjective, "Project Specification", nextId);
-    for (const r of specReqs) {
-      const key = makeKey(r.phase, r.title);
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        requirements.push(r);
-      }
-    }
-  }
-
-  // 3. Ingest Task Text
-  if (input.taskText && input.taskText.trim()) {
-    const taskReqs = extractRequirementsFromText(input.taskText, "Task Request", nextId);
-    for (const r of taskReqs) {
-      const key = makeKey(r.phase, r.title);
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        requirements.push(r);
-      }
-    }
-  }
-
-  // 4. Ingest Blueprint Documents (chunked by section/paragraph to prevent silent truncation)
-  if (input.blueprintDocuments && input.blueprintDocuments.length > 0) {
-    for (const doc of input.blueprintDocuments) {
-      const docReqs = extractRequirementsFromText(doc.extractedText, `Blueprint (${doc.filename})`, nextId);
-      for (const r of docReqs) {
-        const key = makeKey(r.phase, r.title);
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          requirements.push(r);
-        }
-      }
-    }
-  }
-
-  // If no specific requirements were extracted (e.g. ultra-short prompt like "calculator"), create baseline
-  if (requirements.length === 0) {
-    const title = input.taskText.trim().split(/\r?\n/)[0] || "Implement task objective";
-    requirements.push({
-      id: nextId(),
-      title,
-      description: input.taskText.trim(),
-      classification: "mandatory_requirement",
-      importance: "high",
-      sourceReference: "Task Request",
-      status: "not_started",
-    });
-  }
-
-  // 5. Detect Contradictions Across Requirements
-  detectContradictions(requirements);
-
-  // 6. Resolve Scope Boundaries and Safety Conflicts
-  resolveScopeBoundaries(requirements, input.taskText, input.projectObjective);
-
-  // Compute summary stats
-  const byStatus: Record<RequirementStatus, number> = {
-    not_started: 0,
-    in_progress: 0,
-    implemented_unverified: 0,
-    verified: 0,
-    blocked: 0,
-  };
-  let mandatory = 0;
-  let constraints = 0;
-  let optional = 0;
-  let acceptanceCriteria = 0;
-  let inferences = 0;
-  let contradictions = 0;
-
-  for (const r of requirements) {
-    byStatus[r.status] = (byStatus[r.status] || 0) + 1;
-    if (r.classification === "mandatory_requirement") mandatory++;
-    else if (r.classification === "explicit_constraint") constraints++;
-    else if (r.classification === "optional_requirement") optional++;
-    else if (r.classification === "acceptance_criterion") acceptanceCriteria++;
-    else if (r.classification === "reasonable_inference") inferences++;
-    else if (r.classification === "unresolved_contradiction") contradictions++;
-  }
-
-  const phases = [...new Set(requirements.map((r) => r.phase).filter(Boolean) as string[])];
-
-  return {
-    requirements,
-    summary: {
-      total: requirements.length,
-      mandatory,
-      constraints,
-      optional,
-      acceptanceCriteria,
-      inferences,
-      contradictions,
-      phases,
-      byStatus,
-    },
-  };
+/** What a heading says about the lines under it. */
+export function sectionKind(heading: string): SectionKind {
+  const h = heading.toLowerCase();
+  if (/out[- ]of[- ]scope|non[- ]?goals?|not in scope|exclusions?|excluded|won'?t (do|have|build)|will not (do|build)/.test(h)) return "out_of_scope";
+  if (/\bphase\s*([2-9]|\d{2,})\b|milestone\s*([2-9]|\d{2,})\b|\bfuture\b|\blater\b|roadmap|backlog|post[- ]?mvp|\bv2\b|next (release|version)|deferred/.test(h)) return "deferred";
+  if (/acceptance|criteria|definition of done|verification|test (plan|cases|scenarios)|testing|\bqa\b/.test(h)) return "criteria";
+  if (/optional|nice[- ]to[- ]have|stretch|bonus|could have/.test(h)) return "optional";
+  if (/constraint|tech(nical)?\s*(stack|requirements|choices)?|technology|\bstack\b|non[- ]?functional|\brules\b|guidelines|security|performance|platform|environment|deployment|infrastructure|architecture|conventions|limitations/.test(h)) return "constraints";
+  if (/requirement|feature|functional|user stor|\bscope\b|must[- ]have|deliverable|\bmvp\b|phase\s*1\b|milestone\s*1\b|\bcore\b|functionality|capabilit|use cases?|workflows?|endpoints?|\bapi\b|screens?|pages?|data model/.test(h)) return "requirements";
+  if (/note|reference|background|overview|introduction|context|about|summary|appendix|glossary|faq|setup|install|readme|changelog|links|resources|motivation|history|credits|license|contact/.test(h)) return "info";
+  return "general";
 }
 
-/**
- * Parses structured text using section-aware chunking without dropping content.
- */
-function extractRequirementsFromText(
-  rawText: string,
-  sourceLabel: string,
-  idGen: () => string
-): ProjectRequirement[] {
-  const results: ProjectRequirement[] = [];
+const MODAL = /\b(must|shall|should|required|requires|needs? to|has to|have to|never|always|only|cannot|can't|do not|don't|must not|may not|is not allowed|forbidden|prohibited)\b/i;
+const IMPERATIVE_START = /^(create|build|add|implement|make|write|develop|design|support|provide|allow|enable|ensure|use|include|expose|return|store|save|display|show|validate|handle|integrate|deploy|configure|generate|send|log|track|calculate|compute|prevent|reject|accept|keep|remove|replace|refactor|fix|update|migrate|test)\b/i;
+const CONSTRAINT_TEXT = /\b(must not|shall not|do not|don't|never|cannot|can't|may not|not allowed|forbidden|prohibited|only use|must use|shall use|use only|written in|must be (?:written|built|implemented) (?:in|with)|no external dependenc|zero (?:external )?dependenc|standard library only|without (?:any )?(?:external|third[- ]party)|version\s+\d|port\s+\d+|compatible with|must run on|must support (?:windows|linux|mac|node|python))\b/i;
+const CRITERION_TEXT = /^(verify that|assert that|test that|check that|ensure that tests|given\b|when\b.*\bthen\b|scenario:)/i;
+const OPTIONAL_TEXT = /\b(optional|nice to have|if time permits|could also|stretch goal|bonus)\b/i;
+const DEFERRED_TEXT = /\b(phase\s*[2-9]|future (phase|release|version)|later release|post[- ]mvp|deferred|in a later version)\b/i;
+const OUT_OF_SCOPE_TEXT = /\b(out of scope|not in scope|explicitly excluded|not required|is excluded|will not be implemented)\b/i;
+
+interface ScannedItem {
+  text: string;
+  kind: "requirement" | "constraint" | "criterion" | "optional";
+  scope: RequirementScopeStatus;
+  phase?: string;
+  source: string;
+  strength: number; // modal / structural signal, used to filter noise in completeness checks
+}
+
+function stripMarkup(s: string): string {
+  return s
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+    .replace(/^\s*\[[ xX]\]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function normalizeRequirementText(s: string): string {
+  return stripMarkup(s).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function sentences(text: string): string[] {
+  return text.split(/(?<=[.!?])\s+(?=[A-Z0-9"'(])/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Scans one source text into requirement-like statements with their section context. */
+export function scanSource(rawText: string, sourceLabel: string, activePhase?: string): ScannedItem[] {
+  const out: ScannedItem[] = [];
   const lines = rawText.split(/\r?\n/);
-  let currentSection = "General";
-  let currentPhase: string | undefined = undefined;
+  // Heading stack: level → { title, kind, phase }
+  const stack: Array<{ level: number; title: string; kind: SectionKind; phase?: string }> = [];
+  let inCode = false;
+  let tableHeaderPending = false;
 
-  for (let idx = 0; idx < lines.length; idx++) {
-    const line = lines[idx].trim();
-    if (!line) continue;
+  const current = () => {
+    let kind: SectionKind = "general";
+    let phase: string | undefined;
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (kind === "general" && stack[i].kind !== "general") kind = stack[i].kind;
+      if (!phase && stack[i].phase) phase = stack[i].phase;
+    }
+    const title = stack.length ? stack[stack.length - 1].title : "";
+    return { kind, phase, title };
+  };
 
-    // Track section headings
-    const headingMatch = line.match(/^#{1,4}\s+(.+)$/);
-    if (headingMatch) {
-      currentSection = headingMatch[1].trim();
-      const phaseMatch = currentSection.match(/(Phase\s+\d+|Milestone\s+\d+|Sprint\s+\d+)/i);
-      if (phaseMatch) {
-        currentPhase = phaseMatch[1];
-      }
+  const push = (text: string, lineNo: number, structural: boolean) => {
+    const clean = stripMarkup(text);
+    if (clean.length < 6 || /^table of contents/i.test(clean)) return;
+    const { kind: section, phase, title } = current();
+    if (section === "info") return;
+    const modal = MODAL.test(clean);
+    const imperative = IMPERATIVE_START.test(clean);
+    // Plain prose in a general section counts only when it states something required.
+    if (!structural && section === "general" && !modal && !imperative) return;
+
+    let kind: ScannedItem["kind"] = "requirement";
+    if (section === "criteria" || CRITERION_TEXT.test(clean)) kind = "criterion";
+    else if (section === "optional" || OPTIONAL_TEXT.test(clean)) kind = "optional";
+    else if (section === "constraints" || CONSTRAINT_TEXT.test(clean) || /^use\s+\w/i.test(clean)) kind = "constraint";
+
+    let scope: RequirementScopeStatus = "in_scope";
+    if (section === "out_of_scope" || OUT_OF_SCOPE_TEXT.test(clean)) scope = "out_of_scope";
+    else if (section === "deferred" || DEFERRED_TEXT.test(clean)) scope = "deferred";
+    // When the task names a phase, that phase is the active scope and other phases are deferred.
+    if (phase && activePhase) scope = phase.toLowerCase() === activePhase.toLowerCase() ? (scope === "deferred" ? "in_scope" : scope) : "deferred";
+
+    out.push({
+      text: clean,
+      kind,
+      scope,
+      phase,
+      source: `${sourceLabel}${title ? ` › ${title}` : ""} (line ${lineNo})`,
+      strength: (modal ? 2 : 0) + (imperative ? 1 : 0) + (section === "requirements" || section === "constraints" || section === "criteria" ? 2 : 0) + (structural ? 1 : 0),
+    });
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trim();
+    if (/^(```|~~~)/.test(line)) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode || !line) {
+      tableHeaderPending = false;
       continue;
     }
 
-    const isBullet = /^[-*•]\s+/.test(line);
-    const isNumbered = /^\d+[\.)]\s+/.test(line);
-    const cleanContent = line.replace(/^([-*•]|\d+[\.)]|#{1,4})\s+/, "").trim();
-
-    if (cleanContent.length < 5) continue;
-    if (cleanContent.toLowerCase().startsWith("table of contents")) continue;
-
-    const lower = cleanContent.toLowerCase();
-
-    // Extract dependency relationships if present
-    const depMatch = cleanContent.match(/(?:depends on|prerequisite:|requires|prerequisite is)\s+([^.,;\n]+)/i);
-    const dependencies = depMatch ? [depMatch[1].trim()] : undefined;
-
-    // Check classification with proper precedence:
-    // When a line explicitly starts with verification words (e.g. "assert that", "verify that")
-    // or is under an Acceptance Criteria section, it must be an acceptance criterion
-    const inCriteriaSection = /acceptance criteria|verification|test criteria/i.test(currentSection);
-    const inOptionalSection = /optional|nice to have|future enhancements/i.test(currentSection);
-    const startsWithCriterionWord = /^(assert that|verify that|test that|ensure that tests|verify whether)/i.test(cleanContent);
-    const isCriteria = isAcceptanceCriterionText(cleanContent) || inCriteriaSection;
-    const isConstraint = isConstraintText(cleanContent) && !startsWithCriterionWord;
-    const isOptional = isOptionalText(cleanContent) || inOptionalSection;
-    const isExplicit = isExplicitRequirementText(cleanContent);
-
-    // If it's a bullet, numbered item, or has strong imperative keywords
-    if (isBullet || isNumbered || isConstraint || isOptional || isCriteria || isExplicit) {
-      let classification: RequirementClassification = "mandatory_requirement";
-      let importance: RequirementImportance = "high";
-
-      if (isCriteria && (startsWithCriterionWord || inCriteriaSection || !isConstraint)) {
-        classification = "acceptance_criterion";
-        importance = "high";
-      } else if (isConstraint) {
-        classification = "explicit_constraint";
-        importance = "critical";
-      } else if (isOptional) {
-        classification = "optional_requirement";
-        importance = "low";
-      } else if (isCriteria) {
-        classification = "acceptance_criterion";
-        importance = "high";
-      } else if (isExplicit) {
-        classification = "mandatory_requirement";
-        importance = "high";
-      } else {
-        // Bullet or numbered in general text
-        classification = "mandatory_requirement";
-        importance = "medium";
-      }
-
-      results.push({
-        id: idGen(),
-        title: cleanContent.slice(0, 140),
-        description: cleanContent,
-        classification,
-        importance,
-        sourceReference: `${sourceLabel} · ${currentSection} (Line ${idx + 1})`,
-        phase: currentPhase,
-        dependencies,
-        status: "not_started",
-      });
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/) || (i + 1 < lines.length && /^(=+|-+)\s*$/.test(lines[i + 1].trim()) && !/^[-*•]/.test(line) ? ["", lines[i + 1].trim().startsWith("=") ? "#" : "##", line] : null);
+    if (heading) {
+      const level = heading[1].length;
+      const title = stripMarkup(heading[2]).replace(/:$/, "");
+      while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+      const phaseMatch = title.match(/\b(phase\s*\d+|milestone\s*\d+|sprint\s*\d+)\b/i);
+      stack.push({ level, title, kind: sectionKind(title), phase: phaseMatch ? phaseMatch[1].replace(/\s+/g, " ") : undefined });
+      if (heading[0] === "") i++; // setext underline consumed
+      continue;
     }
-  }
-
-  return results;
-}
-
-function isConstraintText(text: string): boolean {
-  const l = text.toLowerCase();
-  return (
-    l.includes("strictly") ||
-    l.includes("must use") ||
-    l.includes("shall use") ||
-    l.includes("must not") ||
-    l.includes("shall not") ||
-    l.includes("forbidden") ||
-    l.includes("do not use") ||
-    l.includes("do not") ||
-    l.includes("never use") ||
-    l.includes("never log") ||
-    l.includes("never expose") ||
-    l.includes("never store") ||
-    l.includes("never commit") ||
-    l.includes("cannot use") ||
-    l.includes("cannot") ||
-    l.includes("no orm") ||
-    l.includes("no tailwind") ||
-    l.includes("zero external dependencies") ||
-    l.includes("no external dependencies") ||
-    l.includes("sqlite only") ||
-    l.includes("only use") ||
-    l.includes("standard library only") ||
-    l.includes("must be written in") ||
-    l.includes("must adhere to") ||
-    l.includes("disallowed") ||
-    l.includes("prohibited") ||
-    l.includes("avoid external") ||
-    l.includes("constraint:") ||
-    l.includes("constraints:") ||
-    l.includes("rules:") ||
-    /version\s+[0-9]/i.test(l) ||
-    /port\s+[0-9]+/i.test(l)
-  );
-}
-
-function isOptionalText(text: string): boolean {
-  const l = text.toLowerCase();
-  return (
-    l.includes("optional:") ||
-    l.includes("(optional") ||
-    l.includes("optional suggestion") ||
-    l.includes("nice to have") ||
-    l.includes("if time permits") ||
-    l.includes("optional requirement") ||
-    l.includes("bonus:") ||
-    l.includes("could also")
-  );
-}
-
-function isAcceptanceCriterionText(text: string): boolean {
-  const l = text.toLowerCase();
-  return (
-    l.includes("acceptance criteria") ||
-    l.includes("acceptance test") ||
-    l.includes("verify that") ||
-    l.includes("verification:") ||
-    l.includes("test that") ||
-    l.includes("assert that") ||
-    l.includes("must pass tests")
-  );
-}
-
-function isExplicitRequirementText(text: string): boolean {
-  const l = text.toLowerCase();
-  return (
-    l.includes("must ") ||
-    l.includes("shall ") ||
-    l.includes("required to") ||
-    l.includes("needs to") ||
-    l.includes("feature:") ||
-    l.includes("endpoint:") ||
-    l.includes("api:") ||
-    l.includes("data model:")
-  );
-}
-
-/**
- * Detects contradictory requirements within the specification and marks them
- * so they are surfaced honestly as unresolved ambiguities rather than hallucinating a resolution.
- */
-function detectContradictions(requirements: ProjectRequirement[]): void {
-  for (let i = 0; i < requirements.length; i++) {
-    for (let j = i + 1; j < requirements.length; j++) {
-      const a = requirements[i];
-      const b = requirements[j];
-      const conflict = findContradiction(a.description, b.description);
-      if (conflict) {
-        a.classification = "unresolved_contradiction";
-        a.contradictionDetails = {
-          conflictingText: b.description,
-          conflictingSource: b.sourceReference,
-        };
-        b.classification = "unresolved_contradiction";
-        b.contradictionDetails = {
-          conflictingText: a.description,
-          conflictingSource: a.sourceReference,
-        };
-      }
+    // Bold-only line acting as a heading: "**Constraints**" / "Constraints:"
+    const pseudo = line.match(/^(?:\*\*|__)?([A-Za-z][A-Za-z0-9 /&()-]{2,60}?)(?:\*\*|__)?\s*:?\s*$/);
+    if (pseudo && (/^\*\*|^__/.test(line) || /:$/.test(line)) && sectionKind(pseudo[1]) !== "general") {
+      while (stack.length && stack[stack.length - 1].level >= 7) stack.pop();
+      stack.push({ level: 7, title: pseudo[1].trim(), kind: sectionKind(pseudo[1]) });
+      continue;
     }
-  }
-}
 
-/**
- * Deterministic detection for common technical and architectural contradictions.
- */
-function findContradiction(textA: string, textB: string): string | null {
-  const la = textA.toLowerCase();
-  const lb = textB.toLowerCase();
-
-  // Database engine contradictions
-  const isPostgresA = la.includes("postgresql") || la.includes("postgres");
-  const isPostgresB = lb.includes("postgresql") || lb.includes("postgres");
-  const isSqliteA = la.includes("sqlite");
-  const isSqliteB = lb.includes("sqlite");
-  if ((isPostgresA && isSqliteB) || (isSqliteA && isPostgresB)) {
-    return "Conflicting database engines specified (PostgreSQL vs SQLite).";
-  }
-
-  // Dependency directives contradictions
-  const zeroDepsA = la.includes("no external dependencies") || la.includes("zero dependencies") || la.includes("no dependencies") || la.includes("standard library only");
-  const zeroDepsB = lb.includes("no external dependencies") || lb.includes("zero dependencies") || lb.includes("no dependencies") || lb.includes("standard library only");
-  const externalDepsA = la.includes("install express") || la.includes("use fastify") || la.includes("npm install") || la.includes("external packages") || la.includes("third-party libraries");
-  const externalDepsB = lb.includes("install express") || lb.includes("use fastify") || lb.includes("npm install") || lb.includes("external packages") || lb.includes("third-party libraries");
-  if ((zeroDepsA && externalDepsB) || (externalDepsA && zeroDepsB)) {
-    return "Conflicting dependency directives: Zero external dependencies requested while third-party packages required.";
-  }
-
-  // Architecture style contradictions
-  const singleFileA = la.includes("single-file script") || la.includes("single file only") || la.includes("monolithic script");
-  const singleFileB = lb.includes("single-file script") || lb.includes("single file only") || lb.includes("monolithic script");
-  const modularA = la.includes("multi-package modular architecture") || la.includes("microservices architecture") || la.includes("modular multi-package");
-  const modularB = lb.includes("multi-package modular architecture") || lb.includes("microservices architecture") || lb.includes("modular multi-package");
-  if ((singleFileA && modularB) || (modularA && singleFileB)) {
-    return "Conflicting architecture directives: Single-file script vs multi-package modular architecture.";
-  }
-
-  // Port assignment contradictions
-  if ((la.includes("port 8080") && lb.includes("port 3000")) || (la.includes("port 3000") && lb.includes("port 8080"))) {
-    return "Conflicting port assignments (Port 8080 vs Port 3000).";
-  }
-
-  return null;
-}
-
-/**
- * Resolves scope boundaries across requirements. Identifies out-of-scope, deferred,
- * or safety-conflicting requirements (such as physical emitter interception or military receiver hardware
- * when the declared objective is a synthetic research simulator) without discarding traceability.
- */
-function resolveScopeBoundaries(
-  requirements: ProjectRequirement[],
-  taskText: string,
-  projectObjective?: string
-): void {
-  const combinedObjective = `${taskText} ${projectObjective || ""}`.toLowerCase();
-
-  // Check if current authorized scope is a safe synthetic simulator or alternative
-  const isSyntheticSimulator =
-    combinedObjective.includes("synthetic") ||
-    combinedObjective.includes("simulator") ||
-    combinedObjective.includes("research alternative") ||
-    combinedObjective.includes("safe alternative") ||
-    combinedObjective.includes("mock environment") ||
-    combinedObjective.includes("non-operational");
-
-  for (const req of requirements) {
-    const lDesc = req.description.toLowerCase();
-    const lTitle = req.title.toLowerCase();
-    const fullText = `${lTitle} ${lDesc}`;
-
-    // Default scope status
-    req.scopeStatus = "in_scope";
-
-    if (isSyntheticSimulator) {
-      // Physical RF receiver control, hardware interception, radar-specific optimization, or weaponized operations
-      const isPhysicalOrMilitaryHardware =
-        fullText.includes("physical receiver") ||
-        fullText.includes("physical rf") ||
-        fullText.includes("rf receiver hardware") ||
-        fullText.includes("physical rf receiver control") ||
-        fullText.includes("physical rf receiver") ||
-        fullText.includes("receiver control") ||
-        fullText.includes("hardware control") ||
-        fullText.includes("intercept operational") ||
-        fullText.includes("operational emitter interception") ||
-        fullText.includes("operational military-emitter interception") ||
-        fullText.includes("operational military emitter interception") ||
-        fullText.includes("operational military-emitter") ||
-        fullText.includes("operational military emitter") ||
-        fullText.includes("military-emitter") ||
-        fullText.includes("military emitter") ||
-        fullText.includes("operational emitter") ||
-        fullText.includes("radar-specific interception optimization") ||
-        fullText.includes("radar-specific interception") ||
-        fullText.includes("radar-specific") ||
-        fullText.includes("interception optimization") ||
-        fullText.includes("radar interception") ||
-        fullText.includes("live emitter interception") ||
-        fullText.includes("operational military") ||
-        fullText.includes("military deployment") ||
-        fullText.includes("weapon system") ||
-        fullText.includes("classified emitter database");
-
-      if (isPhysicalOrMilitaryHardware) {
-        req.scopeStatus = "safety_conflict";
-        req.scopeConflictReason =
-          "Operational hardware / live interception is prohibited: Operational military-emitter interception, radar-specific interception optimization, physical RF receiver control, or military deployment is prohibited under the authorized synthetic scheduling simulator boundary.";
+    if (line.startsWith("|")) {
+      const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) {
+        tableHeaderPending = false;
         continue;
       }
+      if (!tableHeaderPending && i + 1 < lines.length && /^\|\s*:?-{2,}/.test(lines[i + 1].trim())) {
+        tableHeaderPending = true; // header row
+        continue;
+      }
+      const text = cells.filter(Boolean).join(" — ");
+      if (text) push(text, i + 1, true);
+      continue;
     }
 
-    // Deferred or out of scope markers
-    if (
-      fullText.includes("phase 2") ||
-      fullText.includes("future phase") ||
-      fullText.includes("deferred to next release") ||
-      fullText.includes("post-mvp") ||
-      fullText.includes("subsequent phase")
-    ) {
-      req.scopeStatus = "deferred";
-      req.scopeConflictReason = "Deferred to subsequent phase.";
-    } else if (
-      fullText.includes("out of scope") ||
-      fullText.includes("explicitly excluded") ||
-      fullText.includes("excluded from")
-    ) {
-      req.scopeStatus = "out_of_scope";
-      req.scopeConflictReason = "Explicitly excluded from implementation scope.";
-    } else if (
-      fullText.includes("safety conflict") ||
-      fullText.includes("safety boundary conflict")
-    ) {
-      req.scopeStatus = "safety_conflict";
-      req.scopeConflictReason = "Safety boundary conflict noted.";
+    const bullet = line.match(/^([-*•+]|\d+[.)]|[a-z][.)])\s+(.*)$/i);
+    if (bullet) {
+      push(bullet[2], i + 1, true);
+      continue;
+    }
+    // Prose: each sentence separately.
+    for (const s of sentences(line)) push(s, i + 1, false);
+  }
+  return out;
+}
+
+const KIND_RANK: Record<ScannedItem["kind"], number> = { criterion: 4, constraint: 3, requirement: 2, optional: 1 };
+
+function toClassification(kind: ScannedItem["kind"]): RequirementClassification {
+  return kind === "criterion" ? "acceptance_criterion" : kind === "constraint" ? "explicit_constraint" : kind === "optional" ? "optional_requirement" : "mandatory_requirement";
+}
+
+function emptyStatusCounts(): Record<RequirementStatus, number> {
+  return { not_started: 0, in_progress: 0, implemented_unverified: 0, verified: 0, blocked: 0 };
+}
+
+/** Recomputes the summary counts of an inventory (call after changing items). */
+export function summarizeInventory(requirements: ProjectRequirement[], warnings: string[] = []): RequirementInventory["summary"] {
+  const byStatus = emptyStatusCounts();
+  const count = (c: RequirementClassification) => requirements.filter((r) => r.classification === c).length;
+  for (const r of requirements) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+  return {
+    total: requirements.length,
+    mandatory: count("mandatory_requirement"),
+    constraints: count("explicit_constraint"),
+    optional: count("optional_requirement"),
+    acceptanceCriteria: count("acceptance_criterion"),
+    inferences: count("reasonable_inference"),
+    contradictions: requirements.filter((r) => r.contradictionDetails || r.classification === "unresolved_contradiction").length,
+    phases: [...new Set(requirements.map((r) => r.phase).filter((p): p is string => Boolean(p)))],
+    byStatus,
+    warnings,
+  };
+}
+
+const MAX_SCANNED_ITEMS = 400;
+
+/**
+ * Builds the requirement register from the user's own words (task, project specification, blueprints),
+ * without a model. Order of precedence when the same statement appears twice: the task text, then the
+ * project specification, then blueprints; the strongest classification wins (criterion > constraint >
+ * requirement > optional).
+ */
+export function buildRequirementInventory(input: InventoryBuildInput): RequirementInventory {
+  const warnings: string[] = [];
+  // A phase is active only when the task explicitly asks for it ("implement phase 2"), not because the
+  // pasted specification contains a "Phase 2" heading.
+  const phaseInTask = input.taskText
+    .match(/\b(?:implement|build|do|work on|start|complete|deliver|continue with|proceed with|focus on)\b[^.\n#]{0,40}?\b((?:phase|milestone|sprint)\s*\d+)\b/i)?.[1]
+    ?.replace(/\s+/g, " ");
+  const rejected = new Set(
+    (input.candidateRequirements ?? []).filter((c) => c.status === "rejected").map((c) => normalizeRequirementText(c.title))
+  );
+  if (rejected.size) warnings.push(`${rejected.size} blueprint requirement(s) you rejected were left out.`);
+
+  const hasOtherSources = Boolean(input.projectObjective?.trim()) || (input.blueprintDocuments ?? []).some((d) => d.extractedText?.trim());
+  // "Implement X as described in the attached spec" points at the sources; it is not a requirement of its own.
+  const pointsAtSources = (t: string) =>
+    /\b(described|specified|defined|outlined|detailed)\s+in\b|\b(attached|the)\s+(spec|specification|blueprint|prd)\b/i.test(t);
+  const scanned: ScannedItem[] = [
+    ...scanSource(input.taskText, "Task", phaseInTask).filter((it) => !(hasOtherSources && pointsAtSources(it.text))),
+    ...(input.projectObjective?.trim() ? scanSource(input.projectObjective, "Project specification", phaseInTask) : []),
+    ...(input.blueprintDocuments ?? []).flatMap((d) => scanSource(d.extractedText, `Blueprint ${d.filename}`, phaseInTask)),
+  ];
+
+  // Merge duplicates (keep first source, strongest kind, in-scope wins over deferred for the same text).
+  const merged = new Map<string, ScannedItem>();
+  for (const item of scanned) {
+    const key = normalizeRequirementText(item.text);
+    if (!key || rejected.has(key)) continue;
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, { ...item });
+      continue;
+    }
+    if (KIND_RANK[item.kind] > KIND_RANK[prev.kind]) prev.kind = item.kind;
+    if (prev.scope !== "in_scope" && item.scope === "in_scope" && item.source.startsWith("Task")) prev.scope = "in_scope";
+    prev.strength = Math.max(prev.strength, item.strength);
+  }
+
+  let items = [...merged.values()];
+  if (items.length > MAX_SCANNED_ITEMS) {
+    warnings.push(`The sources contain ${items.length} requirement-like statements; the register keeps the first ${MAX_SCANNED_ITEMS}. The full text is still sent verbatim.`);
+    items = items.slice(0, MAX_SCANNED_ITEMS);
+  }
+
+  const counters = { R: 0, C: 0, AC: 0 };
+  const requirements: ProjectRequirement[] = items.map((it) => {
+    const prefix = it.kind === "criterion" ? "AC" : it.kind === "constraint" ? "C" : "R";
+    const id = `${prefix}-${++counters[prefix]}`;
+    return {
+      id,
+      title: it.text.slice(0, 160),
+      description: it.text,
+      classification: toClassification(it.kind),
+      importance: it.kind === "constraint" ? "critical" : it.kind === "optional" ? "low" : /\b(should|may|ideally|preferably|nice to have)\b/i.test(it.text) ? "medium" : "high",
+      sourceReference: it.source,
+      phase: it.phase,
+      status: "not_started",
+      scopeStatus: it.scope,
+      scopeConflictReason: it.scope === "deferred" ? "Deferred (later phase / future work in the sources)." : it.scope === "out_of_scope" ? "Marked out of scope in the sources." : undefined,
+      origin: "source",
+    };
+  });
+
+  // Nothing structured at all (e.g. a one-line task): the task itself is the requirement.
+  if (!requirements.some((r) => r.scopeStatus === "in_scope" && r.classification !== "acceptance_criterion")) {
+    const text = stripMarkup(input.taskText).slice(0, 2000) || "Implement the task objective.";
+    requirements.unshift({
+      id: `R-${++counters.R}`,
+      title: text.split(/(?<=[.!?])\s/)[0].slice(0, 160),
+      description: text,
+      classification: "mandatory_requirement",
+      importance: "high",
+      sourceReference: "Task",
+      status: "not_started",
+      scopeStatus: "in_scope",
+      origin: "source",
+    });
+  }
+
+  markConflicts(requirements);
+  return { requirements, summary: summarizeInventory(requirements, warnings), origin: "source" };
+}
+
+/**
+ * Flags constraint pairs that look contradictory (e.g. different database engines or ports). They stay
+ * in scope — the conflict is surfaced for the reasoning model to resolve, never resolved silently.
+ */
+function markConflicts(requirements: ProjectRequirement[]): void {
+  const constraints = requirements.filter((r) => r.classification === "explicit_constraint" && r.scopeStatus === "in_scope");
+  const testOnly = (t: string) => /\b(test|tests|testing|dev|development|local|in[- ]memory|ci)\b/i.test(t);
+  for (let i = 0; i < constraints.length; i++) {
+    for (let j = i + 1; j < constraints.length; j++) {
+      const a = constraints[i];
+      const b = constraints[j];
+      const la = a.description.toLowerCase();
+      const lb = b.description.toLowerCase();
+      const db = (t: string) => (/\bpostgres(ql)?\b/.test(t) ? "postgres" : /\bmysql\b/.test(t) ? "mysql" : /\bsqlite\b/.test(t) ? "sqlite" : /\bmongo(db)?\b/.test(t) ? "mongodb" : null);
+      const port = (t: string) => t.match(/\bport\s+(\d{2,5})\b/)?.[1] ?? null;
+      const conflict =
+        (db(la) && db(lb) && db(la) !== db(lb) && !testOnly(la) && !testOnly(lb)) || (port(la) && port(lb) && port(la) !== port(lb));
+      if (conflict) {
+        a.contradictionDetails = { conflictingText: b.description, conflictingSource: b.sourceReference };
+        b.contradictionDetails = { conflictingText: a.description, conflictingSource: a.sourceReference };
+      }
     }
   }
 }
 
 /**
- * Updates requirement statuses across iteration attempts based on real evidence
- * (files created, static checks, automated test results, critic findings).
+ * Updates requirement statuses from real evidence. Acceptance criteria take the reviewer's per-criterion
+ * verdict; requirements and constraints take the verdicts of the criteria that cover them. Nothing is
+ * marked verified merely because files changed or some check passed.
  */
 export function updateRequirementStatuses(
   inventory: RequirementInventory,
@@ -547,59 +398,52 @@ export function updateRequirementStatuses(
     filesChanged: string[];
     passedChecks: string[];
     failedChecks: string[];
+    /** Reviewer per-criterion results (id → passed | failed | unverified). */
+    criteriaResults?: Array<{ id: string; status: string }>;
+    /** Whether the reviewer accepted the attempt as a whole. */
+    reviewerAccepted?: boolean;
+    /** Acceptance criteria of the run with the IDs they cover. */
+    acceptanceCriteria?: Array<{ id: string; covers?: string[]; requirementId?: string }>;
+    /** @deprecated kept for compatibility; ignored. */
     criticVerified?: string[];
+    /** @deprecated kept for compatibility; ignored. */
     criticFailed?: string[];
   }
 ): RequirementInventory {
+  const norm = (id: string) => id.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const results = new Map((evidence.criteriaResults ?? []).map((c) => [norm(c.id), c.status]));
+  const coveredBy = new Map<string, string[]>();
+  for (const ac of evidence.acceptanceCriteria ?? []) {
+    for (const target of [...(ac.covers ?? []), ...(ac.requirementId ? [ac.requirementId] : [])]) {
+      const key = norm(target);
+      coveredBy.set(key, [...(coveredBy.get(key) ?? []), ac.id]);
+    }
+  }
+  const worked = evidence.filesChanged.length > 0;
+  const checksOk = evidence.failedChecks.length === 0;
+
   for (const req of inventory.requirements) {
-    const lTitle = req.title.toLowerCase();
-
-    // Check if directly failed by reviewer
-    if (evidence.criticFailed?.some((f) => {
-      const str = typeof f === "string" ? f : (f && typeof f === "object" ? JSON.stringify(f) : String(f ?? ""));
-      return str.toLowerCase().includes(req.id.toLowerCase()) || str.toLowerCase().includes(lTitle);
-    })) {
+    if (req.scopeStatus && req.scopeStatus !== "in_scope") continue;
+    let verdicts: string[] = [];
+    if (req.classification === "acceptance_criterion") {
+      const v = results.get(norm(req.id));
+      if (v) verdicts = [v];
+    } else {
+      verdicts = (coveredBy.get(norm(req.id)) ?? []).map((acId) => results.get(norm(acId))).filter((v): v is string => Boolean(v));
+    }
+    if (verdicts.some((v) => v === "failed")) {
       req.status = "in_progress";
-      req.notes = "Review flagged incomplete or failing implementation.";
-      continue;
-    }
-
-    // Check if verified by reviewer and passed tests
-    if (
-      evidence.passedChecks.length > 0 &&
-      evidence.criticVerified?.some((v) => {
-        const str = typeof v === "string" ? v : (v && typeof v === "object" ? JSON.stringify(v) : String(v ?? ""));
-        return str.toLowerCase().includes(req.id.toLowerCase()) || str.toLowerCase().includes(lTitle);
-      })
-    ) {
+      req.notes = "The reviewer found a covering acceptance criterion not met.";
+    } else if (verdicts.length && verdicts.every((v) => v === "passed") && checksOk) {
       req.status = "verified";
-      req.notes = "Verified by automated tests and independent review.";
-      continue;
-    }
-
-    // Check if relevant files were created/modified
-    const touched = evidence.filesChanged.length > 0;
-    if (touched) {
-      if (evidence.passedChecks.length > 0) {
-        req.status = "verified";
-      } else {
-        req.status = "implemented_unverified";
-      }
+      req.notes = "Covering acceptance criteria passed review and project checks passed.";
+    } else if (!verdicts.length && evidence.reviewerAccepted && checksOk && worked) {
+      req.status = "verified";
+      req.notes = "The reviewer accepted the attempt; project checks passed.";
+    } else if (worked && req.status === "not_started") {
+      req.status = "implemented_unverified";
     }
   }
-
-  // Recalculate summary byStatus
-  const byStatus: Record<RequirementStatus, number> = {
-    not_started: 0,
-    in_progress: 0,
-    implemented_unverified: 0,
-    verified: 0,
-    blocked: 0,
-  };
-  for (const r of inventory.requirements) {
-    byStatus[r.status] = (byStatus[r.status] || 0) + 1;
-  }
-  inventory.summary.byStatus = byStatus;
-
+  inventory.summary = summarizeInventory(inventory.requirements, inventory.summary.warnings ?? []);
   return inventory;
 }

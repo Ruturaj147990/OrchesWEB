@@ -27,6 +27,8 @@ export interface ReasoningRequest {
   attempt?: number;
   stage?: string;
   operationId?: string;
+  /** The prompt already contains the user's source documents; do not deliver them separately. */
+  skipSourceDelivery?: boolean;
   chunkIdentity?: {
     chunkIndex: number;
     totalChunks: number;

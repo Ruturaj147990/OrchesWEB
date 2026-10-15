@@ -219,5 +219,18 @@ export function runMigrations(db: DatabaseSync): void {
     `);
     mark("0007_idempotent_operations");
   }
+
+  if (!applied("0008_requirement_registers")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS requirement_registers (
+        cache_key TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        inventory_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_requirement_registers_project ON requirement_registers(project_id);
+    `);
+    mark("0008_requirement_registers");
+  }
 }
 

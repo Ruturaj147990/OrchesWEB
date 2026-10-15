@@ -84,7 +84,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
   }
 
   public getContextWindow(): number {
-    return 32_768;
+    // ChatGPT Web accepts long pastes (they become attachments), so prompts are not pruned for a small window.
+    return 128_000;
   }
 
   public getStateMachine() {
@@ -257,7 +258,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
       );
 
       // 5. For operations involving project source materials, deliver any pending attachments
-      if (request.operation === "code_generation" || request.operation === "task_planning" || request.operation === "repair_diagnosis") {
+      if (!request.skipSourceDelivery && (request.operation === "code_generation" || request.operation === "task_planning" || request.operation === "repair_diagnosis")) {
         try {
           const blueprints = blueprintRepo.listBlueprints(request.projectId);
           if (blueprints.length > 0) {
@@ -404,6 +405,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
             }
           }
         }
+        rawResponse = ResponseReader.stripUiChips(rawResponse);
 
         // Durable lifecycle state 4: RESPONSE RECEIVED
         if (idempotencyKey) {
@@ -545,6 +547,23 @@ export class ChatGPTWebProvider implements ReasoningProvider {
       return reviewResult;
     }
 
+    // Only instruction requests carry the instruction protocol. Every other operation (requirements
+    // analysis, memory summaries, connection tests, …) gets the reply verbatim for its own parser.
+    if (request.operation !== "code_generation" && request.operation !== "repair_diagnosis") {
+      const url = page.url();
+      conversationManager.recordSuccess(request.projectId, url.includes("/c/") ? url : mappedConversationUrl && mappedConversationUrl.includes("/c/") ? mappedConversationUrl : undefined);
+      const inTok = estimateTokens(promptText);
+      const outTok = estimateTokens(rawResponse);
+      return {
+        text: rawResponse,
+        providerId: this.id,
+        modelId: this.getModel(),
+        usage: { inputTokens: inTok, outputTokens: outTok, totalTokens: inTok + outTok },
+        durationMs: Date.now() - startTime,
+        warnings: [],
+      };
+    }
+
     // 9. Extract the substantive engineering instruction adhering strictly to the routing protocol
     const extracted = ResponseReader.extractInstruction(rawResponse, {
       startTime,
@@ -682,8 +701,10 @@ export class ChatGPTWebProvider implements ReasoningProvider {
       parts.push(`${msg.role.toUpperCase()}:\n${msg.content}\n`);
     }
 
-    // Require the mandatory natural-language routing protocol
-    if (request.operation === "code_generation" || request.operation === "repair_diagnosis") {
+    // Instruction requests need the routing protocol; append it only when the prompt does not already
+    // define it (Orches' own prompts state the reply format once, in their last section).
+    const definesFormat = request.messages.some((m) => m.content.includes("[ORCHES_ANTIGRAVITY_INSTRUCTION]"));
+    if ((request.operation === "code_generation" || request.operation === "repair_diagnosis") && !definesFormat) {
       parts.push(`
 CRITICAL ROUTING & OUTPUT CONTRACT:
 You must reply using the Orches text-based routing protocol. Do NOT return a JSON object. Do NOT wrap your response in JSON.

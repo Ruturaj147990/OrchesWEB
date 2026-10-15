@@ -26,7 +26,9 @@ import { SettingsManager } from "../platform/settings-manager.js";
 import { BlueprintRepository } from "../storage/repositories/blueprint-repository.js";
 import { buildAuthoritativeTaskContext, updateAuthoritativeTaskContext, type AuthoritativeTaskContext } from "./task-context.js";
 import { getProjectProfile } from "../domain/profiles/project-profiles.js";
-import { buildRequirementInventory, updateRequirementStatuses, RequirementInventory } from "../domain/requirements/requirement-inventory.js";
+import { updateRequirementStatuses } from "../domain/requirements/requirement-inventory.js";
+import { analyzeRequirements } from "./requirements-analyst.js";
+import { buildAgentReference } from "./instruction-prompt.js";
 import { ConversationMemoryService } from "../domain/memory/conversation-memory-service.js";
 import { SecretRedactor } from "../platform/secret-redactor.js";
 
@@ -210,23 +212,6 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     const requirements = blueprintRepo.listRequirements(project.id);
     const profileDef = getProjectProfile(project.profileId);
     const autonomyMode = project.autonomyMode || "creative_within_constraints";
-    const inventory = buildRequirementInventory({
-      taskText: ctx.taskText,
-      projectObjective: project.objective,
-      blueprintDocuments: blueprints,
-      candidateRequirements: requirements,
-    });
-    log(`Requirement Inventory: ${inventory.requirements.length} item(s) mapped (${inventory.summary.mandatory} mandatory, ${inventory.summary.constraints} constraints, ${inventory.summary.acceptanceCriteria} acceptance, ${inventory.summary.inferences} inferences, ${inventory.summary.contradictions} contradictions).`);
-    events.record(project.id, "requirements.inventoried", {
-      summary: inventory.summary,
-      requirements: inventory.requirements.map((r) => ({
-        id: r.id,
-        classification: r.classification,
-        title: r.title,
-        importance: r.importance,
-        sourceReference: r.sourceReference,
-      })),
-    }, run.id, taskId);
     log(`Profile: ${profileDef.name} · Mode: ${autonomyMode}${blueprints.length ? ` · Master blueprints: ${blueprints.length} (${requirements.length} requirement(s))` : ""}`);
 
     const git = new GitManager(root);
@@ -286,6 +271,38 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       warnings.push(plan.warning);
       log(plan.warning, "warn");
     }
+
+    // Requirement register: the reasoning model's analysis of everything the user provided, checked
+    // against Orches' scan of the sources (or the scan alone when the analysis is unavailable).
+    const analysis = await analyzeRequirements(provider, {
+      db,
+      projectId: project.id,
+      runId: run.id,
+      taskText: ctx.taskText,
+      projectObjective: project.objective,
+      blueprints,
+      candidateRequirements: requirements,
+      profile: baselineProfile,
+      signal,
+    });
+    ensureNotCancelled();
+    const inventory = analysis.inventory;
+    log(analysis.note);
+    for (const w of inventory.summary.warnings ?? []) log(w, "warn");
+    events.record(project.id, "requirements.inventoried", {
+      origin: inventory.origin,
+      goal: inventory.goal ?? null,
+      summary: inventory.summary,
+      requirements: inventory.requirements.map((r) => ({
+        id: r.id,
+        classification: r.classification,
+        title: r.title,
+        importance: r.importance,
+        scopeStatus: r.scopeStatus,
+        covers: r.covers,
+        sourceReference: r.sourceReference,
+      })),
+    }, run.id, taskId);
     runs.updateFields(run.id, { title: plan.title });
     taskId = `task-${crypto.randomUUID()}`;
     let taskContext = buildAuthoritativeTaskContext({
@@ -299,6 +316,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     });
 
     const activeCriteriaStrings = taskContext.activeAcceptanceCriteria.map((c) => c.description);
+    plan.acceptanceCriteria = taskContext.activeAcceptanceCriteria.map((c) => `${c.id} ${c.description}`);
+    const registerConstraints = inventory.requirements
+      .filter((r) => r.classification === "explicit_constraint" && (!r.scopeStatus || r.scopeStatus === "in_scope"))
+      .map((r) => ({ id: r.id, text: r.description }));
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO tasks (id, project_id, run_id, title, objective, roadmap_item_id, status, priority, risk,
@@ -372,6 +393,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           conversationId: conversation.id,
           projectId: project.id,
           currentTaskText: ctx.taskText,
+          currentRunId: run.id,
           requirementInventory: inventory,
           provider,
         });
@@ -490,6 +512,9 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           warnings.push(synthesisReason);
         }
 
+        // Reference after the brief (never inside it): the register and the user's request, or only the agreed scope.
+        instructionText = `${instructionText}
+${buildAgentReference(inventory, ctx.taskText, adoptedScope)}`;
         memoryService.recordAgentDispatch(conversation.id, instructionText, { attempt, agent: agent.displayName, runId: run.id });
         db.prepare("UPDATE task_attempts SET instruction_text = ? WHERE id = ?").run(instructionText, attemptId);
         events.record(project.id, "brain.instruction", { attempt, action: "instruct", instruction: instructionText, rationale: instr.rationale, source: instr.source, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
@@ -574,7 +599,11 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       let critic: CriticOutcome = { available: false, error: "not run because the attempt already failed deterministic checks", verdict: "repair", criteria: [], findings: [], repairInstructions: [], summary: "" };
       // A short task that names a file it wants is a hard requirement. In a long specification (or once the
       // model narrowed the scope) file names are often examples or out-of-scope, so they only produce a warning.
-      const requestedMissing = missingRequestedFiles(ctx.taskText, store.listWorkspaceFiles().files);
+      // Uploaded blueprints are referenced by name ("as described in spec.md") but live in Orches, not the workspace.
+      const blueprintNames = new Set(blueprints.map((b) => b.filename.toLowerCase()));
+      const requestedMissing = missingRequestedFiles(ctx.taskText, store.listWorkspaceFiles().files).filter(
+        (f) => !blueprintNames.has(f.replace(/\\/g, "/").split("/").pop()!.toLowerCase())
+      );
       const enforceRequestedFiles = ctx.taskText.length <= 4000 && !adoptedScope;
       const missingFiles = enforceRequestedFiles ? requestedMissing : [];
       if (!enforceRequestedFiles && requestedMissing.length) {
@@ -618,6 +647,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
             auditStage: stage === "audit" || stage === "audit_remediation",
             auditReport: latestAuditReport || agentResult.transcript?.finalReply,
             scopeNote: adoptedScope,
+            constraints: registerConstraints,
+            goal: inventory.goal,
           });
           ensureNotCancelled();
           if (critic.available || critic.errorKind !== "provider") break;
@@ -666,15 +697,9 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         filesChanged: diff.changes.map((c) => c.path),
         passedChecks: attemptChecks.filter((c) => c.status === "passed").map((c) => c.label),
         failedChecks: attemptChecks.filter((c) => c.status !== "passed").map((c) => c.label),
-        criticVerified: critic.available && critic.verdict === "accept"
-          ? critic.criteria.filter((c) => c.status === "passed").map((c) => `${c.id} ${c.reason}`)
-          : [],
-        criticFailed: critic.available && critic.verdict !== "accept"
-          ? [
-              ...critic.repairInstructions,
-              ...critic.criteria.filter((c) => c.status !== "passed").map((c) => `${c.id} ${c.reason}`),
-            ]
-          : [],
+        criteriaResults: critic.available ? critic.criteria : [],
+        reviewerAccepted: critic.available && critic.verdict === "accept",
+        acceptanceCriteria: taskContext.activeAcceptanceCriteria,
       });
       events.record(project.id, "requirements.updated", {
         attempt,
@@ -800,6 +825,11 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
             : []
           : gate.blockers,
         reviewer: critic.available ? `${critic.verdict}: ${critic.summary} ${critic.repairInstructions.join(" ")}` : "",
+        reviewVerdict: critic.available ? critic.verdict : undefined,
+        reviewSummary: critic.available ? critic.summary : undefined,
+        criteriaResults: critic.available ? critic.criteria : undefined,
+        findings: critic.available ? critic.findings : undefined,
+        repairInstructions: critic.available ? critic.repairInstructions : undefined,
       });
       if (attempt < ctx.maxAttempts) log("Preserving files for the next iteration to address feedback.");
     }

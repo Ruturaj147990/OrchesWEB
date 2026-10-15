@@ -24,6 +24,7 @@ import {
 } from "./prompt-fidelity-gate.js";
 import { calculateContextBudget, estimateTokens } from "../domain/memory/context-budget.js";
 import { buildAlternativeFollowUp, analyzeRefusal } from "../prompts/refusal-detector.js";
+import { INSTRUCTION_SYSTEM, buildInstructionPromptV2, checkBriefCoverage, buildCoverageAmendment } from "./instruction-prompt.js";
 import type { AuthoritativeTaskContext } from "./task-context.js";
 
 export {
@@ -43,6 +44,12 @@ export interface IterationEvidence {
   checks: Array<{ label: string; status: string; output: string }>;
   blockers: string[];
   reviewer: string;
+  /** Structured review results (when a review ran). */
+  reviewVerdict?: string;
+  reviewSummary?: string;
+  criteriaResults?: Array<{ id: string; status: string; reason: string }>;
+  findings?: Array<{ severity: string; message: string }>;
+  repairInstructions?: string[];
 }
 
 export interface InstructionContext {
@@ -237,15 +244,7 @@ export function synthesizeSubstantiveBrief(ctx: InstructionContext, inventory: R
   }
 
   sections.push("");
-  sections.push("## 5. Functional Specifications & Domain Workflows");
-  sections.push("### Core Domain Entities");
-  domain.entities.forEach((e) => sections.push(`- ${e}`));
-  sections.push("");
-  sections.push("### Operational Workflows");
-  domain.workflows.forEach((w) => sections.push(`- ${w}`));
-  sections.push("");
-  sections.push("### Business Rules & Integrity Constraints");
-  domain.businessRules.forEach((b) => sections.push(`- ${b}`));
+  void domain;
 
   // Distinguish active in-scope requirements from safety-conflicted, out-of-scope, or deferred items
   const activeConstraints = constraints.filter((c) => c.scopeStatus !== "safety_conflict" && c.scopeStatus !== "out_of_scope");
@@ -452,16 +451,13 @@ export function synthesizeSystemAuditBrief(ctx: InstructionContext): string {
 }
 
 /**
- * Builds the complete, deterministic instruction prompt for the initial brief
- * or iterative repair iterations.
+ * The instruction prompt for the current iteration (see instruction-prompt.ts for its structure).
+ * `options` is accepted for compatibility and ignored.
  */
 export function buildInstructionPrompt(
   ctx: InstructionContext,
   inventory?: RequirementInventory,
-  options: {
-    filesRepresentation?: string;
-    historyRepresentation?: string[];
-  } = {}
+  _options: { filesRepresentation?: string; historyRepresentation?: string[] } = {}
 ): string {
   const inv =
     inventory ||
@@ -472,192 +468,7 @@ export function buildInstructionPrompt(
       blueprintDocuments: ctx.blueprintDocuments,
       candidateRequirements: ctx.blueprintRequirements,
     });
-
-  const mode = ctx.autonomyMode ?? "creative_within_constraints";
-  const modeDirective = MODE_DIRECTIVES[mode] || MODE_DIRECTIVES.creative_within_constraints;
-  const checks = ctx.profile.checks.map((c) => c.label).join(", ") || "none detected (only file validation)";
-
-  const histArr = options.historyRepresentation ?? ctx.history.slice(-2).map(
-    (h) => `--- Iteration ${h.iteration} ---
-INSTRUCTION YOU GAVE: ${h.instruction.slice(0, 1500)}
-AGENT STATE: ${h.agentState}
-AGENT'S OWN REPORT (unverified claim): ${h.agentReply.slice(0, 1500) || "(none)"}
-FILES CHANGED SINCE THE RUN STARTED: ${h.changedFiles.join(", ") || "none"}
-DIFF EXCERPT:
-${h.diffExcerpt.slice(0, 5000) || "(no changes)"}
-CHECKS RUN BY THE ORCHESTRATOR:
-${h.checks.map((c) => `- ${c.label}: ${c.status}${c.status !== "passed" && c.output ? `\n${c.output.split("\n").slice(-25).join("\n")}` : ""}`).join("\n") || "- none"}
-SHORTCOMINGS & REVIEW FEEDBACK TO ADDRESS:
-${h.blockers.map((b) => `- ${b}`).join("\n") || "- (none)"}
-REVIEWER NOTES: ${h.reviewer || "(none)"}`
-  );
-
-  const profileSection = ctx.profileDefinition
-    ? `PROJECT PROFILE: ${ctx.profileDefinition.name}
-${ctx.profileDefinition.description}
-Engineering Guidelines:
-${ctx.profileDefinition.engineeringGuidelines.map((g) => `- ${g}`).join("\n")}
-Focus Areas: ${ctx.profileDefinition.focusAreas.join(", ")}`
-    : "";
-
-  const objectiveSection = ctx.projectObjective && ctx.projectObjective.trim() && ctx.projectObjective.trim() !== ctx.taskText.trim()
-    ? `UNIVERSAL PROJECT SPECIFICATION & INSTRUCTIONS (Authoritative Source of Truth):
-${ctx.projectObjective.trim()}`
-    : "";
-
-  // All mandatory requirements are preserved without silent dropping
-  const allMandatory = inv.requirements
-    .filter((r) => r.classification === "mandatory_requirement")
-    .slice(0, 25);
-  const flaggedConcerns = inv.requirements.filter((r) => r.scopeStatus === "safety_conflict" || r.scopeStatus === "out_of_scope");
-
-  const inventorySection = `STRUCTURED REQUIREMENT INVENTORY (Extracted from source):
-Mandatory Requirements:
-${allMandatory.map((r) => `- [${r.id}] ${r.title}`).join("\n") || "- None explicit"}
-Explicit Constraints:
-${inv.requirements.filter((r) => r.classification === "explicit_constraint").slice(0, 10).map((r) => `- [${r.id}] STRICT: ${r.description}`).join("\n") || "- None explicit"}
-${inv.summary.contradictions > 0 ? `Unresolved Contradictions (Surface, do not invent resolution):\n${inv.requirements.filter((r) => r.classification === "unresolved_contradiction").map((r) => `- [${r.id}] ${r.description}`).join("\n")}` : ""}`;
-
-  // Advisory analysis for GPT-Web evaluation: Never blocks or rejects in Orches.
-  const advisoryFindings: string[] = [];
-  for (const item of flaggedConcerns) {
-    advisoryFindings.push(`- Advisory Flag on [${item.id}] ("${item.title}"): ${item.scopeConflictReason || "Out of scope / safety boundary"}`);
-  }
-  if (inv.summary.contradictions > 0) {
-    for (const c of inv.requirements.filter((r) => r.classification === "unresolved_contradiction")) {
-      advisoryFindings.push(`- Potential Specification Contradiction on [${c.id}]: ${c.description}`);
-    }
-  }
-
-  const advisorySection = advisoryFindings.length > 0
-    ? `POTENTIAL CONCERNS FOR GPT-WEB TO EVALUATE:
-(The following concerns were identified during preliminary analysis as advisory findings. Orches never makes the final decision to reject a task. GPT-Web independently evaluates the original request and these concerns, and determines how to proceed or refuse.)
-${advisoryFindings.join("\n")}`
-    : `POTENTIAL CONCERNS FOR GPT-WEB TO EVALUATE:
-None identified by preliminary analysis. (GPT-Web independently evaluates the task and decides how to proceed.)`;
-
-  const blueprintSection = ctx.blueprintRequirements && ctx.blueprintRequirements.length > 0
-    ? `MASTER BLUEPRINT REQUIREMENTS:
-${ctx.blueprintRequirements
-  .slice(0, 20)
-  .map((r) => `- [${r.id}] (${r.provenanceKind}) ${r.title} — ${r.description} (Ref: ${r.sourceReference})`)
-  .join("\n")}${ctx.blueprintRequirements.length > 20 ? `\n… and ${ctx.blueprintRequirements.length - 20} additional blueprint requirements.` : ""}`
-    : ctx.blueprintDocuments && ctx.blueprintDocuments.length > 0
-      ? `MASTER BLUEPRINT ATTACHMENT:
-Attached document: ${ctx.blueprintDocuments.map((d) => `${d.filename} (${d.byteSize} bytes)`).join(", ")}
-Excerpt:
-${ctx.blueprintDocuments[0].extractedText.slice(0, 2500)}`
-      : "";
-
-  const memorySection = ctx.memoryContextSection
-    ? `PERSISTENT CONTEXT MEMORY & HISTORICAL PROGRESS:\n${ctx.memoryContextSection}`
-    : ctx.memorySnapshotMarkdown
-      ? `PERSISTENT CONTEXT MEMORY SNAPSHOT:\n${ctx.memorySnapshotMarkdown}`
-      : "";
-
-  const filesStr = options.filesRepresentation ?? (ctx.files.slice(0, 100).join(", ") || "(none)");
-
-  const criteriaList = ctx.taskContext?.activeAcceptanceCriteria && ctx.taskContext.activeAcceptanceCriteria.length > 0
-    ? ctx.taskContext.activeAcceptanceCriteria.map((c) => `- **[${c.id}]** ${c.title}: ${c.description}`)
-    : ctx.criteria.map((c, i) => `${i + 1}. ${c}`);
-
-  return [
-    "OBJECTIVE / TASK FROM THE USER:",
-    ctx.taskText.trim(),
-    "",
-    objectiveSection,
-    "",
-    inventorySection,
-    "",
-    advisorySection,
-    "",
-    blueprintSection,
-    "",
-    memorySection,
-    "",
-    "AUTONOMY & CREATIVITY DIRECTIVE:",
-    modeDirective,
-    "",
-    profileSection,
-    "",
-    "ACCEPTANCE CRITERIA:",
-    criteriaList.join("\n"),
-    "",
-    `PROJECT: ${ctx.profile.isEmpty ? "empty folder" : `${ctx.profile.fileCount} files; languages: ${ctx.profile.languages.join(", ") || "unknown"}`}. Checks the orchestrator runs afterwards: ${checks}.`,
-    `EXISTING FILES (sample): ${filesStr}`,
-    "",
-    `ITERATION ${ctx.iteration} of at most ${ctx.maxIterations}.`,
-    ctx.stage === "audit"
-      ? `STAGE: MANDATORY POST-ACCEPTANCE FULL-SYSTEM QUALITY AUDIT
-The implementation requirements have passed initial acceptance. You must now direct the Antigravity agent to conduct a comprehensive, evidence-based quality audit across all system dimensions:
-1. Frontend Architecture & UX
-2. Backend & Service Layer
-3. Database & Data Persistence
-4. AI/ML Components (where present)
-5. Security & Vulnerability Posture
-6. Architecture & Maintainability
-7. Performance & Reliability
-8. Automated Verification & Test Coverage (${checks})
-9. Deployment & Runtime Readiness
-
-Instruct Antigravity to inspect files, execute test suites, and produce an evidence-based audit report.`
-      : ctx.stage === "audit_remediation"
-        ? `STAGE: POST-ACCEPTANCE AUDIT DEFECT REMEDIATION
-The post-acceptance audit identified defects or shortcomings that must be corrected.
-${ctx.auditReport ? `AUDIT REPORT FINDINGS:\n${ctx.auditReport}\n` : ""}
-Provide targeted corrective instructions for Antigravity to resolve each defect and verify fixes with automated checks.`
-        : "",
-    histArr.length ? `PREVIOUS ITERATIONS:\n${histArr.join("\n\n")}` : "This is the first iteration.",
-    ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
-    ctx.adoptedScope
-      ? `\nAGREED SCOPE (proposed by you earlier in this run after declining part of the request):\n${ctx.adoptedScope.slice(0, 2000)}\nContinue strictly within this scope; do not reintroduce anything you declined.`
-      : "",
-    "",
-    `INSTRUCTIONS:
-Determine what engineering work is actually required now.
-Preserve all applicable user requirements, attached-source constraints, and existing architecture.
-Distinguish verified facts from assumptions and unresolved issues.
-Do not invent project requirements or silently override explicit instructions.
-
-Produce a complete, concrete, directly actionable engineering instruction that the native Antigravity agent can execute.
-Specify relevant implementation, integration, and verification expectations. Avoid unnecessary redesign and unrelated work.
-
-Do not merely produce a task title, acceptance-criteria JSON, file list, or high-level plan.
-Do not ask another AI to create a plan or another prompt.
-Do not claim that work has been completed merely because it has been described.
-
-It must communicate:
-1. Executive Objective & Expected Outcome: Restate the full objective, scope boundaries, and target behavior.
-2. Architecture & Design Direction: Outline design patterns, interfaces, integration points, and algorithmic approach.
-3. Applicable Constraints & Profile Guidelines: Incorporate profile guidelines and autonomy mode directives.
-4. Functional Specifications & Workflows: Represent all mandatory requirements from the inventory with [REQ-xxx] traceability.
-5. Scope of Implementation: Guide the agent on areas to inspect and coordinate without prescribing file-by-file copy-paste dumps.
-6. Verification Expectations: Explicitly state how the agent must validate its work (e.g. running the project's tests).
-${histArr.length ? "7. Root Cause Analysis & Fix Directions: Quote the exact failing checks above and specify the technical correction required." : ""}
-
-CRITICAL RULES:
-- DO NOT emit a meta-instruction telling the agent to "construct a brief" or "write a plan". Write the brief directly!
-- PRESERVE ALL EXPLICIT REQUIREMENTS AND CONSTRAINTS. Do not drop or dilute them.
-- DO NOT output full copy-paste source files. The agent will independently inspect the workspace and write the code.
-- DO NOT return the internal task-planning JSON schema (e.g. {"title": "...", "acceptance_criteria": [...], "files_to_read": [...]}).
-
-ROUTING & OUTPUT CONTRACT:
-Respond using the Orches routing protocol (NOT JSON):
-
-If you can provide engineering instructions:
-ORCHES_STATUS: INSTRUCT
-
-[ORCHES_ANTIGRAVITY_INSTRUCTION]
-# Implementation Mission
-<Complete, substantive markdown engineering brief>
-[/ORCHES_ANTIGRAVITY_INSTRUCTION]
-
-If the operation cannot proceed:
-ORCHES_STATUS: STOP
-Reason: <Explanation of genuine blocker>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return buildInstructionPromptV2(ctx, inv);
 }
 
 /**
@@ -678,57 +489,8 @@ export async function composeInstruction(
       candidateRequirements: ctx.blueprintRequirements,
     });
 
-  const budget = calculateContextBudget(provider);
-  let maxOutputTokens = budget.breakdown.maxOutputTokens || 3500;
-  const systemTokens = estimateTokens(SYSTEM);
-  const effectiveLimit = Math.max(1000, budget.totalContextTokens - budget.safetyMarginTokens);
-
-  let currentHistory = ctx.history.slice(-2).map(
-    (h) => `--- Iteration ${h.iteration} ---
-INSTRUCTION YOU GAVE: ${h.instruction.slice(0, 1500)}
-AGENT STATE: ${h.agentState}
-AGENT'S OWN REPORT (unverified claim): ${h.agentReply.slice(0, 1500) || "(none)"}
-FILES CHANGED SINCE THE RUN STARTED: ${h.changedFiles.join(", ") || "none"}
-DIFF EXCERPT:
-${h.diffExcerpt.slice(0, 5000) || "(no changes)"}
-CHECKS RUN BY THE ORCHESTRATOR:
-${h.checks.map((c) => `- ${c.label}: ${c.status}${c.status !== "passed" && c.output ? `\n${c.output.split("\n").slice(-25).join("\n")}` : ""}`).join("\n") || "- none"}
-SHORTCOMINGS & REVIEW FEEDBACK TO ADDRESS:
-${h.blockers.map((b) => `- ${b}`).join("\n") || "- (none)"}
-REVIEWER NOTES: ${h.reviewer || "(none)"}`
-  );
-
-  let filesRepresentation = ctx.files.slice(0, 100).join(", ") || "(none)";
-  let prompt = buildInstructionPrompt(ctx, inventory, { filesRepresentation, historyRepresentation: currentHistory });
-
-  // Request Assembly Guard: ensure total assembled request (system + prompt + output reserve)
-  // strictly fits within effective budget
-  if (systemTokens + estimateTokens(prompt) + maxOutputTokens > effectiveLimit) {
-    // Stage 1: Prune file list
-    filesRepresentation = ctx.files.slice(0, 15).join(", ") || "(none)";
-    prompt = buildInstructionPrompt(ctx, inventory, { filesRepresentation, historyRepresentation: currentHistory });
-  }
-
-  if (systemTokens + estimateTokens(prompt) + maxOutputTokens > effectiveLimit) {
-    // Stage 2: Prune history diffs and excerpts
-    currentHistory = ctx.history.slice(-2).map((h) =>
-      `--- Iteration ${h.iteration} ---
-INSTRUCTION: ${h.instruction.slice(0, 400)}
-AGENT REPLY: ${h.agentReply.slice(0, 300) || "(none)"}
-FILES CHANGED: ${h.changedFiles.join(", ") || "none"}
-CHECKS: ${h.checks.map((c) => `- ${c.label}: ${c.status}`).join("\n") || "- none"}
-SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (none)"}`
-    );
-    filesRepresentation = "(omitted to preserve context budget)";
-    prompt = buildInstructionPrompt(ctx, inventory, { filesRepresentation, historyRepresentation: currentHistory });
-  }
-
-  if (systemTokens + estimateTokens(prompt) + maxOutputTokens > effectiveLimit) {
-    // Stage 3: Dynamically adjust maxOutputTokens to fit remaining room
-    const remainingForOutput = effectiveLimit - systemTokens - estimateTokens(prompt);
-    maxOutputTokens = Math.max(500, Math.min(maxOutputTokens, remainingForOutput));
-  }
-
+  const prompt = buildInstructionPromptV2(ctx, inventory);
+  const maxOutputTokens = 8000;
 
   const operation = ctx.iteration === 1 ? "code_generation" : "repair_diagnosis";
 
@@ -738,7 +500,8 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
       operationId: operation,
       attempt: ctx.iteration,
       stage: ctx.stage || (ctx.iteration === 1 ? "implementation" : "repair"),
-      systemInstruction: SYSTEM,
+      systemInstruction: INSTRUCTION_SYSTEM,
+        skipSourceDelivery: true,
       messages: [{ role: "user", content: prompt }],
       json: false,
       temperature: 0.2,
@@ -861,7 +624,8 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
           operationId: `${operation}_recovery`,
           attempt: ctx.iteration,
           stage: ctx.stage || (ctx.iteration === 1 ? "implementation" : "repair"),
-          systemInstruction: SYSTEM,
+          systemInstruction: INSTRUCTION_SYSTEM,
+        skipSourceDelivery: true,
           messages: [{ role: "user", content: recoveryClarification }],
           json: false,
           temperature: 0.1,
@@ -991,23 +755,59 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
       : synthesizeSubstantiveBrief(ctx, inventory, warning);
   }
 
-  // Mandatory Requirement Traceability & Prompt-Fidelity Gate:
-  // Validate candidate prompt against the inventory, enforce full requirement coverage and constraint preservation.
-  const fidelityResult = validateAndCorrectPrompt(candidateInstruction, inventory, {
-    sourceText: combinedSource,
-    autonomyMode: ctx.autonomyMode,
-    iteration: ctx.iteration,
-  });
+  // Coverage: the first implementation brief must address every in-scope requirement and constraint.
+  // If it does not, GPT-Web is asked once for a complete revised brief; Orches never edits the brief.
+  let finalBrief = candidateInstruction;
+  let coverage = checkBriefCoverage(finalBrief, inventory);
+  const initialCoverage = coverage.report;
+  void combinedSource;
+  if (source === "model" && ctx.iteration === 1 && (!ctx.stage || ctx.stage === "implementation") && coverage.missing.length && !ctx.adoptedScope) {
+    try {
+      const amend = await provider.generate(
+        {
+          operation,
+          operationId: `${operation}_coverage_amend`,
+          attempt: ctx.iteration,
+          stage: ctx.stage || "implementation",
+          systemInstruction: INSTRUCTION_SYSTEM,
+          skipSourceDelivery: true,
+          messages: [{ role: "user", content: buildCoverageAmendment(coverage.missing) }],
+          json: false,
+          temperature: 0.1,
+          maxOutputTokens,
+          projectId: ctx.projectId,
+          runId: ctx.runId,
+        },
+        ctx.signal
+      );
+      const ax = ResponseReader.extractInstruction(amend.text || "", { allowLegacyJson: true });
+      let revised = ax.action === "instruct" ? ax.instructionText.trim() : "";
+      const ms = revised.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+      const me = revised.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+      if (ms !== -1 && me > ms) revised = revised.slice(ms + 32, me).trim();
+      if (revised.length >= Math.min(200, finalBrief.length) && !isTaskDescriptor(revised) && !isThoughtOrStatusFragment(revised)) {
+        const revisedCoverage = checkBriefCoverage(revised, inventory);
+        if (revisedCoverage.missing.length < coverage.missing.length) {
+          finalBrief = revised;
+          coverage = revisedCoverage;
+        }
+      }
+    } catch (err) {
+      if (ctx.signal?.aborted) throw err;
+      console.warn(`[instructor] Coverage amendment request failed: ${(err as Error).message}`);
+    }
+  }
 
+  const coverageNote = coverage.missing.length ? coverage.report.summary : undefined;
   return {
     action: "instruct",
-    instruction: fidelityResult.prompt,
-    rationale: extracted.rationale || (typeof parsed?.rationale === "string" && parsed.rationale ? parsed.rationale : "Engineering implementation brief with verified requirement fidelity"),
+    instruction: finalBrief,
+    rationale: extracted.rationale || (typeof parsed?.rationale === "string" && parsed.rationale ? parsed.rationale : "Engineering brief from the reasoning model"),
     source,
-    warning: warning ? `${warning} ${fidelityResult.report.summary}` : fidelityResult.report.summary,
-    fidelityReport: fidelityResult.report,
-    initialFidelityReport: fidelityResult.initialReport,
-    residualUncertainties: fidelityResult.residualUncertainties,
+    warning: [warning, coverageNote].filter(Boolean).join(" ") || undefined,
+    fidelityReport: coverage.report,
+    initialFidelityReport: initialCoverage,
+    residualUncertainties: coverage.missing.map((r) => `${r.id} not covered by the brief`),
   };
 }
 
@@ -1033,7 +833,8 @@ async function requestOfferedAlternative(
         operationId: `${operation}_offered_alternative`,
         attempt: ctx.iteration,
         stage: ctx.stage || (ctx.iteration === 1 ? "implementation" : "repair"),
-        systemInstruction: SYSTEM,
+        systemInstruction: INSTRUCTION_SYSTEM,
+        skipSourceDelivery: true,
         messages: [{ role: "user", content: buildAlternativeFollowUp(alternative, ctx.taskText) }],
         json: false,
         temperature: 0.1,

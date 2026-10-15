@@ -13,6 +13,8 @@ export interface AuthoritativeAcceptanceCriterion {
   description: string;
   expectedResult: string;
   scopeStatus: "in_scope";
+  /** Requirement/constraint IDs this criterion verifies. */
+  covers?: string[];
 }
 
 export interface AuthoritativeExcludedRequirement {
@@ -98,57 +100,18 @@ export function buildAuthoritativeTaskContext(input: CreateTaskContextInput): Au
     }));
 
   const unresolvedRequirements: AuthoritativeUnresolvedRequirement[] = inventory.requirements
-    .filter((r) => r.classification === "unresolved_contradiction" || r.scopeStatus === "unresolved")
+    .filter((r) => r.classification === "unresolved_contradiction" || r.scopeStatus === "unresolved" || r.contradictionDetails)
     .map((r) => ({
       id: r.id,
       title: r.title,
-      reason: r.contradictionDetails?.conflictingText || "Contradiction or ambiguity in source specification",
+      reason: r.assumption
+        ? `Open question — assume: ${r.assumption}`
+        : r.contradictionDetails
+          ? `Possible conflict with: ${r.contradictionDetails.conflictingText}`
+          : "Contradiction or ambiguity in the source specification",
     }));
 
-  // Derive stable, complete active acceptance criteria
-  const activeAcceptanceCriteria: AuthoritativeAcceptanceCriterion[] = [];
-  const specCriteria = approvedScope.filter((r) => r.classification === "acceptance_criterion");
-
-  if (specCriteria.length > 0) {
-    specCriteria.forEach((c, idx) => {
-      activeAcceptanceCriteria.push({
-        id: `AC-${idx + 1}`,
-        requirementId: c.id,
-        title: normalizeCriterionTitle(c.title),
-        description: c.description.trim(),
-        expectedResult: extractExpectedResult(c.description),
-        scopeStatus: "in_scope",
-      });
-    });
-  } else {
-    // If no explicit acceptance criteria exist, construct them from in-scope mandatory requirements
-    const mandatory = approvedScope.filter(
-      (r) => r.classification === "mandatory_requirement" || r.classification === "explicit_constraint"
-    );
-    if (mandatory.length > 0) {
-      mandatory.slice(0, 10).forEach((m, idx) => {
-        activeAcceptanceCriteria.push({
-          id: `AC-${idx + 1}`,
-          requirementId: m.id,
-          title: normalizeCriterionTitle(m.title),
-          description: m.description.trim(),
-          expectedResult: extractExpectedResult(m.description),
-          scopeStatus: "in_scope",
-        });
-      });
-    } else {
-      // Fallback: derive testable criterion from taskText without promoting clipped fragments
-      const cleanTask = taskText.trim();
-      activeAcceptanceCriteria.push({
-        id: "AC-1",
-        title: cleanTask.split(/\r?\n/)[0].slice(0, 80),
-        description: cleanTask,
-        expectedResult: `Fully implements and satisfies: ${cleanTask}`,
-        scopeStatus: "in_scope",
-      });
-    }
-  }
-
+  const activeAcceptanceCriteria = deriveAcceptanceCriteria(approvedScope, taskText);
   return {
     projectId,
     runId,
@@ -249,3 +212,86 @@ function extractExpectedResult(desc: string): string {
   if (match) return match[1].trim();
   return desc.slice(0, 120);
 }
+
+const MAX_INDIVIDUAL_DERIVED_CRITERIA = 30;
+
+/**
+ * The criteria the reviewer judges every attempt against:
+ * 1. explicit acceptance criteria from the register (with the IDs they cover);
+ * 2. for every in-scope requirement or constraint not covered by (1), a criterion of its own — grouped by
+ *    source section when there are many — so nothing in scope goes unjudged.
+ * Out-of-scope and deferred items are never criteria.
+ */
+function deriveAcceptanceCriteria(inScope: ProjectRequirement[], taskText: string): AuthoritativeAcceptanceCriterion[] {
+  const criteria: AuthoritativeAcceptanceCriterion[] = [];
+  const used = new Set<string>();
+  const nextId = () => {
+    let n = criteria.length + 1;
+    while (used.has(`AC-${n}`)) n++;
+    used.add(`AC-${n}`);
+    return `AC-${n}`;
+  };
+
+  const explicit = inScope.filter((r) => r.classification === "acceptance_criterion");
+  for (const c of explicit) if (/^AC-\d+$/i.test(c.id)) used.add(c.id.toUpperCase());
+  for (const c of explicit) {
+    criteria.push({
+      id: /^AC-\d+$/i.test(c.id) ? c.id.toUpperCase() : nextId(),
+      requirementId: c.id,
+      title: normalizeCriterionTitle(c.title),
+      description: c.description.trim(),
+      expectedResult: extractExpectedResult(c.description),
+      scopeStatus: "in_scope",
+      covers: c.covers ?? [],
+    });
+  }
+
+  const covered = new Set(criteria.flatMap((c) => c.covers ?? []).map((id) => id.toUpperCase()));
+  const uncovered = inScope.filter(
+    (r) => (r.classification === "mandatory_requirement" || r.classification === "explicit_constraint") && !covered.has(r.id.toUpperCase())
+  );
+
+  if (uncovered.length <= MAX_INDIVIDUAL_DERIVED_CRITERIA) {
+    for (const r of uncovered) {
+      criteria.push({
+        id: nextId(),
+        requirementId: r.id,
+        title: normalizeCriterionTitle(r.title),
+        description: `${r.classification === "explicit_constraint" ? "The implementation complies with" : "The implementation fulfils"} ${r.id}: ${r.description.trim()}`,
+        expectedResult: extractExpectedResult(r.description),
+        scopeStatus: "in_scope",
+        covers: [r.id],
+      });
+    }
+  } else {
+    const groups = new Map<string, ProjectRequirement[]>();
+    for (const r of uncovered) {
+      const section = r.sourceReference.replace(/\s*\(line \d+\)$/i, "") || "Specification";
+      groups.set(section, [...(groups.get(section) ?? []), r]);
+    }
+    for (const [section, items] of groups) {
+      criteria.push({
+        id: nextId(),
+        title: `All in-scope items from ${section}`.slice(0, 100),
+        description: `Every item from ${section} is implemented and works as specified: ${items.map((r) => `${r.id} ${r.title}`).join("; ")}`.slice(0, 4000),
+        expectedResult: `${items.length} item(s) from ${section} are implemented and verified.`,
+        scopeStatus: "in_scope",
+        covers: items.map((r) => r.id),
+      });
+    }
+  }
+
+  if (criteria.length === 0) {
+    const cleanTask = taskText.trim();
+    criteria.push({
+      id: "AC-1",
+      title: cleanTask.split(/\r?\n/)[0].slice(0, 80),
+      description: cleanTask,
+      expectedResult: `Fully implements and satisfies: ${cleanTask.slice(0, 300)}`,
+      scopeStatus: "in_scope",
+      covers: [],
+    });
+  }
+  return criteria;
+}
+

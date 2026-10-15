@@ -76,51 +76,26 @@ export interface ReviewAttemptInput {
   auditReport?: string;
   /** Narrower scope the reasoning model proposed and Orches adopted after the full request was declined. */
   scopeNote?: string;
+  /** Constraints from the requirement register. */
+  constraints?: Array<{ id: string; text: string }>;
+  /** One-paragraph goal from the requirement register. */
+  goal?: string;
 }
 
-export const REVIEWER_SYSTEM = `You are an independent, rigorous code reviewer in the Orches autonomous development system.
-You judge whether an implementation diff completes the assigned task and satisfies all active acceptance criteria.
-You only trust the actual diff and the automated check results shown to you, not anyone's unverified claims.
-You must reply using the Orches natural-language review protocol.
-Do NOT return a JSON object. Do NOT wrap your response in JSON.`;
+export const REVIEWER_SYSTEM = `You are the independent reviewer in Orches. You judge code changes against acceptance criteria and constraints using only the diff and the check results Orches ran; reports from the coding agent are unverified claims. Reply in the Orches review format, never JSON.`;
 
-/**
- * Builds the complete, deterministic review prompt for iteration 2 onward.
- * Eliminates JSON instructions, presents canonical criteria, and truthfully represents
- * diff and test execution evidence.
- */
+/** The review prompt: user request, criteria, constraints, scope, checks, diff, reports, verdict rules, format. */
 export function buildReviewPrompt(input: ReviewAttemptInput): string {
   const taskText = (input.taskText || input.taskContext?.originalObjective || "").trim();
-  const iter = input.iteration ?? (input.taskContext?.iteration ? input.taskContext.iteration : 2);
+  const iter = input.iteration ?? input.taskContext?.iteration ?? 1;
 
-  // 1. Acceptance Criteria: prioritize canonical authoritative criteria
-  const criteriaLines: string[] = [];
-  if (input.activeCriteria && input.activeCriteria.length > 0) {
-    for (const c of input.activeCriteria) {
-      criteriaLines.push(`- **[${c.id}]** ${c.title}: ${c.description} (Expected: ${c.expectedResult})`);
-    }
-  } else if (input.taskContext?.activeAcceptanceCriteria && input.taskContext.activeAcceptanceCriteria.length > 0) {
-    for (const c of input.taskContext.activeAcceptanceCriteria) {
-      criteriaLines.push(`- **[${c.id}]** ${c.title}: ${c.description} (Expected: ${c.expectedResult})`);
-    }
-  } else if (input.criteria && input.criteria.length > 0) {
-    input.criteria.forEach((c, i) => {
-      criteriaLines.push(`- **[AC-${i + 1}]** ${c}`);
-    });
-  } else {
-    criteriaLines.push(`- **[AC-1]** Complete implementation of task: ${taskText}`);
-  }
+  const acs = input.activeCriteria?.length ? input.activeCriteria : input.taskContext?.activeAcceptanceCriteria ?? [];
+  const criteriaLines = acs.length
+    ? acs.map((c) => `- ${c.id} ${c.description}${c.covers?.length ? ` (covers ${c.covers.join(", ")})` : ""}`)
+    : input.criteria?.length
+      ? input.criteria.map((c, i) => `- AC-${i + 1} ${c}`)
+      : [`- AC-1 The task is fully implemented: ${taskText}`];
 
-  // 2. Excluded Requirements: present so reviewer does not mistakenly treat omitted out-of-scope items as defects
-  const excludedLines: string[] = [];
-  const excludedItems = input.excludedRequirements || input.taskContext?.excludedRequirements || [];
-  if (excludedItems.length > 0) {
-    for (const ex of excludedItems) {
-      excludedLines.push(`- **[${ex.id}]** (EXCLUDED / ${ex.scopeStatus.toUpperCase()}): ${ex.title} — *${ex.reason}*`);
-    }
-  }
-
-  // 3. Diff Evidence Formatting
   let formattedDiffText: string;
   if (input.diffEvidence) {
     formattedDiffText = input.diffEvidence;
@@ -129,165 +104,61 @@ export function buildReviewPrompt(input: ReviewAttemptInput): string {
     const rawDiff = input.diffText ?? input.taskContext?.latestDiffText ?? "";
     formattedDiffText = formatDiffEvidence(changes, rawDiff, input.maxDiffChars).formattedText;
   }
+  const formattedChecksText = input.checksEvidence ?? formatChecksEvidence(input.checks || (input.taskContext?.latestChecks as any) || []);
 
-  // 4. Automated Checks Formatting
-  let formattedChecksText: string;
-  if (input.checksEvidence) {
-    formattedChecksText = input.checksEvidence;
-  } else {
-    const checks = input.checks || (input.taskContext?.latestChecks as any) || [];
-    formattedChecksText = formatChecksEvidence(checks);
-  }
-
-  const sections: string[] = [
-    `# INDEPENDENT IMPLEMENTATION REVIEW (ITERATION ${iter})`,
+  const s: string[] = [
+    `# Orches review — iteration ${iter} — ${input.auditStage ? "AUDIT" : "IMPLEMENTATION"}`,
     "",
-    "## 1. Task Objective",
-    taskText,
-    "",
-    "## 2. Active Acceptance Criteria to Verify",
-    criteriaLines.join("\n"),
-  ];
-
-  if (input.scopeNote) {
-    sections.push(
-      "",
-      "## AGREED SCOPE (proposed by the reasoning model after declining part of the original request)",
-      input.scopeNote.slice(0, 2000),
-      "Judge the work against this agreed scope. Do NOT score the omission of declined parts as defects."
-    );
-  }
-
-  if (excludedLines.length > 0) {
-    sections.push(
-      "",
-      "## 3. Scope Boundaries & Excluded Requirements (DO NOT SCORE AS DEFECTS)",
-      "The following items from the source specification are explicitly out of scope or in safety conflict for this task.",
-      "Do NOT flag their omission as a failure:",
-      excludedLines.join("\n")
-    );
-  }
-
-  const unresolved = input.previousFindings || input.taskContext?.unresolvedFindings || [];
-  if (unresolved.length > 0) {
-    sections.push(
-      "",
-      "## PREVIOUS UNRESOLVED REVIEW FINDINGS",
-      "The following findings from earlier review iterations remain unresolved and must be verified in the latest diff:",
-      ...unresolved.map((f) => `- **[${f.severity?.toUpperCase() || "HIGH"}]** ${f.message}`)
-    );
-  }
-
-  sections.push(
-    "",
-    "## 4. Automated Verification Results (Run by Orchestrator)",
-    formattedChecksText,
-    "",
-    "## 5. Implementation Changes & Diff Evidence",
-    formattedDiffText
-  );
-
-  const report = input.agentReport || input.agentReply;
-  if (report && report.trim()) {
-    sections.push(
-      "",
-      "## 6. Coding Agent Report (Unverified Claim — Verify Against Diff)",
-      report.slice(0, 2000).trim()
-    );
-  }
-
-  if (input.auditStage) {
-    sections.push(
-      "",
-      "## POST-ACCEPTANCE FULL-SYSTEM QUALITY AUDIT REPORT",
-      input.auditReport || report || "(Full-system audit executed; verify findings and system readiness.)"
-    );
-  }
-
-  sections.push(
-    "",
-    "## 7. Reviewer Instructions & Output Protocol",
+    "## Your task",
     input.auditStage
-      ? "You are conducting the FINAL AUDIT ASSESSMENT following the full-system quality inspection.\n" +
-        "- If all subsystems (frontend, backend, database, security, performance, tests) are verified production-ready and NO remediation is required, issue ORCHES_REVIEW_STATUS: ACCEPT.\n" +
-        "- An ACCEPT verdict MUST NOT contain actionable repair instructions or implementation prompts. Any actionable fix required means you MUST issue REPAIR.\n" +
-        "- If any deficiency, bug, missing test, or quality issue remains, issue ORCHES_REVIEW_STATUS: REPAIR with concrete repair instructions for Antigravity to implement."
-      : "Evaluate each active acceptance criterion based solely on the evidence in the diff and check results.\n" +
-        "- If all active criteria are satisfied and no defects or test failures exist, issue an ACCEPT verdict.\n" +
-        "- If any criterion is not met, automated checks failed, or a bug is found in the diff, issue a REPAIR verdict with concrete findings and specific repair instructions.\n" +
-        "- If evidence is genuinely missing/blocked, issue a BLOCKED verdict.",
+      ? "Judge the final audit: is the system complete and correct against every acceptance criterion and constraint, with nothing left to fix? Trust only the diff, Orches' check results and verifiable evidence; the agent's reports are unverified claims."
+      : "Judge whether the changes meet every acceptance criterion and constraint. Trust only the diff and Orches' check results; the agent's report is an unverified claim.",
     "",
-    "Do NOT return a JSON object. You MUST reply using the following natural-language review protocol:",
+    "## User request (verbatim)",
+    `"""\n${taskText}\n"""`,
+  ];
+  if (input.goal) s.push("", `Goal: ${input.goal}`);
+  s.push("", "## Acceptance criteria (judge each one)", ...criteriaLines);
+  if (input.constraints?.length) {
+    s.push("", "## Constraints (a violation fails the criterion it affects and is a high finding)", ...input.constraints.map((c) => `- ${c.id} ${c.text}`));
+  }
+  const excluded = input.excludedRequirements || input.taskContext?.excludedRequirements || [];
+  if (excluded.length) s.push("", "## Out of scope (do not require these)", ...excluded.map((e) => `- ${e.id} ${e.title}`));
+  if (input.scopeNote) s.push("", "## Agreed scope (the request was narrowed to this; judge against it)", input.scopeNote.slice(0, 2000));
+  const unresolved = input.previousFindings || input.taskContext?.unresolvedFindings || [];
+  if (unresolved.length) s.push("", "## Findings from earlier reviews (check whether they are fixed)", ...unresolved.map((f) => `- [${(f.severity || "high").toUpperCase()}] ${f.message}`));
+  s.push("", "## Checks run by Orches", formattedChecksText, "", "## Changes (diff)", formattedDiffText);
+  const report = input.agentReport || input.agentReply;
+  if (report?.trim()) s.push("", "## Agent report (unverified)", report.slice(0, 3000).trim());
+  if (input.auditStage && (input.auditReport || "").trim() && input.auditReport !== report) s.push("", "## Audit report (unverified)", (input.auditReport || "").slice(0, 8000).trim());
+
+  s.push(
     "",
-    "For a REPAIR decision:",
-    "ORCHES_REVIEW_STATUS: REPAIR",
+    "## Verdict rules",
+    "- ACCEPT: every criterion passed with evidence, no constraint violated, no high or critical finding, nothing left to fix.",
+    "- REPAIR: anything the coding agent can fix. Give one specific repair instruction per problem.",
+    "- BLOCKED: only when the evidence needed to judge the delivered code is missing (e.g. no diff).",
+    "Judge from the code, the diff, the checks and the agent report. A runtime or platform constraint passes when the project declares and uses it correctly; facts about the machine or the workspace's history are not grounds to withhold acceptance.",
     "",
+    "## Reply format (exact)",
+    "ORCHES_REVIEW_STATUS: <ACCEPT | REPAIR | BLOCKED>",
     "[ORCHES_REVIEW]",
-    "",
     "## Verdict",
-    "REPAIR",
-    "",
+    "<ACCEPT | REPAIR | BLOCKED>",
     "## Acceptance Criteria",
-    "- AC-1 — <passed | failed | unverified> — <concise evidence from diff>",
-    "- AC-2 — <passed | failed | unverified> — <concise evidence from diff>",
-    "",
+    "- AC-1 — <passed | failed | unverified> — <evidence>",
+    "(one line for every criterion listed above)",
     "## Findings",
-    "- <Severity (low|medium|high|critical)>, <concrete issue>, <affected component>",
-    "",
+    "- <critical | high | medium | low>, <problem>, <file or component>",
+    "(or (none))",
     "## Repair Instructions",
-    "- <Specific, actionable repair supported by the evidence>",
-    "",
+    "- <specific fix>",
+    "(or (none))",
     "## Summary",
-    "<One concise sentence describing the review outcome.>",
-    "",
-    "[/ORCHES_REVIEW]",
-    "",
-    "For an ACCEPT decision:",
-    "ORCHES_REVIEW_STATUS: ACCEPT",
-    "",
-    "[ORCHES_REVIEW]",
-    "",
-    "## Verdict",
-    "ACCEPT",
-    "",
-    "## Acceptance Criteria",
-    "- AC-1 — passed — <concise evidence from diff>",
-    "",
-    "## Findings",
-    "(none)",
-    "",
-    "## Repair Instructions",
-    "(none)",
-    "",
-    "## Summary",
-    "<One concise sentence confirming all acceptance criteria are verified.>",
-    "",
-    "[/ORCHES_REVIEW]",
-    "",
-    "For a BLOCKED decision:",
-    "ORCHES_REVIEW_STATUS: BLOCKED",
-    "",
-    "[ORCHES_REVIEW]",
-    "",
-    "## Verdict",
-    "BLOCKED",
-    "",
-    "## Acceptance Criteria",
-    "- AC-1 — unverified — <reason>",
-    "",
-    "## Findings",
-    "- Critical, <blocker issue>, <component>",
-    "",
-    "## Repair Instructions",
-    "- <Action required to unblock>",
-    "",
-    "## Summary",
-    "<Clear explanation of why review is blocked.>",
-    "",
+    "<one sentence>",
     "[/ORCHES_REVIEW]"
   );
-
-  return sections.join("\n");
+  return s.join("\n");
 }
 
 /**
