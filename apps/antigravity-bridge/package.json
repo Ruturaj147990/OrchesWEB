@@ -1,8 +1,8 @@
 {
   "name": "orches-bridge",
   "displayName": "Orches Bridge",
-  "description": "Lets the local Orches orchestrator submit prompts to the Antigravity Agent panel in this window.",
-  "version": "0.1.0",
+  "description": "Lets the local Orches orchestrator submit prompts to the Agent panel of this Antigravity window.",
+  "version": "0.1.1",
   "publisher": "orches",
   "license": "MIT",
   "private": true,

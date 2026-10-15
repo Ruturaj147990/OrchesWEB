@@ -1,37 +1,46 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { bridgeDirs, primaryBridgeDir, conversationDirs, samePath } from "./antigravity-locations.js";
 
 /**
- * Integration with the native Antigravity Agent.
+ * Integration with the native Antigravity Agent (both "Antigravity IDE" and "Antigravity", on Windows,
+ * macOS and Linux — including Snap/Flatpak installs; see antigravity-locations.ts).
  *
- * Submission: the Orches Bridge extension (apps/antigravity-bridge) runs inside the Antigravity IDE
- * window and calls the IDE's own `antigravity.sendPromptToAgentPanel` command — the same action as a
- * user typing into the Agent panel. Each window advertises itself in ~/.orches/antigravity-bridge/<pid>.json.
+ * Submission: the Orches Bridge extension (apps/antigravity-bridge) runs inside the Antigravity window
+ * and calls the IDE's own `antigravity.sendPromptToAgentPanel` command — the same action as a user
+ * typing into the Agent panel. Each window advertises itself in <home>/.orches/antigravity-bridge/<pid>.json.
  *
  * Observation: the agent records every conversation as a SQLite database under
- * ~/.gemini/antigravity-ide/conversations/<id>.db (prompt, tool calls with arguments, replies).
+ * <home>/.gemini/<antigravity-ide|antigravity>/conversations/<id>.db (prompt, tool calls, replies).
  * Orches reads it READ-ONLY to identify the conversation it started (by a unique marker in the prompt),
  * follow progress, and collect the agent's final reply and tool calls. The format is undocumented, so
  * this is best-effort evidence; the orchestrator's own workspace diff remains the source of truth.
  */
-
-export const BRIDGE_DIR = path.join(os.homedir(), ".orches", "antigravity-bridge");
-export const CONVERSATIONS_DIR = path.join(os.homedir(), ".gemini", "antigravity-ide", "conversations");
 
 export interface BridgeInfo {
   pid: number;
   port: number;
   token: string;
   folders: string[];
+  /** Home directory as seen inside the IDE (differs from the real home under Snap). */
+  home?: string;
+  app?: string;
+  file?: string;
 }
 
 export interface BridgeStatus {
   bridgeInstalled: boolean;
-  windows: Array<{ pid: number; folders: string[]; canSubmit: boolean }>;
+  windows: Array<{ pid: number; folders: string[]; canSubmit: boolean; app?: string }>;
   matchingWindow: { pid: number; canSubmit: boolean } | null;
   message: string;
+}
+
+interface LiveBridge {
+  info: BridgeInfo;
+  folders: string[];
+  canSubmit: boolean;
+  app?: string;
 }
 
 const STEP_USER_INPUT = 14;
@@ -44,28 +53,25 @@ const STATUS_DONE = 3;
 const STATUS_WAITING_FOR_USER = 6;
 const STATUS_ENDED = 8;
 
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
+/** Every advertised bridge file (possibly stale); liveness is decided by actually contacting it. */
 export function listBridges(): BridgeInfo[] {
-  if (!fs.existsSync(BRIDGE_DIR)) return [];
   const out: BridgeInfo[] = [];
-  for (const f of fs.readdirSync(BRIDGE_DIR).filter((n) => n.endsWith(".json"))) {
+  for (const dir of bridgeDirs()) {
+    let names: string[] = [];
     try {
-      const info = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, f), "utf8")) as BridgeInfo;
-      if (info.port && info.token && pidAlive(info.pid)) out.push(info);
-    } catch {}
+      names = fs.readdirSync(dir).filter((n) => n.endsWith(".json"));
+    } catch {
+      continue;
+    }
+    for (const f of names) {
+      try {
+        const file = path.join(dir, f);
+        const info = JSON.parse(fs.readFileSync(file, "utf8")) as BridgeInfo;
+        if (info.port && info.token && !out.some((o) => o.port === info.port && o.token === info.token)) out.push({ ...info, file });
+      } catch {
+        // half-written or foreign file
+      }
+    }
   }
   return out;
 }
@@ -82,23 +88,44 @@ async function bridgeRequest<T>(b: BridgeInfo, method: string, url: string, body
   return data;
 }
 
+/**
+ * Bridges that answer right now. A process-ID check is not used: under Flatpak the IDE runs in its own
+ * PID namespace, so its PID means nothing outside the sandbox. A stale file simply fails to answer.
+ */
+async function liveBridges(): Promise<LiveBridge[]> {
+  const results = await Promise.all(
+    listBridges().map(async (info) => {
+      try {
+        const s = await bridgeRequest<{ folders: string[]; canSubmit: boolean; app?: string }>(info, "GET", "/status", undefined, 3000);
+        return { info, folders: s.folders ?? info.folders ?? [], canSubmit: Boolean(s.canSubmit), app: s.app ?? info.app } as LiveBridge;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return results.filter((r): r is LiveBridge => r !== null);
+}
+
+/** Homes reported by running bridges (Snap/Flatpak sandboxes), used to locate their conversation records. */
+let knownBridgeHomes: string[] = [];
+
 export async function getBridgeStatus(workspaceRoot?: string): Promise<BridgeStatus> {
-  const installed = fs.existsSync(BRIDGE_DIR);
-  const windows: BridgeStatus["windows"] = [];
-  for (const b of listBridges()) {
-    try {
-      const s = await bridgeRequest<{ folders: string[]; canSubmit: boolean }>(b, "GET", "/status", undefined, 3000);
-      windows.push({ pid: b.pid, folders: s.folders, canSubmit: s.canSubmit });
-    } catch {}
-  }
+  const advertised = listBridges();
+  const installed = advertised.length > 0 || bridgeDirs().length > 0;
+  const live = await liveBridges();
+  knownBridgeHomes = [...new Set(live.map((b) => b.info.home).filter((h): h is string => Boolean(h)))];
+  const windows: BridgeStatus["windows"] = live.map((b) => ({ pid: b.info.pid, folders: b.folders, canSubmit: b.canSubmit, app: b.app }));
   const match = workspaceRoot ? windows.find((w) => w.folders.some((f) => samePath(f, workspaceRoot))) : undefined;
   let message: string;
   if (windows.length === 0) {
     message = installed
-      ? "No Antigravity IDE window with the Orches Bridge is running. Open the project folder in Antigravity."
-      : "The Orches Bridge extension is not installed in Antigravity IDE.";
+      ? advertised.length > 0
+        ? `No Antigravity window with the Orches Bridge answered (${advertised.length} advertised window(s) did not respond). Open the project folder in Antigravity, or reload its window.`
+        : "No Antigravity window with the Orches Bridge is running. Open the project folder in Antigravity."
+      : `The Orches Bridge extension is not installed in Antigravity (no bridge files under ${primaryBridgeDir()}). Run: npm run bridge:install`;
   } else if (workspaceRoot && !match) {
-    message = "The project folder is not open in any Antigravity window. Open it in Antigravity first.";
+    const open = windows.flatMap((w) => w.folders).slice(0, 5).join(", ") || "(no folder)";
+    message = `The project folder is not open in any Antigravity window. Open ${workspaceRoot} in Antigravity first (open now: ${open}).`;
   } else if (match && !match.canSubmit) {
     message = "This Antigravity version does not expose the Agent panel command the bridge needs.";
   } else {
@@ -108,12 +135,18 @@ export async function getBridgeStatus(workspaceRoot?: string): Promise<BridgeSta
 }
 
 export async function submitToAgent(workspaceRoot: string, text: string): Promise<{ submittedAt: number; windowPid: number }> {
-  const candidates = listBridges().filter((b) => b.folders.some((f) => samePath(f, workspaceRoot)));
+  const candidates = (await liveBridges()).filter((b) => b.folders.some((f) => samePath(f, workspaceRoot)));
   if (candidates.length === 0) throw new Error("The project folder is not open in an Antigravity window with the Orches Bridge.");
   if (candidates.length > 1) throw new Error("The project folder is open in more than one Antigravity window; close the duplicates so the prompt goes to exactly one agent.");
   const b = candidates[0];
-  const res = await bridgeRequest<{ submittedAt: number }>(b, "POST", "/prompt", { text, newConversation: true }, 30_000);
-  return { submittedAt: res.submittedAt, windowPid: b.pid };
+  if (b.info.home && !knownBridgeHomes.includes(b.info.home)) knownBridgeHomes.push(b.info.home);
+  const res = await bridgeRequest<{ submittedAt: number }>(b.info, "POST", "/prompt", { text, newConversation: true }, 30_000);
+  return { submittedAt: res.submittedAt, windowPid: b.info.pid };
+}
+
+/** All conversation folders to search (both product variants, real and sandboxed homes). */
+export function agentConversationDirs(): string[] {
+  return conversationDirs(knownBridgeHomes);
 }
 
 // --- Trajectory reading (read-only) ------------------------------------------------------------
@@ -205,7 +238,7 @@ function isIdentifier(s: string): boolean {
   return /^[\w-]{20,}$/.test(s) || /^(bot|call|toolu|req)[-_]/.test(s) || /^[0-9a-f-]{36}$/.test(s) || /^sessionID/.test(s);
 }
 
-export function readTrajectory(conversationId: string, dir = CONVERSATIONS_DIR): AgentTrajectory | null {
+export function readTrajectory(conversationId: string, dir: string): AgentTrajectory | null {
   const file = path.join(dir, `${conversationId}.db`);
   if (!fs.existsSync(file)) return null;
   let db: DatabaseSync | null = null;
@@ -269,18 +302,36 @@ export function readTrajectory(conversationId: string, dir = CONVERSATIONS_DIR):
   }
 }
 
-/** Find the conversation whose first prompt contains `marker`, created at or after `sinceMs`. */
-export function findConversation(marker: string, sinceMs: number, dir = CONVERSATIONS_DIR): string | null {
-  if (!fs.existsSync(dir)) return null;
-  const candidates = fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith(".db"))
-    .map((f) => ({ id: f.slice(0, -3), mtime: Math.max(fs.statSync(path.join(dir, f)).mtimeMs, fs.existsSync(path.join(dir, `${f}-wal`)) ? fs.statSync(path.join(dir, `${f}-wal`)).mtimeMs : 0) }))
-    .filter((c) => c.mtime >= sinceMs - 10_000)
-    .sort((a, b) => b.mtime - a.mtime);
+function mtimeOf(file: string): number {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Find the conversation whose first prompt contains `marker`, created at or after `sinceMs`, across every
+ * conversation folder (both product variants; real and Snap/Flatpak homes).
+ */
+export function findConversation(marker: string, sinceMs: number, dirs: string[] = agentConversationDirs()): { id: string; dir: string } | null {
+  const candidates: Array<{ id: string; dir: string; mtime: number }> = [];
+  for (const dir of dirs) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dir).filter((f) => f.endsWith(".db"));
+    } catch {
+      continue;
+    }
+    for (const f of names) {
+      const mtime = Math.max(mtimeOf(path.join(dir, f)), mtimeOf(path.join(dir, `${f}-wal`)));
+      if (mtime >= sinceMs - 10_000) candidates.push({ id: f.slice(0, -3), dir, mtime });
+    }
+  }
+  candidates.sort((a, b) => b.mtime - a.mtime);
   for (const c of candidates) {
-    const t = readTrajectory(c.id, dir);
-    if (t && t.inputTexts.some((x) => x.includes(marker))) return c.id;
+    const t = readTrajectory(c.id, c.dir);
+    if (t && t.inputTexts.some((x) => x.includes(marker))) return { id: c.id, dir: c.dir };
   }
   return null;
 }
@@ -326,7 +377,7 @@ export async function waitForAgent(opts: {
   const quietMs = opts.quietMs ?? 8000;
   const startDeadline = opts.submittedAt + (opts.startTimeoutMs ?? 90_000);
   const deadline = opts.submittedAt + opts.timeoutMs;
-  let conversationId: string | null = null;
+  let conversation: { id: string; dir: string } | null = null;
   let lastCount = -1;
   let lastChange = Date.now();
   let latest: AgentTrajectory | null = null;
@@ -336,12 +387,12 @@ export async function waitForAgent(opts: {
   while (true) {
     if (opts.signal?.aborted) return { state: "cancelled", trajectory: latest };
     const now = Date.now();
-    if (!conversationId) {
-      conversationId = findConversation(opts.marker, opts.submittedAt);
-      if (!conversationId && now > startDeadline) return { state: "not_started", trajectory: null };
+    if (!conversation) {
+      conversation = findConversation(opts.marker, opts.submittedAt);
+      if (!conversation && now > startDeadline) return { state: "not_started", trajectory: null };
     }
-    if (conversationId) {
-      const t = readTrajectory(conversationId);
+    if (conversation) {
+      const t = readTrajectory(conversation.id, conversation.dir);
       if (t) {
         latest = t;
         if (t.stepCount !== lastCount) {

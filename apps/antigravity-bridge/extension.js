@@ -1,4 +1,4 @@
-// Orches bridge for Antigravity IDE.
+// Orches bridge for Antigravity / Antigravity IDE (Windows, macOS, Linux incl. Snap/Flatpak).
 // Runs inside the IDE's extension host and exposes a tiny loopback-only HTTP API that lets the
 // local Orches server submit a prompt to the Agent panel of THIS window, using the IDE's own
 // command (`antigravity.sendPromptToAgentPanel`) exactly as a user action would. It does not read
@@ -13,10 +13,16 @@ const crypto = require("crypto");
 
 const SEND_COMMAND = "antigravity.sendPromptToAgentPanel";
 const NEW_CONVERSATION_COMMAND = "antigravity.startNewConversation";
-const dir = path.join(os.homedir(), ".orches", "antigravity-bridge");
+// Advertise in the IDE's own home and, under Snap (where HOME is ~/snap/<app>/<rev>), in the real home
+// too, so Orches running outside the sandbox can find this window.
+const dirs = [
+  ...new Set(
+    [process.env.ORCHES_BRIDGE_DIR, path.join(os.homedir(), ".orches", "antigravity-bridge"), process.env.SNAP_REAL_HOME && path.join(process.env.SNAP_REAL_HOME, ".orches", "antigravity-bridge")].filter(Boolean)
+  ),
+];
 const token = crypto.randomBytes(24).toString("hex");
 let server = null;
-let infoFile = null;
+let infoFiles = [];
 let port = 0;
 let busy = false;
 
@@ -26,10 +32,19 @@ function folders() {
 
 function writeInfo() {
   if (!port) return;
-  fs.mkdirSync(dir, { recursive: true });
-  infoFile = path.join(dir, `${process.pid}.json`);
-  const info = { pid: process.pid, port, token, folders: folders(), app: vscode.env.appName, version: vscode.version, startedAt: new Date().toISOString() };
-  fs.writeFileSync(infoFile, JSON.stringify(info, null, 2), { encoding: "utf8", mode: 0o600 });
+  const info = { pid: process.pid, port, token, folders: folders(), app: vscode.env.appName, version: vscode.version, platform: process.platform, home: os.homedir(), startedAt: new Date().toISOString() };
+  const written = [];
+  for (const dir of dirs) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${process.pid}.json`);
+      fs.writeFileSync(file, JSON.stringify(info, null, 2), { encoding: "utf8", mode: 0o600 });
+      written.push(file);
+    } catch (e) {
+      console.warn(`[orches-bridge] could not write ${dir}: ${(e && e.message) || e}`);
+    }
+  }
+  infoFiles = written;
 }
 
 function readBody(req) {
@@ -73,6 +88,10 @@ async function handle(req, res) {
       canSubmit: commands.includes(SEND_COMMAND),
       canStartConversation: commands.includes(NEW_CONVERSATION_COMMAND),
       busy,
+      platform: process.platform,
+      home: os.homedir(),
+      // For diagnosing other Antigravity builds: the agent-related commands this window exposes.
+      agentCommands: commands.filter((c) => /^antigravity\./i.test(c) && /agent|prompt|conversation/i.test(c)).slice(0, 40),
     });
   }
 
@@ -121,9 +140,11 @@ function deactivate() {
     if (server) server.close();
   } catch {}
   server = null;
-  try {
-    if (infoFile) fs.rmSync(infoFile, { force: true });
-  } catch {}
+  for (const file of infoFiles) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {}
+  }
 }
 
 module.exports = { activate, deactivate };

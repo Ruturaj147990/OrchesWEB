@@ -68,27 +68,43 @@ async function checkBrowserSubsystem() {
   }
 }
 
-// 4. Antigravity Bridge Integration
-function checkAntigravityBridge() {
-  const home = os.homedir();
-  const antigravityPaths = [
-    path.join(home, ".gemini", "antigravity-ide"),
-    path.join(home, ".gemini", "config"),
-  ];
+// 4. Antigravity Bridge Integration (both "Antigravity IDE" and "Antigravity"; Windows, macOS, Linux incl. Snap/Flatpak)
+async function checkAntigravityBridge() {
+  const { findCli, bridgeDirs, conversationDirs, userSettingsDirs, primaryBridgeDir } = await import("./antigravity-locations.js");
+  const { listBridges, getBridgeStatus } = await import("./antigravity-agent.js");
+  const C = "Antigravity Bridge";
 
-  const foundAny = antigravityPaths.some((p) => fs.existsSync(p));
-  if (foundAny) {
-    record("Antigravity Bridge", "Antigravity Environment", "PASS", `Detected Antigravity directory structure under ${home}`);
-  } else {
-    record("Antigravity Bridge", "Antigravity Environment", "WARN", `Antigravity IDE directory not found at standard path (${path.join(home, ".gemini")}). If using native Bridge, ensure Antigravity is installed.`);
+  const cli = findCli();
+  record(C, "Antigravity Launcher", cli ? "PASS" : "WARN", cli ? `Found ${cli}` : "Neither 'antigravity-ide' nor 'antigravity' launcher found (needed for 'npm run bridge:install' and 'Open in IDE').");
+
+  const settings = userSettingsDirs();
+  record(C, "Antigravity Settings", settings.length ? "PASS" : "WARN", settings.length ? `Found: ${settings.join(", ")}` : "No Antigravity user settings folder found.");
+
+  const dirs = bridgeDirs();
+  const advertised = listBridges();
+  record(C, "Bridge Discovery Folders", dirs.length ? "PASS" : "FAIL", dirs.length ? `Searched: ${dirs.join(", ")}` : `No bridge folder found (expected ${primaryBridgeDir()}). Install the bridge (npm run bridge:install), then open the project in Antigravity.`);
+  record(C, "Advertised Bridge Windows", advertised.length ? "PASS" : "WARN", `${advertised.length} advertised: ${advertised.map((b) => `pid ${b.pid} port ${b.port} app ${b.app ?? "?"} home ${b.home ?? "?"} folders [${(b.folders || []).join(", ")}]`).join(" | ") || "none"}`);
+
+  const status = await getBridgeStatus();
+  record(
+    C,
+    "Responding Bridge Windows",
+    status.windows.length ? "PASS" : advertised.length ? "FAIL" : "WARN",
+    status.windows.length
+      ? status.windows.map((w) => `pid ${w.pid} (${w.app ?? "?"}) canSubmit=${w.canSubmit} folders [${w.folders.join(", ")}]`).join(" | ")
+      : advertised.length
+        ? "Advertised windows did not answer on 127.0.0.1 (stale files, a firewall/sandbox blocking loopback, or the window was closed)."
+        : "No running Antigravity window with the bridge. Open the project folder in Antigravity."
+  );
+  if (status.windows.some((w) => !w.canSubmit)) {
+    record(C, "Agent Panel Command", "FAIL", "A bridge window does not expose 'antigravity.sendPromptToAgentPanel'. Check /status 'agentCommands' for this Antigravity build's command names.");
   }
+
+  const convo = conversationDirs(advertised.map((b) => b.home).filter((h): h is string => Boolean(h)));
+  record(C, "Agent Conversation Records", convo.length ? "PASS" : "WARN", convo.length ? `Found: ${convo.join(", ")}` : "No ~/.gemini/antigravity-ide or ~/.gemini/antigravity conversations folder found yet (created after the first agent conversation).");
 
   const bridgeInstallScript = path.join(ORCHESTRATOR_ROOT, "apps", "antigravity-bridge", "install.mjs");
-  if (fs.existsSync(bridgeInstallScript)) {
-    record("Antigravity Bridge", "Bridge Installer Script", "PASS", `Found bridge installer: ${bridgeInstallScript}`);
-  } else {
-    record("Antigravity Bridge", "Bridge Installer Script", "WARN", `Bridge installer script not found at ${bridgeInstallScript}`);
-  }
+  record(C, "Bridge Installer Script", fs.existsSync(bridgeInstallScript) ? "PASS" : "WARN", fs.existsSync(bridgeInstallScript) ? `Found bridge installer: ${bridgeInstallScript}` : `Bridge installer script not found at ${bridgeInstallScript}`);
 }
 
 // 5. Network & Port Availability
@@ -134,7 +150,7 @@ export async function runDiagnostics(): Promise<{ pass: boolean; results: Diagno
   checkNodeVersion();
   checkDataDirectory();
   await checkBrowserSubsystem();
-  checkAntigravityBridge();
+  await checkAntigravityBridge();
   await checkPortAvailability();
   checkSecuritySanitization();
 

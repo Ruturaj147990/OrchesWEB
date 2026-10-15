@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { runCommand } from "./process-runner.js";
 import { getBridgeStatus } from "./antigravity-agent.js";
+import { findCli, samePath, userSettingsDirs, PRODUCT_VARIANTS } from "./antigravity-locations.js";
 
 export interface AntigravityStatus {
   installed: boolean;
@@ -24,30 +24,9 @@ export interface AntigravityStatus {
  * - The workbench command `antigravity.sendPromptToAgentPanel` submits a prompt to the Agent panel;
  *   the Orches Bridge extension (apps/antigravity-bridge) invokes it inside the IDE. See antigravity-agent.ts.
  */
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
-}
-
+/** Antigravity IDE or Antigravity command-line launcher (any platform; see antigravity-locations.ts). */
 export function findAntigravityCli(): string | null {
-  const home = os.homedir();
-  const candidates =
-    process.platform === "win32"
-      ? [
-          path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "Programs", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-          path.join(process.env.ProgramFiles || "C:\\Program Files", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-          path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Antigravity IDE", "bin", "antigravity-ide.cmd"),
-        ]
-      : [
-          path.join(home, ".local", "bin", "antigravity-ide"),
-          "/usr/local/bin/antigravity-ide",
-          "/usr/bin/antigravity-ide",
-          "/snap/bin/antigravity-ide",
-          "/opt/Antigravity IDE/bin/antigravity-ide",
-          "/opt/antigravity/bin/antigravity-ide",
-          "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
-        ];
-  return candidates.find((c) => c && fs.existsSync(c)) ?? null;
+  return findCli();
 }
 
 function fileUriToPath(uri: string): string | null {
@@ -58,11 +37,16 @@ function fileUriToPath(uri: string): string | null {
 }
 
 export function readOpenFolders(storageDir?: string): string[] {
-  const appData =
-    process.platform === "win32"
-      ? (process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"))
-      : (process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"));
-  const file = path.join(storageDir ?? path.join(appData, "Antigravity IDE", "User"), "globalStorage", "storage.json");
+  const out: string[] = [];
+  for (const dir of storageDir ? [storageDir] : userSettingsDirs()) {
+    for (const p of readOpenFoldersFrom(path.join(dir, "globalStorage", "storage.json"))) {
+      if (!out.some((o) => samePath(o, p))) out.push(p);
+    }
+  }
+  return out;
+}
+
+function readOpenFoldersFrom(file: string): string[] {
   try {
     const data = JSON.parse(fs.readFileSync(file, "utf8")) as {
       windowsState?: { lastActiveWindow?: { folder?: string }; openedWindows?: Array<{ folder?: string }> };
@@ -83,8 +67,11 @@ export function readOpenFolders(storageDir?: string): string[] {
 
 async function isRunning(): Promise<boolean> {
   if (process.platform === "win32") {
-    const res = await runCommand(["tasklist", "/FI", "IMAGENAME eq Antigravity IDE.exe", "/FO", "CSV", "/NH"], { cwd: process.cwd(), timeoutMs: 8000 });
-    return res.exitCode === 0 && res.stdout.toLowerCase().includes("antigravity ide.exe");
+    for (const v of PRODUCT_VARIANTS) {
+      const res = await runCommand(["tasklist", "/FI", `IMAGENAME eq ${v.winExe}`, "/FO", "CSV", "/NH"], { cwd: process.cwd(), timeoutMs: 8000 });
+      if (res.exitCode === 0 && res.stdout.toLowerCase().includes(v.winExe.toLowerCase())) return true;
+    }
+    return false;
   }
   const res = await runCommand(["pgrep", "-f", "antigravity"], { cwd: process.cwd(), timeoutMs: 5000 });
   return res.exitCode === 0;
