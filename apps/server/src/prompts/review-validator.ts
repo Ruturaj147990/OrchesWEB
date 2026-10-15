@@ -253,7 +253,10 @@ function parseSections(text: string): Record<string, string> {
   let currentLines: string[] = [];
 
   for (const line of lines) {
-    const headingMatch = line.match(/^#{1,3}\s+(.+)$/);
+    // Replies read from the rendered chat lose "##"; a known section name on its own line is a heading too.
+    const headingMatch =
+      line.match(/^#{1,3}\s+(.+)$/) ??
+      line.trim().match(/^\**\s*(verdict|acceptance criteria|findings|repair instructions|repairs|summary)\s*\**\s*:?\s*\**$/i);
     if (headingMatch) {
       if (currentLines.length > 0) {
         sections[currentKey] = currentLines.join("\n").trim();
@@ -279,7 +282,8 @@ function parseSections(text: string): Record<string, string> {
  */
 function parseCriteriaList(text: string): ParsedReviewCriterion[] {
   const results: ParsedReviewCriterion[] = [];
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[-*•\d\.)]/.test(l));
+  // Bulleted lines, or (rendered replies lose list markers) lines that start with a criterion id.
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[-*•\d\.)]/.test(l) || /^[A-Z][A-Z0-9]{0,6}-[A-Z0-9]+\b/.test(l));
 
   for (let idx = 0; idx < lines.length; idx++) {
     const line = lines[idx].replace(/^[-*•\d\.)\s]+/, "");
@@ -315,7 +319,7 @@ function parseCriteriaList(text: string): ParsedReviewCriterion[] {
  */
 function parseFindingsList(text: string): ParsedReviewFinding[] {
   const results: ParsedReviewFinding[] = [];
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[-*•\d\.)]/.test(l));
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[-*•\d\.)]/.test(l) || /^(critical|high|medium|low)\b/i.test(l));
 
   for (const line of lines) {
     const clean = line.replace(/^[-*•\d\.)\s]+/, "");

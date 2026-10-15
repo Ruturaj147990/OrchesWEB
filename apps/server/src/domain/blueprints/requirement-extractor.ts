@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import { ImportedDocument } from "./importer.js";
+import { scanSource } from "../requirements/requirement-inventory.js";
 
 export interface CandidateRequirement {
   id: string;
@@ -14,68 +14,45 @@ export interface CandidateRequirement {
   createdAt: string;
 }
 
+/** Same bound as the requirement register's scan. */
+const MAX_CANDIDATES = 400;
+
 export class RequirementExtractor {
+  /**
+   * The document's in-scope requirement statements, found by the same scan the requirement register uses (so the
+   * list the user reviews, and any item they reject, matches what the register sees). Headings, background,
+   * out-of-scope and later-phase items are not candidates.
+   */
   public extractFromDocument(projectId: string, doc: ImportedDocument): CandidateRequirement[] {
-    const text = doc.extractedText;
-    const requirements: CandidateRequirement[] = [];
-    const lines = text.split(/\r?\n/);
-    let reqIndex = 1;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const isHeading = /^#{1,4}\s+/.test(line);
-      const isBullet = /^[-*]\s+/.test(line);
-      const isNumbered = /^\d+\.\s+/.test(line);
-      const lower = line.toLowerCase();
-      const hasRequirementKeyword =
-        lower.includes("must ") ||
-        lower.includes("shall ") ||
-        lower.includes("require") ||
-        lower.includes("feature:") ||
-        lower.includes("objective:") ||
-        lower.includes("acceptance criteria");
-
-      if ((isHeading || isBullet || isNumbered || hasRequirementKeyword) && line.length > 8) {
-        const cleanTitle = line.replace(/^[#\-*\d.\s:]+/, "").trim();
-        const lowerTitle = cleanTitle.toLowerCase();
-        if (
-          cleanTitle.length < 5 ||
-          lowerTitle.startsWith("table of contents") ||
-          lowerTitle === "requirements" ||
-          lowerTitle === "constraints" ||
-          lowerTitle === "acceptance criteria" ||
-          lowerTitle === "architecture" ||
-          lowerTitle === "overview" ||
-          lowerTitle === "features"
-        ) continue;
-
-        const isExplicit = hasRequirementKeyword || lower.includes("must") || lower.includes("shall") || lower.includes("required");
-
-        requirements.push({
-          id: `REQ-${String(reqIndex++).padStart(3, "0")}`,
-          projectId,
-          blueprintId: doc.id,
-          title: cleanTitle.slice(0, 150),
-          description: `Extracted from ${doc.filename} (Line ${i + 1}): ${cleanTitle}`,
-          provenanceKind: isExplicit ? "explicit" : "inferred",
-          sourceReference: `${doc.filename}:Line ${i + 1}`,
-          status: "candidate",
-          proposedAcceptanceTest: `Automated test verifying that '${cleanTitle.slice(0, 80)}' functions as specified.`,
-          createdAt: new Date().toISOString(),
-        });
-
-        if (requirements.length >= 250) {
-          doc.warnings.push(`Document contains additional candidate requirements exceeding bounded extraction limit (250); excess requirements deferred.`);
-          break; // Bounded extraction with explicit warning
-        }
-      }
+    const createdAt = new Date().toISOString();
+    const seen = new Set<string>();
+    const items = scanSource(doc.extractedText, doc.filename).filter((it) => {
+      const key = it.text.toLowerCase();
+      if (it.scope !== "in_scope" || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (items.length > MAX_CANDIDATES) {
+      doc.warnings.push(`The document has ${items.length} requirement-like statements; the first ${MAX_CANDIDATES} are listed here. The full text is still used.`);
     }
+
+    // Ids are unique per document (they are primary keys across every project and blueprint).
+    const requirements: CandidateRequirement[] = items.slice(0, MAX_CANDIDATES).map((it, n) => ({
+      id: `${doc.id}-REQ-${String(n + 1).padStart(3, "0")}`,
+      projectId,
+      blueprintId: doc.id,
+      title: it.text.slice(0, 150),
+      description: `${it.kind === "constraint" ? "Constraint" : it.kind === "criterion" ? "Acceptance criterion" : it.kind === "optional" ? "Optional" : "Requirement"} from ${it.source}: ${it.text}`,
+      provenanceKind: it.strength >= 3 ? "explicit" : "inferred",
+      sourceReference: it.source,
+      status: "candidate",
+      proposedAcceptanceTest: `Automated test verifying that '${it.text.slice(0, 80)}' functions as specified.`,
+      createdAt,
+    }));
 
     if (requirements.length === 0) {
       requirements.push({
-        id: "REQ-001",
+        id: `${doc.id}-REQ-001`,
         projectId,
         blueprintId: doc.id,
         title: `Fulfill objective of ${doc.filename}`,
@@ -84,7 +61,7 @@ export class RequirementExtractor {
         sourceReference: doc.filename,
         status: "candidate",
         proposedAcceptanceTest: "Run project test suite and verify clean build fulfilling blueprint specifications.",
-        createdAt: new Date().toISOString(),
+        createdAt,
       });
     }
 

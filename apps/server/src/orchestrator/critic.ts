@@ -138,7 +138,7 @@ export function buildReviewPrompt(input: ReviewAttemptInput): string {
     "- ACCEPT: every criterion passed with evidence, no constraint violated, no high or critical finding, nothing left to fix.",
     "- REPAIR: anything the coding agent can fix. Give one specific repair instruction per problem.",
     "- BLOCKED: only when the evidence needed to judge the delivered code is missing (e.g. no diff).",
-    "Judge from the code, the diff, the checks and the agent report. A runtime or platform constraint passes when the project declares and uses it correctly; facts about the machine or the workspace's history are not grounds to withhold acceptance.",
+    "Judge from the code, the diff, the checks and the agent report. A runtime or platform constraint passes when the project declares and uses it correctly; facts about the machine or the workspace's history are not grounds to withhold acceptance. Example values in a criterion that the user's request does not state are illustrative: judge the behaviour, not the exact example.",
     "",
     "## Reply format (exact)",
     "ORCHES_REVIEW_STATUS: <ACCEPT | REPAIR | BLOCKED>",

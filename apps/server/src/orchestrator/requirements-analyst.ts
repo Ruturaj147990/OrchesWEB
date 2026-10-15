@@ -20,7 +20,7 @@ import { analyzeRefusal } from "../prompts/refusal-detector.js";
  * identical input, and falls back to the scan when the analysis is unavailable.
  */
 
-const ANALYSIS_VERSION = "register-v1.1";
+const ANALYSIS_VERSION = "register-v1.2";
 const MARKER_START = "[ORCHES_REQUIREMENTS]";
 const MARKER_END = "[/ORCHES_REQUIREMENTS]";
 
@@ -66,7 +66,7 @@ export function buildAnalysisPrompt(input: AnalysisInput, scan: RequirementInven
     .filter((r) => r.classification !== "unresolved_contradiction")
     .slice(0, 150)
     .map((r) => `- ${r.description.slice(0, 300)}${r.scopeStatus && r.scopeStatus !== "in_scope" ? ` [${r.scopeStatus.replace("_", " ")}]` : ""}`);
-  return `Analyse the sources below and produce the requirement register.
+  return `Analyse the sources below and produce the requirement register. Reply only in the exact format under "Reply format" at the end (starting with "ORCHES_STATUS: REQUIREMENTS"), however long the sources are.
 
 # Sources
 ${sourcesSection(input)}
@@ -82,7 +82,7 @@ ${checklist.join("\n") || "(none)"}
 - One self-contained, testable statement per item. Split compound statements.
 - Priority: MUST (stated as required), SHOULD (stated as preferred), COULD (optional). Start a statement with "(inferred)" when it is not stated in the sources but needed to meet them; keep inferences minimal.
 - Every MUST and SHOULD requirement and every constraint is covered by at least one acceptance criterion. Criteria describe observable behaviour or a check that can be run. Group closely related items; aim for 3–25 criteria.
-- A criterion must be verifiable from the delivered code, its tests and their output. For environment constraints (runtime version, platform) check what the project declares and uses, not the machine.
+- A criterion must be verifiable from the delivered code, its tests and their output. Use only values the sources state; never require example values of your own (names, inputs) — describe the behaviour instead. For environment constraints (runtime version, platform) check what the project declares and uses, not the machine.
 - Items come only from the sources. Do not add items about the workspace state, the development process or things the sources do not ask for.
 - Later phases, future work and anything the sources exclude go under OUT OF SCOPE, not REQUIREMENTS.
 - Ambiguities and conflicts go under OPEN QUESTIONS with the assumption to use.

@@ -93,23 +93,72 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   });
   const doc = await task.promise;
   try {
-    const pages: string[] = [];
+    const lines: PdfLine[] = [];
     for (let n = 1; n <= doc.numPages; n++) {
       const page = await doc.getPage(n);
       const content = await page.getTextContent();
       let text = "";
-      for (const item of content.items as Array<{ str?: string; hasEOL?: boolean }>) {
+      let size = 0;
+      const flush = () => {
+        const t = text.replace(/[ \t]+/g, " ").trim();
+        if (t) lines.push({ text: t, size });
+        text = "";
+        size = 0;
+      };
+      for (const item of content.items as Array<{ str?: string; hasEOL?: boolean; transform?: number[]; height?: number }>) {
         if (typeof item.str !== "string") continue;
         text += item.str;
-        if (item.hasEOL) text += "\n";
+        if (item.str.trim()) size = Math.max(size, item.transform ? Math.hypot(item.transform[0], item.transform[1]) : item.height ?? 0);
+        if (item.hasEOL) flush();
       }
-      pages.push(text.replace(/[ \t]+\n/g, "\n").trim());
+      flush();
+      lines.push({ text: "", size: 0 }); // page break
       page.cleanup();
     }
-    return pages.join("\n\n");
+    return pdfLinesToText(lines);
   } finally {
     await doc.destroy();
   }
+}
+
+interface PdfLine {
+  text: string;
+  size: number;
+}
+
+/**
+ * Restores the structure a PDF only shows visually, so the requirement scan can use it: lines set in a larger
+ * font than the body become Markdown headings (largest = level 1) and lines wrapped by the page width are rejoined.
+ */
+function pdfLinesToText(lines: PdfLine[]): string {
+  const chars = new Map<number, number>();
+  for (const l of lines) if (l.text) chars.set(Math.round(l.size * 2) / 2, (chars.get(Math.round(l.size * 2) / 2) ?? 0) + l.text.length);
+  const body = [...chars.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0;
+  const isHeading = (l: PdfLine) => body > 0 && l.size >= body * 1.12 && l.text.length <= 120 && !/[.;,]$/.test(l.text);
+  const headingSizes = [...new Set(lines.filter(isHeading).map((l) => Math.round(l.size * 2) / 2))].sort((a, b) => b - a);
+
+  const out: string[] = [];
+  let prev: PdfLine | null = null;
+  for (const l of lines) {
+    if (!l.text) {
+      prev = null;
+      continue;
+    }
+    if (isHeading(l)) {
+      const level = Math.min(6, headingSizes.indexOf(Math.round(l.size * 2) / 2) + 1);
+      out.push("", `${"#".repeat(level)} ${l.text}`);
+      prev = null;
+      continue;
+    }
+    // A body line that continues the previous sentence (wrapped by the page width) is joined to it.
+    if (prev && !isHeading(prev) && Math.abs(prev.size - l.size) < 0.6 && !/[.:;!?]$/.test(prev.text) && /^[a-z(]/.test(l.text) && out.length) {
+      out[out.length - 1] += ` ${l.text}`;
+    } else {
+      out.push(l.text);
+    }
+    prev = l;
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Reads one entry from a ZIP archive (stored or deflated) without any third-party library. */
@@ -157,6 +206,66 @@ function decodeXmlEntities(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
+/** Text of one paragraph's runs. */
+function docxParagraphText(xml: string): string {
+  let out = "";
+  const re = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:tab\/>|<w:br\/>|<w:cr\/>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) out += m[1] !== undefined ? decodeXmlEntities(m[1]) : m[0] === "<w:tab/>" ? "\t" : " ";
+  return out.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * word/document.xml as Markdown-like text so the requirement scan sees the document's structure: heading styles
+ * become "#" headings, list paragraphs become "- " bullets and tables become "|" rows.
+ */
+function docxBodyToStructuredText(text: string): string {
+  const out: string[] = [];
+  let row: string[] | null = null;
+  let cell: string[] | null = null;
+  let rowsInTable = 0;
+  const re = /<w:tbl\b[^>]*>|<\/w:tbl>|<w:tr\b[^>]*>|<\/w:tr>|<w:tc\b[^>]*>|<\/w:tc>|<w:p\b[^>]*\/>|<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const tag = m[0];
+    if (tag.startsWith("<w:tbl")) {
+      rowsInTable = 0;
+      out.push("");
+    } else if (tag === "</w:tbl>") {
+      out.push("");
+    } else if (tag.startsWith("<w:tr")) {
+      row = [];
+    } else if (tag === "</w:tr>") {
+      if (row) {
+        out.push(`| ${row.join(" | ")} |`);
+        if (++rowsInTable === 1) out.push(`|${row.map(() => "---").join("|")}|`);
+      }
+      row = null;
+    } else if (tag.startsWith("<w:tc")) {
+      cell = [];
+    } else if (tag === "</w:tc>") {
+      if (row && cell) row.push(cell.join(" ").replace(/\|/g, "/"));
+      cell = null;
+    } else if (m[1] !== undefined) {
+      const para = docxParagraphText(m[1]);
+      if (cell) {
+        if (para) cell.push(para);
+        continue;
+      }
+      if (!para) {
+        out.push("");
+        continue;
+      }
+      const style = m[1].match(/<w:pStyle w:val="([^"]+)"/)?.[1] ?? "";
+      const heading = style.match(/^(?:heading|berschrift|titre)\s?(\d)$/i) ?? (/^title$/i.test(style) ? ["", "1"] : null);
+      if (heading) out.push("", `${"#".repeat(Math.min(6, Number(heading[1])))} ${para}`);
+      else if (/list/i.test(style) || /<w:numPr>/.test(m[1])) out.push(`- ${para}`);
+      else out.push(para);
+    }
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /** Paragraph text of word/document.xml (plus footnotes when present). */
 function extractDocxText(buffer: Buffer): string {
   const parts: string[] = [];
@@ -175,7 +284,15 @@ function extractDocxText(buffer: Buffer): string {
       else if (m[0] === "<w:tab/>") out += "\t";
       else out += "\n";
     }
-    parts.push(out.replace(/\n{3,}/g, "\n\n").trim());
+    const flat = out.replace(/\n{3,}/g, "\n\n").trim();
+    if (entry === "word/document.xml") {
+      // Keep the structured form unless it lost text (e.g. unusual nesting such as text boxes).
+      const letters = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, "").length;
+      const structured = docxBodyToStructuredText(text);
+      parts.push(letters(structured) >= letters(flat) * 0.98 ? structured : flat);
+      continue;
+    }
+    parts.push(flat);
   }
   return parts.filter(Boolean).join("\n\n");
 }

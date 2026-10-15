@@ -170,7 +170,7 @@ export function BlueprintDialog({ projectId, projectName, onClose, onChanged }: 
                 {requirements.map((r) => (
                   <li key={r.id} className={`requirement-item provenance-${r.provenanceKind}`}>
                     <div className="req-header">
-                      <span className="req-id">{r.id}</span>
+                      <span className="req-id">{r.id.match(/REQ-\d+$/)?.[0] ?? r.id}</span>
                       <span className={`badge badge-${r.provenanceKind === "explicit" ? "success" : "neutral"} small`}>
                         {r.provenanceKind}
                       </span>

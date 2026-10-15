@@ -58,8 +58,16 @@ export const blueprintRoutes: FastifyPluginAsync = async (fastify) => {
       const doc = await importer.importFile(filename, buffer);
       const reqs = extractor.extractFromDocument(projectId, doc);
 
-      blueprintRepo.addBlueprint(projectId, doc);
-      blueprintRepo.addRequirements(reqs);
+      // Both or neither: a failed import must not leave a blueprint without its requirements.
+      db.exec("BEGIN");
+      try {
+        blueprintRepo.addBlueprint(projectId, doc);
+        blueprintRepo.addRequirements(reqs);
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
 
       eventStore.record(projectId, "blueprint.imported", {
         blueprintId: doc.id,

@@ -98,19 +98,23 @@ export function sectionKind(heading: string): SectionKind {
   if (/optional|nice[- ]to[- ]have|stretch|bonus|could have/.test(h)) return "optional";
   if (/constraint|tech(nical)?\s*(stack|requirements|choices)?|technology|\bstack\b|non[- ]?functional|\brules\b|guidelines|security|performance|platform|environment|deployment|infrastructure|architecture|conventions|limitations/.test(h)) return "constraints";
   if (/requirement|feature|functional|user stor|\bscope\b|must[- ]have|deliverable|\bmvp\b|phase\s*1\b|milestone\s*1\b|\bcore\b|functionality|capabilit|use cases?|workflows?|endpoints?|\bapi\b|screens?|pages?|data model/.test(h)) return "requirements";
-  if (/note|reference|background|overview|introduction|context|about|summary|appendix|glossary|faq|setup|install|readme|changelog|links|resources|motivation|history|credits|license|contact/.test(h)) return "info";
+  if (/note|reference|background|overview|introduction|context|about|summary|appendix|glossary|faq|setup|install|readme|changelog|links|resources|motivation|history|credits|license|contact|open (questions?|issues|points)|questions|risks|\btbd\b/.test(h)) return "info";
   return "general";
 }
 
 const MODAL = /\b(must|shall|should|required|requires|needs? to|has to|have to|never|always|only|cannot|can't|do not|don't|must not|may not|is not allowed|forbidden|prohibited)\b/i;
 const IMPERATIVE_START = /^(create|build|add|implement|make|write|develop|design|support|provide|allow|enable|ensure|use|include|expose|return|store|save|display|show|validate|handle|integrate|deploy|configure|generate|send|log|track|calculate|compute|prevent|reject|accept|keep|remove|replace|refactor|fix|update|migrate|test)\b/i;
 const CONSTRAINT_TEXT = /\b(must not|shall not|do not|don't|never|cannot|can't|may not|not allowed|forbidden|prohibited|only use|must use|shall use|use only|written in|must be (?:written|built|implemented) (?:in|with)|no external dependenc|zero (?:external )?dependenc|standard library only|without (?:any )?(?:external|third[- ]party)|version\s+\d|port\s+\d+|compatible with|must run on|must support (?:windows|linux|mac|node|python))\b/i;
-const CRITERION_TEXT = /^(verify that|assert that|test that|check that|ensure that tests|given\b|when\b.*\bthen\b|scenario:)/i;
+const CRITERION_TEXT = /^(verify that|assert that|test that|check that|ensure that tests|given\b|when\b.*\bthen\b|scenario:|(?:AC|TC)-?[A-Z0-9]+\s*[:.)])/i;
+/** "FR-1: …", "NFR-2: …", "AC-A: …", "REQ-001 – …": a labelled item, whatever its formatting. */
+const ID_LABEL = /^[A-Z][A-Z0-9]{0,7}-[A-Z0-9]{1,6}(?:\.\d+)?\s*[:.)–-]\s+\S/;
+/** "3.1 Accounts", "2. Users and roles": a numbered heading in a document without Markdown headings. */
+const NUMBERED_HEADING = /^((?:\d+\.)*\d+)\.?\s+([A-Z][^.!?:;|]{1,70})$/;
 const OPTIONAL_TEXT = /\b(optional|nice to have|if time permits|could also|stretch goal|bonus)\b/i;
 const DEFERRED_TEXT = /\b(phase\s*[2-9]|future (phase|release|version)|later release|post[- ]mvp|deferred|in a later version)\b/i;
 const OUT_OF_SCOPE_TEXT = /\b(out of scope|not in scope|explicitly excluded|not required|is excluded|will not be implemented)\b/i;
 
-interface ScannedItem {
+export interface ScannedItem {
   text: string;
   kind: "requirement" | "constraint" | "criterion" | "optional";
   scope: RequirementScopeStatus;
@@ -144,6 +148,9 @@ export function scanSource(rawText: string, sourceLabel: string, activePhase?: s
   const stack: Array<{ level: number; title: string; kind: SectionKind; phase?: string }> = [];
   let inCode = false;
   let tableHeaderPending = false;
+  // Text extracted from PDF/Word (or typed plainly) has no Markdown headings; numbered titles mark its sections.
+  const plainDoc = !lines.some((l) => /^#{1,6}\s/.test(l.trim()));
+  const nextNonEmpty = (i: number) => lines.slice(i + 1).find((l) => l.trim())?.trim() ?? "";
 
   const current = () => {
     let kind: SectionKind = "general";
@@ -199,13 +206,32 @@ export function scanSource(rawText: string, sourceLabel: string, activePhase?: s
       continue;
     }
 
-    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/) || (i + 1 < lines.length && /^(=+|-+)\s*$/.test(lines[i + 1].trim()) && !/^[-*•]/.test(line) ? ["", lines[i + 1].trim().startsWith("=") ? "#" : "##", line] : null);
+    let heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/) || (i + 1 < lines.length && /^(=+|-+)\s*$/.test(lines[i + 1].trim()) && !/^[-*•]/.test(line) ? ["", lines[i + 1].trim().startsWith("=") ? "#" : "##", line] : null);
+    if (!heading && plainDoc) {
+      const numbered = line.match(NUMBERED_HEADING);
+      if (numbered) {
+        const title = numbered[2].trim();
+        const words = title.split(/\s+/).length;
+        const isTitle =
+          numbered[1].includes(".") ||
+          sectionKind(title) !== "general" ||
+          (words <= 4 && !MODAL.test(title) && !IMPERATIVE_START.test(title) && !NUMBERED_HEADING.test(nextNonEmpty(i)));
+        // Level from the numbering depth ("3" → 2, "3.1" → 3); level 1 is left for the document title.
+        if (isTitle) heading = ["~", "#".repeat(Math.min(6, numbered[1].split(".").length + 1)), title];
+      } else if (/^(appendix|annex)\b/i.test(line) && line.length <= 80) {
+        heading = ["~", "##", line];
+      } else if (line.length <= 40 && !/[.,;]$/.test(line) && !ID_LABEL.test(line) && sectionKind(line) !== "general" && line.split(/\s+/).length <= 5) {
+        heading = ["~", "##", line];
+      }
+    }
     if (heading) {
       const level = heading[1].length;
       const title = stripMarkup(heading[2]).replace(/:$/, "");
       while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
       const phaseMatch = title.match(/\b(phase\s*\d+|milestone\s*\d+|sprint\s*\d+)\b/i);
-      stack.push({ level, title, kind: sectionKind(title), phase: phaseMatch ? phaseMatch[1].replace(/\s+/g, " ") : undefined });
+      // The document's own title ("X — Product Requirements Document") names the document, not a section.
+      const isDocTitle = stack.length === 0 && out.length === 0 && /\b(document|specification|spec|prd|srs|brd)\b/i.test(title);
+      stack.push({ level, title, kind: isDocTitle ? "general" : sectionKind(title), phase: phaseMatch ? phaseMatch[1].replace(/\s+/g, " ") : undefined });
       if (heading[0] === "") i++; // setext underline consumed
       continue;
     }
@@ -232,9 +258,13 @@ export function scanSource(rawText: string, sourceLabel: string, activePhase?: s
       continue;
     }
 
-    const bullet = line.match(/^([-*•+]|\d+[.)]|[a-z][.)])\s+(.*)$/i);
+    const bullet = line.match(/^([-*•+▪◦]|\d+[.)]|[a-z][.)])\s+(.*)$/i);
     if (bullet) {
       push(bullet[2], i + 1, true);
+      continue;
+    }
+    if (ID_LABEL.test(line)) {
+      push(line, i + 1, true);
       continue;
     }
     // Prose: each sentence separately.
