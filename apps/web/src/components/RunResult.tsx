@@ -244,6 +244,7 @@ function AttemptBlock({ attempt, total, defaultOpen, brainName }: { attempt: Att
 
 function nextStep(detail: RunDetail): string | null {
   const { run } = detail;
+  if (run.outcome === "declined") return "ChatGPT declined the request (see its reason above). All workspace changes were kept. Rephrase or narrow the task and run it again.";
   if (run.outcome === "unverified") return "Workspace changes were preserved with outstanding advisory feedback. Review the diff and iteration notes before relying on it.";
   if (run.outcome === "error") {
     if (/provider is not ready|model server|did not answer|unreachable|API key/i.test(run.summary ?? "")) return "Check the reasoning model in Settings (Check connection), then run the task again.";

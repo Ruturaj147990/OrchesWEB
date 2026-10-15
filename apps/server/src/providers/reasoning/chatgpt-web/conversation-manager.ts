@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { DatabaseSync } from "node:sqlite";
 import { ProjectChatGptRepository } from "../../../storage/repositories/project-chatgpt-repository.js";
+import { SourceManifestRepository } from "../../../storage/repositories/source-manifest-repository.js";
 import { SELECTORS } from "./selectors.js";
 import { PromptSender } from "./prompt-sender.js";
 
@@ -12,8 +13,16 @@ export interface ProjectConversationInfo {
 export class ConversationManager {
   private repo: ProjectChatGptRepository;
 
-  constructor(db: DatabaseSync) {
+  private manifest: SourceManifestRepository;
+
+  constructor(private db: DatabaseSync) {
     this.repo = new ProjectChatGptRepository(db);
+    this.manifest = new SourceManifestRepository(db);
+  }
+
+  /** Requests that do not belong to a stored project (e.g. the Settings connection test) get no mapping. */
+  private projectExists(projectId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId));
   }
 
   public static extractConversationIdFromUrl(url: string): string | null {
@@ -35,8 +44,14 @@ export class ConversationManager {
     project: ProjectConversationInfo,
     options: { signal?: AbortSignal } = {}
   ): Promise<string> {
-    const existing = this.repo.getMapping(project.projectId);
     const now = new Date().toISOString();
+    if (!this.projectExists(project.projectId)) {
+      // Not a project (e.g. the Settings connection test): use a fresh, unmapped chat.
+      await page.goto("https://chatgpt.com/", { waitUntil: "domcontentloaded", timeout: 45_000 });
+      if (!(await this.waitForComposer(page, 30_000))) throw new Error("ChatGPT composer is not ready. Please verify authentication.");
+      return page.url();
+    }
+    const existing = this.repo.getMapping(project.projectId);
 
     // 1. If an existing mapped conversation URL is stored in SQLite
     // A bare homepage URL (e.g. 'https://chatgpt.com/' or 'https://chatgpt.com') is NEVER valid as a mapped project conversation.
@@ -84,6 +99,10 @@ export class ConversationManager {
 
     const titleMarker = `[ORCHES PROJECT: ${project.projectName || project.projectId}]`;
 
+    // Sources delivered into a previous conversation are not visible in the new one.
+    const reset = this.manifest.markAllUndelivered(project.projectId);
+    if (reset > 0) console.log(`[ChatGPTWeb] New project conversation: ${reset} source document(s) will be re-delivered.`);
+
     // Send initial project marker to establish the conversation with a clean identifiable title
     await this.submitMessage(page, `Initialize reasoning workspace for Orches.\nProject Marker: ${titleMarker}`);
 
@@ -102,7 +121,7 @@ export class ConversationManager {
     }
 
     // Ensure initialization reply is fully generated so composer is idle and ready for subsequent prompts
-    await PromptSender.waitForGenerationToFinish(page, 30_000, options.signal).catch(() => {});
+    await PromptSender.waitForThreadIdle(page, 120_000, options.signal).catch(() => false);
     await this.waitForComposer(page, 15_000).catch(() => {});
 
     if (!newUrl.includes("/c/")) {
@@ -134,9 +153,10 @@ export class ConversationManager {
     const currentUrl = page.url();
     if (currentUrl.includes("/c/")) return currentUrl;
 
-    // Check sidebar / nav links for the active or newest conversation link
+    // Only the sidebar link marked as the CURRENT page identifies this conversation. Taking the first
+    // /c/ link would map the project onto an unrelated chat of the user's.
     const navUrl = await page.evaluate(() => {
-      const activeLink = document.querySelector("nav a[href*='/c/'][aria-current='page'], nav a[href*='/c/'].active, nav a[href*='/c/']");
+      const activeLink = document.querySelector("nav a[href*='/c/'][aria-current='page'], nav a[href*='/c/'][aria-current='true']");
       if (activeLink) {
         const href = activeLink.getAttribute("href");
         if (href && href.includes("/c/")) {
@@ -154,6 +174,7 @@ export class ConversationManager {
    * Strictly ignores bare homepage URLs to prevent corrupting project conversation mappings.
    */
   public recordSuccess(projectId: string, conversationUrl?: string): void {
+    if (!this.projectExists(projectId)) return;
     const now = new Date().toISOString();
     const isDedicated = Boolean(conversationUrl && conversationUrl.includes("/c/"));
     this.repo.updateStatus(projectId, {
@@ -169,6 +190,7 @@ export class ConversationManager {
    * Records an error in the mapped project conversation.
    */
   public recordError(projectId: string, error: string): void {
+    if (!this.projectExists(projectId)) return;
     this.repo.updateStatus(projectId, {
       lastError: error,
       mappingStatus: "error",

@@ -5,6 +5,8 @@ export interface AgentExecutionInput {
   runId: string;
   taskId: string;
   attemptNumber: number;
+  /** 0 for the first dispatch of an iteration; >0 when the same instruction is re-sent after an infrastructure failure. */
+  dispatchRetry?: number;
   workspacePath: string;
   taskText: string;
   title: string;
@@ -24,7 +26,7 @@ export interface AgentExecutionInput {
 /** What an external agent observably did, read from its own records. */
 export interface AgentTranscript {
   conversationId: string | null;
-  state: "finished" | "timeout" | "not_started" | "cancelled";
+  state: "finished" | "timeout" | "not_started" | "cancelled" | "error";
   finalReply: string;
   toolCalls: Array<{ tool: string; summary: string }>;
   writesOutsideWorkspace: string[];
@@ -39,6 +41,11 @@ export interface AgentExecutionResult {
   filesDeleted: string[];
   rejectedWrites: Array<{ path: string; reason: string }>;
   error?: string;
+  /**
+   * Category of an abrupt agent failure: "quota" (model quota/rate limit exhausted), "agent_error"
+   * (the agent stopped on a model or tool error), "timeout", or "not_started".
+   */
+  errorKind?: "quota" | "agent_error" | "timeout" | "not_started";
   modelId?: string;
   warnings: string[];
   transcript?: AgentTranscript;

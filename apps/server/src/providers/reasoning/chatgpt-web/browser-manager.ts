@@ -22,6 +22,8 @@ export class BrowserManager {
   private headless: boolean;
   private timeoutMs: number;
   private executablePath?: string;
+  /** A launch in progress; concurrent callers share it instead of opening the profile twice. */
+  private launching: Promise<Page> | null = null;
 
   constructor(config: BrowserManagerConfig = {}) {
     this.stateMachine = new BrowserStateMachine();
@@ -51,8 +53,22 @@ export class BrowserManager {
   public static getShared(config?: BrowserManagerConfig): BrowserManager {
     if (!BrowserManager.instance) {
       BrowserManager.instance = new BrowserManager(config);
+    } else if (config) {
+      BrowserManager.instance.applyConfig(config);
     }
     return BrowserManager.instance;
+  }
+
+  /**
+   * Settings changes (headless, profile folder, timeout) take effect the next time the browser is
+   * launched; an already-open browser keeps running with its current options.
+   */
+  private applyConfig(config: BrowserManagerConfig): void {
+    if (this.context || this.launching) return;
+    if (config.profileDir) this.profileDir = config.profileDir;
+    if (typeof config.headless === "boolean") this.headless = config.headless;
+    if (config.timeoutMs) this.timeoutMs = config.timeoutMs;
+    if (config.executablePath) this.executablePath = config.executablePath;
   }
 
   public getStateMachine(): BrowserStateMachine {
@@ -74,8 +90,11 @@ export class BrowserManager {
     if (this.context && this.chatGptPage && !this.chatGptPage.isClosed()) {
       return this.chatGptPage;
     }
-
-    return this.launch(options);
+    if (this.launching) return this.launching;
+    this.launching = this.launch(options).finally(() => {
+      this.launching = null;
+    });
+    return this.launching;
   }
 
   /**
@@ -83,6 +102,22 @@ export class BrowserManager {
    */
   public async launch(options: { signal?: AbortSignal } = {}): Promise<Page> {
     if (options.signal?.aborted) throw new Error("Launch cancelled by user.");
+
+    // The browser is still open but the ChatGPT tab was closed: open a new tab in the same context
+    // instead of launching the profile a second time (which fails while the profile is in use).
+    if (this.context) {
+      try {
+        const page = await this.context.newPage();
+        await page.goto("https://chatgpt.com", { waitUntil: "domcontentloaded", timeout: 45_000 });
+        this.chatGptPage = page;
+        const status = await AuthDetector.detect(page);
+        this.stateMachine.transition(status === "authenticated" ? "READY" : "AUTH_REQUIRED");
+        return page;
+      } catch (err) {
+        console.warn(`[ChatGPTWeb] Existing browser context is unusable (${(err as Error).message}); relaunching.`);
+        await this.close();
+      }
+    }
 
     this.stateMachine.transition("STARTING");
     fs.mkdirSync(this.profileDir, { recursive: true });

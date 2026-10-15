@@ -37,6 +37,8 @@ export class PromptSender {
     const assistantCount = assistantTexts.length;
     const lastAssistantText = assistantCount > 0 ? assistantTexts[assistantCount - 1] : "";
     const userCount = await this.getUserMessageCount(page);
+    // Tag every turn now on the page so the reply to the next prompt can be told apart from older ones.
+    await this.markExistingTurns(page);
 
     return {
       assistantCount,
@@ -162,18 +164,16 @@ export class PromptSender {
     if (Array.isArray(userTexts) && userTexts.length > 0) {
       const latestUserText = (userTexts[userTexts.length - 1] || "").trim();
 
-      // Normalized comparison: compare first 300 chars or prefix signature
-      const promptSnippet = trimmedPrompt.slice(0, 300).replace(/\s+/g, " ").trim();
-      const userSnippet = latestUserText.slice(0, 300).replace(/\s+/g, " ").trim();
+      // Every Orches prompt of one kind starts with the same system text, so a prefix match alone would
+      // confuse a new prompt with the previous one. Require the normalized head AND tail to match.
+      const norm = (t: string) => t.replace(/\s+/g, " ").trim();
+      const promptNorm = norm(trimmedPrompt);
+      const userNorm = norm(latestUserText);
+      const headMatch = userNorm.slice(0, 300) === promptNorm.slice(0, 300);
+      const tailMatch = userNorm.length >= 200 && promptNorm.length >= 200 && userNorm.slice(-200) === promptNorm.slice(-200);
+      const exactOrHeadTailMatch = userNorm === promptNorm || (headMatch && tailMatch);
 
-      const exactOrPrefixMatch =
-        latestUserText === trimmedPrompt ||
-        latestUserText.startsWith(promptSnippet) ||
-        trimmedPrompt.startsWith(userSnippet) ||
-        (userSnippet.length > 40 && promptSnippet.includes(userSnippet)) ||
-        (promptSnippet.length > 40 && userSnippet.includes(promptSnippet));
-
-      if (exactOrPrefixMatch) {
+      if (exactOrHeadTailMatch) {
         return {
           alreadySubmitted: true,
           isGenerating,
@@ -553,15 +553,31 @@ export class PromptSender {
       }
     }
 
-    // 3. Check for page error banners
+    // 3. Check for page error banners. Text selectors such as "Something went wrong" also match the
+    // conversation itself (prompts and diffs often contain those words), so only a short, visible
+    // element that is NOT part of a user/assistant message counts as a ChatGPT error.
     for (const sel of SELECTORS.errorBanner) {
-      const count = await page.locator(sel).count().catch(() => 0);
-      if (count > 0) {
-        const visible = await page.locator(sel).first().isVisible().catch(() => false);
-        if (visible) {
-          const errText = await page.locator(sel).first().innerText().catch(() => "Unknown page error");
-          return { texts: [], status: "page_error", diagnostic: errText };
-        }
+      const errText = await page
+        .locator(sel)
+        .evaluateAll((nodes) => {
+          for (const node of nodes as HTMLElement[]) {
+            const rect = node.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+            if (
+              node.closest(
+                "[data-message-author-role], [data-markdown-text-style], [data-testid*='conversation-turn'], article, form, #prompt-textarea, [contenteditable='true']"
+              )
+            ) {
+              continue;
+            }
+            const text = (node.innerText || "").trim();
+            if (text && text.length <= 400) return text;
+          }
+          return null;
+        })
+        .catch(() => null);
+      if (errText) {
+        return { texts: [], status: "page_error", diagnostic: errText };
       }
     }
 
@@ -796,6 +812,112 @@ export class PromptSender {
       if (currentLocators.length > baseline.assistantCount) return true;
       await page.waitForTimeout(300).catch(() => {});
     }
+    return false;
+  }
+
+  /**
+   * ChatGPT renders only the most recent turns and unmounts older ones as new ones arrive, so counting
+   * messages is unreliable, and "the last message changed" also matches the previous reply finishing.
+   * Instead, every turn on the page is tagged before a prompt is sent; the answer is the assistant
+   * message that follows the newest UNTAGGED user turn (our prompt) in document order.
+   */
+  public static readonly SEEN_ATTR = "data-orches-seen";
+
+  public static async markExistingTurns(page: Page): Promise<number> {
+    return page
+      .evaluate((attr) => {
+        const userSel = "[data-markdown-text-style='user-message'], [class*='user-message'], [data-message-author-role='user']";
+        const asstSel = "[data-markdown-text-style='assistant-message'], [data-message-author-role='assistant']";
+        const heads = Array.from(document.querySelectorAll("h4, h5, h6")).filter((h) => /You said:|ChatGPT said:/.test(h.textContent || ""));
+        const all = [...Array.from(document.querySelectorAll(userSel)), ...Array.from(document.querySelectorAll(asstSel)), ...heads];
+        all.forEach((el) => el.setAttribute(attr, "1"));
+        return all.length;
+      }, this.SEEN_ATTR)
+      .catch(() => 0);
+  }
+
+  /** Crash recovery: our prompt was already posted before the baseline was taken, so it must count as new. */
+  public static async unmarkLastUserTurn(page: Page): Promise<void> {
+    await page
+      .evaluate((attr) => {
+        const users = Array.from(document.querySelectorAll("[data-markdown-text-style='user-message'], [class*='user-message'], [data-message-author-role='user']"));
+        const heads = Array.from(document.querySelectorAll("h4, h5, h6")).filter((h) => /You said:/.test(h.textContent || ""));
+        const ordered = [...users, ...heads].sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+        const last = ordered[ordered.length - 1];
+        if (!last) return;
+        // Untag the whole last user turn (its heading and nested message containers).
+        for (const el of ordered) {
+          if (el === last || el.contains(last) || last.contains(el) || (last.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING && el.parentElement === last.parentElement)) {
+            el.removeAttribute(attr);
+          }
+        }
+      }, this.SEEN_ATTR)
+      .catch(() => {});
+  }
+
+  /**
+   * The reply to the prompt Orches just sent: the last assistant message located after the newest user
+   * turn, provided that user turn is untagged (i.e. it is our prompt, not an older one).
+   * `supported` is false when the page has no recognizable turn markers (then callers fall back).
+   */
+  public static async getNewTurnResponse(page: Page): Promise<{ supported: boolean; userPosted: boolean; text: string | null }> {
+    return page
+      .evaluate((attr) => {
+        const userSel = "[data-markdown-text-style='user-message'], [class*='user-message'], [data-message-author-role='user']";
+        const asstSel = "[data-markdown-text-style='assistant-message'], [data-message-author-role='assistant']";
+        const users = [
+          ...Array.from(document.querySelectorAll(userSel)),
+          ...Array.from(document.querySelectorAll("h4, h5, h6")).filter((h) => /You said:/.test(h.textContent || "")),
+        ];
+        const assistants = Array.from(document.querySelectorAll(asstSel)).filter((a) => !a.querySelector(asstSel));
+        if (users.length === 0) return { supported: assistants.length > 0 ? false : true, userPosted: false, text: null };
+        // (Comparators are inlined: named functions inside page.evaluate break under tsx's __name helper.)
+        users.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+        const lastUser = users[users.length - 1];
+        const userPosted = !lastUser.hasAttribute(attr) && !lastUser.closest(`[${attr}]`);
+        const after = assistants.filter((a) => !lastUser.contains(a) && !a.contains(lastUser) && lastUser.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const answer = after.length ? after.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))[after.length - 1] : null;
+        const text = answer ? ((answer as HTMLElement).innerText || "").trim() : null;
+        return { supported: true, userPosted, text: text || null };
+      }, this.SEEN_ATTR)
+      .catch((err) => {
+        console.warn(`[PromptSender] Turn detection failed: ${(err as Error).message}`);
+        return { supported: false, userPosted: false, text: null };
+      });
+  }
+
+  /**
+   * Waits until the conversation is truly idle: ChatGPT is not generating AND the assistant messages
+   * (count and last text) have stayed unchanged for consecutive polls. Unlike waitForGenerationToFinish,
+   * this does not return early in the gap between sending a message and ChatGPT starting to answer —
+   * returning there let a late acknowledgement be read as the answer to the NEXT prompt.
+   */
+  public static async waitForThreadIdle(page: Page, timeoutMs = 120_000, signal?: AbortSignal): Promise<boolean> {
+    const start = Date.now();
+    await page.waitForTimeout(1500).catch(() => {}); // give a just-sent message time to start generating
+    let lastCount = -1;
+    let lastText = "";
+    let stablePolls = 0;
+    while (Date.now() - start < timeoutMs) {
+      if (signal?.aborted) throw new Error("Cancelled by user.");
+      if (await this.isGenerating(page)) {
+        stablePolls = 0;
+        await page.waitForTimeout(1000).catch(() => {});
+        continue;
+      }
+      const texts = await this.getAssistantMessageTexts(page);
+      const count = texts.length;
+      const text = count ? texts[count - 1] : "";
+      if (count === lastCount && text === lastText) {
+        if (++stablePolls >= 2) return true;
+      } else {
+        stablePolls = 0;
+        lastCount = count;
+        lastText = text;
+      }
+      await page.waitForTimeout(1000).catch(() => {});
+    }
+    console.warn(`[PromptSender] Conversation did not become idle within ${Math.round(timeoutMs / 1000)}s; continuing.`);
     return false;
   }
 

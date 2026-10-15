@@ -328,6 +328,7 @@ export const AGENT_LABELS: Record<string, string> = {
 /** Human wording for a run's state; the single source for badges and headings. */
 export function describeRun(run: Pick<Run, "status" | "outcome">): { label: string; tone: "neutral" | "running" | "success" | "warning" | "danger" } {
   if (run.status === "running" || run.status === "ready") return { label: "Running", tone: "running" };
+  if (run.status === "blocked") return { label: "Blocked — action needed", tone: "warning" };
   switch (run.outcome) {
     case "verified":
       return { label: "Verified", tone: "success" };
@@ -337,6 +338,8 @@ export function describeRun(run: Pick<Run, "status" | "outcome">): { label: stri
       return { label: "Needs Revision (Preserved)", tone: "warning" };
     case "cancelled":
       return { label: "Stopped", tone: "neutral" };
+    case "declined":
+      return { label: "Declined by ChatGPT", tone: "warning" };
     case "error":
       return { label: "Failed", tone: "danger" };
     default:

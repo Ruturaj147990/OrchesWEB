@@ -241,7 +241,7 @@ export function App() {
     setStopping(true);
     try {
       await api.stopRun(detail.run.id);
-      showNotice("Stopping — the current step is being cancelled and its changes rolled back.");
+      showNotice("Stopping — the current step is being cancelled. All workspace changes are kept.");
     } catch (err) {
       showNotice(err instanceof ApiError ? err.message : String(err), "error");
     } finally {

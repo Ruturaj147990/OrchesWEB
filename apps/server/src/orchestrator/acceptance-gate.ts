@@ -96,7 +96,15 @@ export function evaluateAttempt(input: GateInput): GateDecision {
   const critic = input.critic;
   let criticEndorses = false;
   if (!critic.available) {
-    warnings.push(`Independent review was unavailable: ${critic.error || "unknown error"}.`);
+    // Only the reasoning model's own ACCEPT can move the run forward. A review that never arrived (or
+    // broke the protocol) is not an acceptance; when the attempt already failed deterministic checks the
+    // review was simply not run and the other blockers explain why.
+    const reviewSkipped = input.agentFailed || blockers.length > 0;
+    if (reviewSkipped) {
+      warnings.push(`Independent review was not run: ${critic.error || "the attempt already failed earlier checks"}.`);
+    } else {
+      blockers.push(`Independent review did not produce a usable verdict (${critic.error || "unknown error"}); the work is not accepted until the reviewer accepts it.`);
+    }
   } else {
     // If chunked coverage ledger exists, require 100% complete coverage before endorsing
     if (critic.coverageLedger && !critic.coverageLedger.isComplete()) {

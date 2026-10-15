@@ -40,6 +40,8 @@ export interface CriticFinding {
 export interface CriticOutcome {
   available: boolean;
   error?: string;
+  /** Why the review is unavailable: the provider/transport failed, or a reply arrived but broke the protocol. */
+  errorKind?: "provider" | "protocol";
   verdict: "accept" | "repair" | "blocked";
   criteria: CriticCriterion[];
   findings: CriticFinding[];
@@ -72,6 +74,8 @@ export interface ReviewAttemptInput {
   maxDiffChars?: number;
   auditStage?: boolean;
   auditReport?: string;
+  /** Narrower scope the reasoning model proposed and Orches adopted after the full request was declined. */
+  scopeNote?: string;
 }
 
 export const REVIEWER_SYSTEM = `You are an independent, rigorous code reviewer in the Orches autonomous development system.
@@ -144,6 +148,15 @@ export function buildReviewPrompt(input: ReviewAttemptInput): string {
     "## 2. Active Acceptance Criteria to Verify",
     criteriaLines.join("\n"),
   ];
+
+  if (input.scopeNote) {
+    sections.push(
+      "",
+      "## AGREED SCOPE (proposed by the reasoning model after declining part of the original request)",
+      input.scopeNote.slice(0, 2000),
+      "Judge the work against this agreed scope. Do NOT score the omission of declined parts as defects."
+    );
+  }
 
   if (excludedLines.length > 0) {
     sections.push(
@@ -329,21 +342,27 @@ async function executeSingleReview(
   } = {}
 ): Promise<CriticOutcome> {
   let lastError = "";
+  let lastErrorKind: "provider" | "protocol" = "protocol";
   const conversationMessages: Array<{ role: "user" | "assistant"; content: string }> = [
     { role: "user", content: prompt },
   ];
+  // ChatGPT Web keeps the whole conversation, so a follow-up only needs the short correction note; re-sending
+  // the full review prompt would paste the (possibly very large) diff again. Stateless providers need it all.
+  const statefulThread = provider.id === "chatgpt-web";
+  let followUpNote: string | null = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
+      const shortFollowUp = attempt > 1 && statefulThread && followUpNote;
       const response = await provider.generate(
         {
           operation: "result_review",
-          operationId: options.operationId || "result_review",
+          operationId: shortFollowUp ? `${options.operationId || "result_review"}_format_retry` : options.operationId || "result_review",
           attempt: input.iteration ?? input.taskContext?.iteration ?? 1,
           stage: input.auditStage ? "audit" : "implementation",
           chunkIdentity: options.chunkIndex ? { chunkIndex: options.chunkIndex, totalChunks: options.totalChunks ?? 1 } : undefined,
           systemInstruction: REVIEWER_SYSTEM,
-          messages: [...conversationMessages],
+          messages: shortFollowUp ? [{ role: "user", content: followUpNote! }] : [...conversationMessages],
           json: false, // MANDATORY: ChatGPT Web must never be told to produce JSON-only responses
           temperature: 0,
           maxOutputTokens: 2000,
@@ -387,15 +406,16 @@ async function executeSingleReview(
         const recoveryPrompt = isContradictory
           ? buildContradictoryVerdictRecoveryPrompt(response.text, parsedReview.validationError || "")
           : buildProtocolRecoveryPrompt(response.text);
-        conversationMessages.push({ role: "assistant", content: response.text });
-        conversationMessages.push({ role: "user", content: recoveryPrompt });
+        const recoveryMessages: Array<{ role: "user" | "assistant"; content: string }> = statefulThread
+          ? [{ role: "user", content: recoveryPrompt }]
+          : [...conversationMessages, { role: "assistant", content: response.text }, { role: "user", content: recoveryPrompt }];
 
         try {
           const recoveredResponse = await provider.generate(
             {
               operation: "result_review",
               systemInstruction: REVIEWER_SYSTEM,
-              messages: [...conversationMessages],
+              messages: recoveryMessages,
               json: false,
               temperature: 0,
               maxOutputTokens: 2000,
@@ -425,8 +445,14 @@ async function executeSingleReview(
       }
 
       lastError = parsedReview.validationError || "Review response did not adhere to review protocol";
+      lastErrorKind = "protocol";
+      followUpNote = buildProtocolRecoveryPrompt(response.text);
     } catch (err) {
       lastError = (err as Error).message;
+      lastErrorKind = "provider";
+      // A transport failure may have happened before the prompt reached ChatGPT: send the full prompt
+      // again (the provider reconciles it if it was in fact submitted).
+      followUpNote = null;
       if (input.signal?.aborted) break;
       if (lastError.includes("404") || lastError.includes("not found") || lastError.includes("ECONNREFUSED") || lastError.includes("unreachable")) break;
     }
@@ -435,6 +461,7 @@ async function executeSingleReview(
   return {
     available: false,
     error: lastError,
+    errorKind: lastErrorKind,
     verdict: "repair",
     criteria: [],
     findings: [],
@@ -566,6 +593,7 @@ export async function reviewAttempt(
       return {
         available: false,
         error: `Chunk review failed on Part ${chunk.chunkIndex}/${chunk.totalChunks}: ${chunkResult.error}`,
+        errorKind: chunkResult.errorKind,
         verdict: "repair",
         criteria: [...aggregatedCriteria.values()],
         findings: aggregatedFindings,
@@ -611,6 +639,7 @@ export async function reviewAttempt(
     return {
       available: false,
       error: `Incomplete diff evidence coverage. Unreviewed files: ${unreviewed.join(", ")}`,
+      errorKind: "protocol",
       verdict: "repair",
       criteria: [...aggregatedCriteria.values()],
       findings: aggregatedFindings,

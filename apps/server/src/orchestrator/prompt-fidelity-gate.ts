@@ -560,22 +560,10 @@ export function validateAndCorrectPrompt(
   // 2. Correct Weakened Constraints
   if (initialReport.weakenedConstraints.length > 0) {
     residualUncertainties.push(
-      `Preserved constraints restored by substituting forbidden technology and appending non-negotiable boundaries (${initialReport.weakenedConstraints.map((w) => w.id).join(", ")}).`
+      `Preserved constraints restated as non-negotiable boundaries appended to the brief (${initialReport.weakenedConstraints.map((w) => w.id).join(", ")}).`
     );
-    for (const w of initialReport.weakenedConstraints) {
-      if (w.issue.includes("zero external dependencies")) {
-        corrected = corrected.replace(/npm install [^\n\r]+/gi, "use Node.js standard library modules only (http, crypto, fs)");
-        corrected = corrected.replace(/pip install [^\n\r]+/gi, "use Python standard library only");
-      }
-      if (w.issue.includes("SQLite only")) {
-        corrected = corrected.replace(/mongodb/gi, "SQLite");
-        corrected = corrected.replace(/postgresql/gi, "SQLite");
-      }
-      if (w.issue.includes("Fastify")) {
-        corrected = corrected.replace(/express\.js/gi, "Fastify");
-        corrected = corrected.replace(/express/gi, "Fastify");
-      }
-    }
+    // GPT-Web owns the wording of its brief: constraints are restated in a labelled section below
+    // instead of rewriting words inside the model's text.
 
     const constraintSection = [
       "",
@@ -594,22 +582,6 @@ export function validateAndCorrectPrompt(
     residualUncertainties.push(
       `Neutralized ${initialReport.unsupportedAdditions.length} ungrounded addition(s) by reclassifying them as non-binding suggestions.`
     );
-    for (const u of initialReport.unsupportedAdditions) {
-      if (u.category === "invented_guarantee") {
-        corrected = corrected.replace(/99\.999%/g, "standard production availability");
-        corrected = corrected.replace(/sub-millisecond latency under 100k requests\/sec/gi, "responsive latency under normal load");
-        corrected = corrected.replace(/sub-millisecond latency/gi, "responsive latency");
-      }
-      if (u.category === "unsupported_hardware_or_api" || u.category === "unjustified_library") {
-        corrected = corrected.replace(/mandatory kubernetes cluster deployment/gi, "standard deployment");
-        corrected = corrected.replace(/kubernetes cluster/gi, "standard runtime environment");
-        corrected = corrected.replace(/fpga acceleration/gi, "standard software execution");
-        corrected = corrected.replace(/apache kafka event streaming/gi, "standard in-process messaging");
-        corrected = corrected.replace(/apache kafka/gi, "standard messaging queue");
-        corrected = corrected.replace(/dynamodb/gi, "standard local database");
-        corrected = corrected.replace(/aws s3/gi, "local filesystem storage");
-      }
-    }
     const noteSection = [
       "",
       "## Scope Boundary Notice (Unsupported Additions Reclassified)",
@@ -641,11 +613,6 @@ export function validateAndCorrectPrompt(
 
   // 5. Correct Contradicted Acceptance Criteria
   if (initialReport.contradictedCriteria && initialReport.contradictedCriteria.length > 0) {
-    corrected = corrected.replace(/return 200 on expired/gi, "return 401 Unauthorized on expired");
-    corrected = corrected.replace(/returns 200 on expired/gi, "returns 401 Unauthorized on expired");
-    corrected = corrected.replace(/return http 200 ok on expired/gi, "return HTTP 401 Unauthorized on expired");
-    corrected = corrected.replace(/return 200 on invalid/gi, "return 401 Unauthorized on invalid");
-    corrected = corrected.replace(/returns 200 on invalid/gi, "returns 401 Unauthorized on invalid");
 
     const criteriaSection = [
       "",
@@ -661,9 +628,6 @@ export function validateAndCorrectPrompt(
 
   // 6. Neutralize Unevidenced Verification Claims
   if (initialReport.unevidencedVerificationClaims && initialReport.unevidencedVerificationClaims.length > 0) {
-    corrected = corrected.replace(/already been verified and tested successfully/gi, "must be implemented and validated with automated test execution");
-    corrected = corrected.replace(/already been verified/gi, "must be implemented and tested");
-    corrected = corrected.replace(/no further implementation or test execution is necessary/gi, "automated tests must be executed to verify implementation");
 
     const realismSection = [
       "",

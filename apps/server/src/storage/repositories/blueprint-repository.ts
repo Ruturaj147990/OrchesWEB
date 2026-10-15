@@ -83,7 +83,9 @@ export class BlueprintRepository {
     let warnings: string[] = [];
     try {
       warnings = JSON.parse((row.warnings_json as string) || "[]");
-    } catch {}
+    } catch (err) {
+      console.error(`[BlueprintRepository] Unreadable warnings_json for blueprint ${String(row.id)}: ${(err as Error).message}`);
+    }
     return {
       id: row.id as string,
       filename: row.filename as string,

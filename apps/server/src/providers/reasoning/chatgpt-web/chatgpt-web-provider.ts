@@ -26,6 +26,49 @@ export class ChatGPTWebProvider implements ReasoningProvider {
   private timeoutMs: number;
   private static idempotencyCache = new Map<string, ReasoningResult>();
   private static inFlightOperations = new Map<string, Promise<ReasoningResult>>();
+  /**
+   * One browser tab serves every project, so ChatGPT Web operations must never interleave: two runs
+   * navigating the same tab would read each other's answers. Every operation queues on this lock.
+   */
+  private static browserLock: Promise<void> = Promise.resolve();
+
+  private static async withBrowserLock<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const previous = ChatGPTWebProvider.browserLock;
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => (release = resolve));
+    ChatGPTWebProvider.browserLock = previous.then(() => mine);
+    try {
+      if (signal) {
+        let onAbort: (() => void) | null = null;
+        const aborted = new Promise<never>((_, reject) => {
+          onAbort = () => reject(new Error("Request cancelled by user."));
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        });
+        try {
+          await Promise.race([previous, aborted]);
+        } finally {
+          if (onAbort) signal.removeEventListener("abort", onAbort);
+        }
+      } else {
+        await previous;
+      }
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  /** Writes one idempotency-lifecycle row; failures are logged (never swallowed) and reported to the caller. */
+  private persistOperation(db: any, idempotencyKey: string, label: string, sql: string, params: unknown[]): boolean {
+    try {
+      db.prepare(sql).run(...params);
+      return true;
+    } catch (err) {
+      console.error(`[ChatGPTWeb] [PERSISTENCE_ERROR] Could not record '${label}' for ${idempotencyKey}: ${(err as Error).message}`);
+      return false;
+    }
+  }
 
   constructor(config: ChatGPTWebProviderConfig = {}) {
     this.browserManager = BrowserManager.getShared({
@@ -148,7 +191,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
           return restoredResult;
         }
       } catch (dbErr) {
-        // Table might not exist in old test mock DB, ignore and proceed
+        console.error(`[ChatGPTWeb] [PERSISTENCE_ERROR] Could not read idempotency record ${idempotencyKey}: ${(dbErr as Error).message}`);
       }
 
       // Concurrency lock: If this exact logical operation is already in-flight, await the ongoing promise
@@ -159,19 +202,32 @@ export class ChatGPTWebProvider implements ReasoningProvider {
     }
 
     // Wrap execution with inFlightOperations promise so concurrent callers share the exact same execution
-    const executionPromise = (async () => {
-      // Durable lifecycle state 1: PREPARATION
+    const executionPromise = ChatGPTWebProvider.withBrowserLock(async () => {
+      // A crash-window reconciliation is only legitimate when this exact operation was already handed
+      // to the browser earlier (status 'submitting' / 'accepted_by_browser') without a recorded answer.
+      // Without that evidence, reusing an answer already on the page would return a stale response.
+      let priorStatus: string | null = null;
       if (idempotencyKey) {
         try {
-          db.prepare(`
+          const row = db.prepare("SELECT status FROM idempotent_operations WHERE idempotency_key = ?").get(idempotencyKey) as { status?: string } | undefined;
+          priorStatus = row?.status ?? null;
+        } catch (dbErr) {
+          console.error(`[ChatGPTWeb] [PERSISTENCE_ERROR] Could not read prior status for ${idempotencyKey}: ${(dbErr as Error).message}`);
+        }
+      }
+      const mayHaveBeenSubmitted = priorStatus === "submitting" || priorStatus === "accepted_by_browser";
+
+      // Durable lifecycle state 1: PREPARATION
+      if (idempotencyKey) {
+        this.persistOperation(db, idempotencyKey, "prepared", `
             INSERT INTO idempotent_operations (
               idempotency_key, project_id, run_id, attempt, stage, operation, payload_hash,
               status, provider_id, model_id, input_tokens, output_tokens, duration_ms, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, 0, 0, ?, ?)
             ON CONFLICT(idempotency_key) DO UPDATE SET
-              status = CASE WHEN status = 'completed' THEN 'completed' ELSE 'prepared' END,
+              status = CASE WHEN status IN ('completed', 'submitting', 'accepted_by_browser') THEN status ELSE 'prepared' END,
               updated_at = excluded.updated_at
-          `).run(
+          `, [
             idempotencyKey,
             request.projectId,
             request.runId ?? null,
@@ -183,11 +239,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
             this.getModel(),
             estimateTokens(promptText),
             new Date().toISOString(),
-            new Date().toISOString()
-          );
-        } catch (dbErr) {
-          // Ignore table errors if not present
-        }
+            new Date().toISOString(),
+          ]);
       }
 
       console.log(`[ChatGPTWeb] [DISPATCH] run=${request.runId ?? "none"} att=${request.attempt ?? 1} stg=${request.stage ?? "impl"} op=${request.operation} chunk=${request.chunkIdentity ? `${request.chunkIdentity.chunkIndex}/${request.chunkIdentity.totalChunks}` : "single"} fp=${payloadHash} chars=${promptText.length}`);
@@ -221,25 +274,28 @@ export class ChatGPTWebProvider implements ReasoningProvider {
       this.browserManager.getStateMachine().transition("PROMPT_READY", `Prompt assembled (${promptText.length} chars)`);
 
       // 6. Capture pre-submission baseline state for stale response protection
+      // The "before" snapshot must be taken on an idle thread; a reply still arriving (e.g. to a source
+      // upload or the conversation greeting) would otherwise be read as the answer to this prompt.
+      await PromptSender.waitForThreadIdle(page, 120_000, signal);
       const baseline = await PromptSender.captureBaseline(page);
 
-      // Check if conversation already contains a completed response matching this state (Crash Recovery check)
-      const existingCompleted = await ResponseReader.checkForCompletedResponse(page, baseline);
-      if (existingCompleted) {
-        console.log(`[ChatGPTWeb] [RECONCILIATION] Discovered already completed assistant response in active conversation.`);
-        // Proceed with parsing existing response rather than blindly resubmitting prompt!
-        return this.processResponse(existingCompleted, request, promptText, startTime, mappedConversationUrl, page, idempotencyKey, payloadHash, conversationManager, db);
+      // Crash-window reconciliation: only when this exact operation was previously handed to the browser.
+      let userReconciliation: { alreadySubmitted: boolean; isGenerating: boolean; diagnostic?: string };
+      if (mayHaveBeenSubmitted) {
+        const existingCompleted = await ResponseReader.checkForCompletedResponse(page, baseline);
+        if (existingCompleted) {
+          console.log(`[ChatGPTWeb] [RECONCILIATION] Discovered already completed assistant response for previously submitted ${idempotencyKey}.`);
+          return this.processResponse(existingCompleted, request, promptText, startTime, mappedConversationUrl, page, idempotencyKey, payloadHash, conversationManager, db);
+        }
+        userReconciliation = await PromptSender.reconcileExistingUserSubmission(page, promptText);
+      } else {
+        userReconciliation = { alreadySubmitted: false, isGenerating: await PromptSender.isGenerating(page) };
       }
-
-      // Check if the prompt was already accepted/submitted before a crash (e.g. Orches killed during 'submitting')
-      const userReconciliation = await PromptSender.reconcileExistingUserSubmission(page, promptText);
       let skipBrowserSubmission = false;
       if (userReconciliation.alreadySubmitted) {
         console.log(`[ChatGPTWeb] [CRASH_WINDOW_RECONCILIATION] Detected existing accepted prompt (${userReconciliation.diagnostic}).`);
         if (idempotencyKey) {
-          try {
-            db.prepare(`UPDATE idempotent_operations SET status = 'accepted_by_browser', updated_at = ? WHERE idempotency_key = ?`).run(new Date().toISOString(), idempotencyKey);
-          } catch {}
+          this.persistOperation(db, idempotencyKey, "accepted_by_browser", `UPDATE idempotent_operations SET status = 'accepted_by_browser', updated_at = ? WHERE idempotency_key = ?`, [new Date().toISOString(), idempotencyKey]);
         }
 
         if (!userReconciliation.isGenerating) {
@@ -256,11 +312,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
               `[ChatGPTWeb] [CRASH_WINDOW_RECONCILIATION] Captured existing completed response (${latestAssistantText.length} chars). Proceeding immediately.`
             );
             if (idempotencyKey) {
-              try {
-                db.prepare(
-                  `UPDATE idempotent_operations SET status = 'response_received', response_text = ?, updated_at = ? WHERE idempotency_key = ?`
-                ).run(latestAssistantText, new Date().toISOString(), idempotencyKey);
-              } catch {}
+              this.persistOperation(db, idempotencyKey, "response_received", `UPDATE idempotent_operations SET status = 'response_received', response_text = ?, updated_at = ? WHERE idempotency_key = ?`, [latestAssistantText, new Date().toISOString(), idempotencyKey]);
             }
             this.browserManager.getStateMachine().transition("VALIDATING_RESPONSE");
             return this.processResponse(
@@ -285,6 +337,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
           skipBrowserSubmission = true;
           // Adjust baseline so waitForCompletion recognizes the in-flight generation as the target response
           baseline.assistantCount = Math.max(0, baseline.assistantCount - 1);
+          // Our prompt was already on the page when the baseline tagged it; count it as new again.
+          await PromptSender.unmarkLastUserTurn(page);
           baseline.lastAssistantText = "";
         }
       } else if (userReconciliation.isGenerating) {
@@ -302,9 +356,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
         if (!skipBrowserSubmission) {
           // Durable lifecycle state 2: SUBMITTING
           if (idempotencyKey) {
-            try {
-              db.prepare(`UPDATE idempotent_operations SET status = 'submitting', updated_at = ? WHERE idempotency_key = ?`).run(new Date().toISOString(), idempotencyKey);
-            } catch {}
+            this.persistOperation(db, idempotencyKey, "submitting", `UPDATE idempotent_operations SET status = 'submitting', updated_at = ? WHERE idempotency_key = ?`, [new Date().toISOString(), idempotencyKey]);
           }
 
           this.browserManager.getStateMachine().transition("SUBMITTING");
@@ -315,9 +367,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
 
           // Durable lifecycle state 3: BROWSER ACCEPTED
           if (idempotencyKey) {
-            try {
-              db.prepare(`UPDATE idempotent_operations SET status = 'accepted_by_browser', updated_at = ? WHERE idempotency_key = ?`).run(new Date().toISOString(), idempotencyKey);
-            } catch {}
+            this.persistOperation(db, idempotencyKey, "accepted_by_browser", `UPDATE idempotent_operations SET status = 'accepted_by_browser', updated_at = ? WHERE idempotency_key = ?`, [new Date().toISOString(), idempotencyKey]);
           }
         }
 
@@ -338,9 +388,15 @@ export class ChatGPTWebProvider implements ReasoningProvider {
             console.log(`[ChatGPTWeb] [RECONCILED_ON_TIMEOUT] Found completed response after timeout.`);
             rawResponse = reconciled;
           } else {
-            const assistantTexts = await PromptSender.getAssistantMessageTexts(page);
-            const latestMsg = assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : "";
-            if (latestMsg && latestMsg.length > 20 && !ResponseReader.isWorkspaceInitializationEcho(latestMsg)) {
+            // Only the reply that follows OUR prompt may be used, and only once it has finished streaming.
+            const stillGenerating = await PromptSender.isGenerating(page).catch(() => false);
+            const turn = await PromptSender.getNewTurnResponse(page);
+            const latestMsg = turn.supported && turn.userPosted ? turn.text ?? "" : "";
+            if (
+              !stillGenerating &&
+              latestMsg.length > 20 &&
+              !ResponseReader.isWorkspaceInitializationEcho(latestMsg)
+            ) {
               console.log(`[ChatGPTWeb] [RECONCILED_ON_TIMEOUT] Recovered latest completed assistant message (${latestMsg.length} chars).`);
               rawResponse = latestMsg;
             } else {
@@ -351,9 +407,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
 
         // Durable lifecycle state 4: RESPONSE RECEIVED
         if (idempotencyKey) {
-          try {
-            db.prepare(`UPDATE idempotent_operations SET status = 'response_received', response_text = ?, updated_at = ? WHERE idempotency_key = ?`).run(rawResponse, new Date().toISOString(), idempotencyKey);
-          } catch {}
+          this.persistOperation(db, idempotencyKey, "response_received", `UPDATE idempotent_operations SET status = 'response_received', response_text = ?, updated_at = ? WHERE idempotency_key = ?`, [rawResponse, new Date().toISOString(), idempotencyKey]);
         }
 
         this.browserManager.getStateMachine().transition("VALIDATING_RESPONSE");
@@ -370,7 +424,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
         }
         throw err;
       }
-    })();
+    }, signal);
 
     if (idempotencyKey) {
       ChatGPTWebProvider.inFlightOperations.set(idempotencyKey, executionPromise);
@@ -453,9 +507,9 @@ export class ChatGPTWebProvider implements ReasoningProvider {
       };
 
       if (idempotencyKey) {
+        // Cached in memory either way so this server session never re-submits the same operation.
         ChatGPTWebProvider.idempotencyCache.set(idempotencyKey, reviewResult);
-        try {
-          db.prepare(`
+        const persisted = this.persistOperation(db, idempotencyKey, "completed", `
             INSERT INTO idempotent_operations (
               idempotency_key, project_id, run_id, attempt, stage, operation, payload_hash,
               status, response_text, parsed_json, provider_id, model_id, input_tokens, output_tokens, duration_ms, created_at, updated_at
@@ -468,7 +522,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
               output_tokens = excluded.output_tokens,
               duration_ms = excluded.duration_ms,
               updated_at = excluded.updated_at
-          `).run(
+          `, [
             idempotencyKey,
             request.projectId,
             request.runId ?? null,
@@ -485,8 +539,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
             Date.now() - startTime,
             new Date().toISOString(),
             new Date().toISOString()
-          );
-        } catch (dbErr) {}
+        ]);
+        if (!persisted) reviewResult.warnings.push("The response was received but could not be durably recorded; it is cached for this server session only.");
       }
       return reviewResult;
     }
@@ -515,6 +569,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
         action: "stop",
         stop_reason: stopReason,
         rationale: extracted.rationale,
+        is_refusal: extracted.isRefusal ?? true,
+        alternative_offered: extracted.alternativeOffered ?? null,
       };
       const stopProtocolText = `ORCHES_STATUS: STOP\n\nReason: ${stopReason}`;
       return {
@@ -577,9 +633,9 @@ export class ChatGPTWebProvider implements ReasoningProvider {
     };
 
     if (idempotencyKey) {
+      // Cached in memory either way so this server session never re-submits the same operation.
       ChatGPTWebProvider.idempotencyCache.set(idempotencyKey, result);
-      try {
-        db.prepare(`
+      const persisted = this.persistOperation(db, idempotencyKey, "completed", `
           INSERT INTO idempotent_operations (
             idempotency_key, project_id, run_id, attempt, stage, operation, payload_hash,
             status, response_text, parsed_json, provider_id, model_id, input_tokens, output_tokens, duration_ms, created_at, updated_at
@@ -592,7 +648,7 @@ export class ChatGPTWebProvider implements ReasoningProvider {
             output_tokens = excluded.output_tokens,
             duration_ms = excluded.duration_ms,
             updated_at = excluded.updated_at
-        `).run(
+        `, [
           idempotencyKey,
           request.projectId,
           request.runId ?? null,
@@ -609,8 +665,8 @@ export class ChatGPTWebProvider implements ReasoningProvider {
           Date.now() - startTime,
           new Date().toISOString(),
           new Date().toISOString()
-        );
-      } catch (dbErr) {}
+      ]);
+      if (!persisted) result.warnings.push("The response was received but could not be durably recorded; it is cached for this server session only.");
     }
     return result;
   }

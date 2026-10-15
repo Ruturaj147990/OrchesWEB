@@ -36,6 +36,13 @@ export interface BridgeStatus {
 
 const STEP_USER_INPUT = 14;
 const STEP_MODEL_RESPONSE = 15;
+/** Error step: model-provider failures (e.g. RESOURCE_EXHAUSTED / quota) and tool errors are recorded here. */
+const STEP_ERROR = 17;
+/** Step statuses observed in Antigravity's conversation records. */
+const STATUS_RUNNING = 2;
+const STATUS_DONE = 3;
+const STATUS_WAITING_FOR_USER = 6;
+const STATUS_ENDED = 8;
 
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, "");
@@ -178,6 +185,8 @@ export interface AgentTrajectory {
   replies: string[];
   finalReply: string;
   workspaceUris: string[];
+  /** Strings recorded in the most recent step (used to report agent errors). */
+  lastStepTexts: string[];
 }
 
 function extractToolCalls(strings: string[]): AgentToolCall[] {
@@ -232,6 +241,7 @@ export function readTrajectory(conversationId: string, dir = CONVERSATIONS_DIR):
       }
     }
     const last = rows[rows.length - 1];
+    const lastStepTexts = last?.step_payload ? protoStrings(last.step_payload) : [];
     // The submitted prompt is recorded twice in the input step (raw and rendered); IDE context only once.
     const prompt =
       inputTexts.find((t, i) => t.trim().length > 0 && inputTexts.indexOf(t) !== i) ??
@@ -248,6 +258,7 @@ export function readTrajectory(conversationId: string, dir = CONVERSATIONS_DIR):
       replies,
       finalReply: replies[replies.length - 1] ?? "",
       workspaceUris,
+      lastStepTexts,
     };
   } catch {
     return null; // database briefly locked or mid-write; caller retries
@@ -275,8 +286,25 @@ export function findConversation(marker: string, sinceMs: number, dir = CONVERSA
 }
 
 export interface AgentWaitResult {
-  state: "finished" | "timeout" | "not_started" | "cancelled";
+  state: "finished" | "timeout" | "not_started" | "cancelled" | "error";
   trajectory: AgentTrajectory | null;
+  /** For state "error": the agent's own error text and its category. */
+  error?: string;
+  errorKind?: "quota" | "agent_error";
+}
+
+/** The readable error message recorded in an error step (skips ids, tool names and JSON arguments). */
+export function agentErrorMessage(texts: string[]): string {
+  const readable = texts
+    .map((t) => t.trim())
+    .filter((t) => t.length > 10 && !/^[a-z][a-z_]{2,40}$/.test(t) && !t.startsWith("{") && !/^[\w-]{20,}$/.test(t) && !/^[0-9a-f-]{36}(-\d+)?$/i.test(t) && !/^(call|toolu|bot)[-_]/.test(t));
+  const preferred = readable.find((t) => /error|quota|exhausted|failed|denied|unavailable|exceeded|limit|refused/i.test(t));
+  const tool = texts.find((t) => /^[a-z][a-z_]{2,40}$/.test(t));
+  return (preferred ?? readable[0] ?? (tool ? `the agent stopped after an error in tool '${tool}'` : "the agent stopped after an unspecified error")).slice(0, 500);
+}
+
+export function classifyAgentError(message: string): "quota" | "agent_error" {
+  return /RESOURCE_EXHAUSTED|quota|rate.?limit|\b429\b|too many requests/i.test(message) ? "quota" : "agent_error";
 }
 
 /**
@@ -291,6 +319,8 @@ export async function waitForAgent(opts: {
   startTimeoutMs?: number;
   signal?: AbortSignal;
   onProgress?: (t: AgentTrajectory) => void;
+  /** Called once when the agent has been waiting for the user's approval (e.g. to run a command). */
+  onWaitingForUser?: (t: AgentTrajectory) => void;
   workspaceActivity?: () => number; // epoch ms of the last observed file change in the workspace
 }): Promise<AgentWaitResult> {
   const quietMs = opts.quietMs ?? 8000;
@@ -300,6 +330,7 @@ export async function waitForAgent(opts: {
   let lastCount = -1;
   let lastChange = Date.now();
   let latest: AgentTrajectory | null = null;
+  let notifiedWaiting = false;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   while (true) {
@@ -319,8 +350,29 @@ export async function waitForAgent(opts: {
           opts.onProgress?.(t);
         }
         const fsQuiet = !opts.workspaceActivity || now - opts.workspaceActivity() >= quietMs;
-        const replied = t.lastStepType === STEP_MODEL_RESPONSE && t.lastStepStatus === 3 && t.finalReply.length > 0;
+        const replied =
+          t.lastStepType === STEP_MODEL_RESPONSE &&
+          (t.lastStepStatus === STATUS_DONE || t.lastStepStatus === STATUS_ENDED) &&
+          t.finalReply.length > 0;
         if (replied && now - lastChange >= quietMs && fsQuiet) return { state: "finished", trajectory: t };
+
+        // The agent's turn ended on an error step (model quota exhausted, provider failure, fatal tool
+        // error) and nothing new happened afterwards. "Retryable" errors get longer, because the agent
+        // retries them on its own; anything else is reported once it has stayed quiet for 30 seconds.
+        if (t.lastStepType === STEP_ERROR && t.lastStepStatus !== STATUS_RUNNING) {
+          const message = agentErrorMessage(t.lastStepTexts);
+          const settleMs = /retryable/i.test(message) ? 180_000 : Math.max(quietMs, 30_000);
+          if (now - lastChange >= settleMs && fsQuiet) {
+            return { state: "error", trajectory: t, error: message, errorKind: classifyAgentError(message) };
+          }
+        }
+
+        if (t.lastStepStatus === STATUS_WAITING_FOR_USER && now - lastChange >= 15_000 && !notifiedWaiting) {
+          notifiedWaiting = true;
+          opts.onWaitingForUser?.(t);
+        } else if (t.lastStepStatus !== STATUS_WAITING_FOR_USER) {
+          notifiedWaiting = false;
+        }
       }
     }
     if (now > deadline) return { state: "timeout", trajectory: latest };

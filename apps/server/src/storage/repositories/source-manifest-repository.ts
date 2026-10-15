@@ -102,6 +102,19 @@ export class SourceManifestRepository {
     return this.addItem(updated);
   }
 
+  /**
+   * A new ChatGPT conversation was created for the project, so sources sent to the previous one are no
+   * longer visible to the model: mark them for re-delivery. Returns how many items were reset.
+   */
+  public markAllUndelivered(projectId: string): number {
+    const res = this.db
+      .prepare(
+        "UPDATE source_manifest_items SET delivery_status = 'DISCOVERED', delivered_at = NULL, updated_at = ? WHERE project_id = ? AND delivery_status = 'SENT_IN_MAPPED_CONVERSATION'"
+      )
+      .run(new Date().toISOString(), projectId);
+    return Number(res.changes ?? 0);
+  }
+
   public deleteItem(id: string): boolean {
     const res = this.db.prepare("DELETE FROM source_manifest_items WHERE id = ?").run(id);
     return Number(res.changes) > 0;

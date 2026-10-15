@@ -55,8 +55,12 @@ export function formatEvent(ev: RunEvent): Line | null {
       const failed = p.failed?.length ?? 0;
       return { ...base, level: failed ? "error" : "info", text: failed ? `Rollback INCOMPLETE for ${failed} file(s)` : `Rolled back ${n} file(s)` };
     }
+    case "brain.scope_narrowed":
+      return { ...base, level: "warn", text: `${p.provider ?? "The reasoning model"} declined the request as written; continuing with the alternative it offered: ${String(p.alternative ?? "").slice(0, 240)}` };
+    case "run.changes_preserved":
+      return { ...base, level: "info", text: p.filesChanged ? `Kept all ${p.filesChanged} changed file(s) in the workspace (no rollback)` : "No workspace files were changed" };
     case "run.finished":
-      return { ...base, level: p.outcome === "verified" ? "success" : p.outcome === "unverified" || p.outcome === "cancelled" ? "warn" : "error", text: String(p.summary ?? "Run finished") };
+      return { ...base, level: p.outcome === "verified" ? "success" : p.outcome === "unverified" || p.outcome === "cancelled" || p.outcome === "declined" ? "warn" : "error", text: String(p.summary ?? "Run finished") };
     case "project.created":
       return { ...base, level: "info", text: `Project added: ${p.rootPath}` };
     case "git.initialized":

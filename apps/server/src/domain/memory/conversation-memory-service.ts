@@ -170,7 +170,12 @@ export class ConversationMemoryService {
     const conversation = this.repo.findById(conversationId);
     if (!conversation) return null;
 
-    const messages = this.repo.getMessages(conversationId, 200);
+    // Only messages recorded after the latest snapshot still need compacting; everything older is
+    // already summarized in that snapshot. (Counting all messages re-triggered compaction forever.)
+    const previousSnapshot = this.repo.getLatestSnapshot(conversationId);
+    const messages = previousSnapshot
+      ? this.repo.getMessagesSince(conversationId, previousSnapshot.createdAt, 200)
+      : this.repo.getRecentMessages(conversationId, 200);
     if (messages.length < 2 && !options?.force) return null;
 
     const budget = calculateContextBudget(provider);
@@ -179,7 +184,6 @@ export class ConversationMemoryService {
     const needsCompaction = options?.force || shouldTriggerCompaction(cumulativeTokens, budget);
     if (!needsCompaction) return null;
 
-    const previousSnapshot = this.repo.getLatestSnapshot(conversationId);
     const result = await this.compactor.compact({
       conversation,
       messages,
@@ -233,7 +237,7 @@ export class ConversationMemoryService {
 
     const budget = calculateContextBudget(provider);
     const latestSnapshot = this.repo.getLatestSnapshot(conversationId);
-    const recentMessages = this.repo.getMessages(conversationId, 50);
+    const recentMessages = this.repo.getRecentMessages(conversationId, 50);
 
     return this.reconstructor.reconstruct({
       projectId,
@@ -258,7 +262,7 @@ export class ConversationMemoryService {
     const conversation = this.repo.findById(id);
     if (!conversation) return null;
 
-    const messages = this.repo.getMessages(id, 200);
+    const messages = this.repo.getRecentMessages(id, 200);
     const latestSnapshot = this.repo.getLatestSnapshot(id);
 
     return {

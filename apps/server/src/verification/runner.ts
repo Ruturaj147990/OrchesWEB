@@ -124,7 +124,11 @@ export async function validateChangedFiles(
 
     if ([".js", ".mjs", ".cjs"].includes(ext) && problems.length === 0) {
       const res = await runCommand([process.execPath, "--check", abs], { cwd: rootPath, timeoutMs: 30_000, signal: opts.signal });
-      if (res.exitCode !== 0 && !res.cancelled) problems.push(`JavaScript syntax error:\n${tail(res.stderr || res.stdout).trim()}`);
+      const output = tail(res.stderr || res.stdout).trim();
+      // `node --check` cannot parse JSX, which React projects often keep in .js files. A failure on
+      // the first "<" of a JSX element is not a real syntax error; the project's own build/tests judge it.
+      const isJsxFile = /Unexpected token '<'/.test(output) && /<\/?[A-Za-z][\w.]*(\s[^>]*)?\/?>/.test(content);
+      if (res.exitCode !== 0 && !res.cancelled && !isJsxFile) problems.push(`JavaScript syntax error:\n${output}`);
     }
 
     if (ext === ".py" && python && problems.length === 0) {

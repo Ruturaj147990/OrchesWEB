@@ -23,6 +23,7 @@ import {
   type PromptFidelityReport,
 } from "./prompt-fidelity-gate.js";
 import { calculateContextBudget, estimateTokens } from "../domain/memory/context-budget.js";
+import { buildAlternativeFollowUp, analyzeRefusal } from "../prompts/refusal-detector.js";
 import type { AuthoritativeTaskContext } from "./task-context.js";
 
 export {
@@ -67,6 +68,8 @@ export interface InstructionContext {
   memoryContextSection?: string;
   stage?: "implementation" | "audit" | "audit_remediation";
   auditReport?: string;
+  /** A narrower scope the reasoning model itself proposed (after declining the full request) and that was adopted. */
+  adoptedScope?: string;
 }
 
 export interface Instruction {
@@ -79,6 +82,10 @@ export interface Instruction {
   initialFidelityReport?: PromptFidelityReport;
   residualUncertainties?: string[];
   unrecoverable?: boolean;
+  /** The model declined the request (fully or partly). */
+  refusal?: boolean;
+  /** Set when the model declined the full request and Orches proceeded with the alternative the model offered. */
+  adoptedAlternative?: string;
 }
 
 const SYSTEM = `ROLE:
@@ -150,56 +157,7 @@ export function synthesizeDomainDetails(taskText: string, profileId?: string): {
   businessRules: string[];
   interfaces: string[];
 } {
-  const lower = taskText.toLowerCase();
-
-  if (lower.includes("library") && (lower.includes("management") || lower.includes("system") || lower.includes("book"))) {
-    return {
-      entities: [
-        "**Book**: `id`, `title`, `author`, `isbn`, `genre`, `published_year`, `total_copies`, `available_copies`",
-        "**Member**: `id`, `name`, `email`, `phone`, `membership_date`, `status` (`active`, `suspended`), `active_loans_count`",
-        "**Loan / Checkout**: `id`, `book_id`, `member_id`, `checkout_date`, `due_date`, `return_date`, `status` (`borrowed`, `returned`, `overdue`)",
-      ],
-      workflows: [
-        "**Catalog Management**: Add new books, update catalog records, search catalog by title/author/genre, inspect real-time availability.",
-        "**Member Management**: Register library members, view borrowing history, validate membership status.",
-        "**Circulation (Checkout)**: Validate member status and loan limits; check `available_copies > 0`; create loan record; decrement `available_copies`.",
-        "**Circulation (Return)**: Mark loan as returned, record return timestamp, calculate overdue duration and fines if applicable, increment `available_copies`.",
-        "**Dashboard & Inventory**: Summary statistics for total books, active loans, overdue items, and registered members.",
-      ],
-      businessRules: [
-        "Zero-Copy Rejection: A book with `available_copies === 0` cannot be checked out.",
-        "Loan Limit: Members with overdue books or exceeding loan allowance cannot checkout new items.",
-        "ISBN Integrity: Duplicate ISBN entries must be rejected or update existing inventory copies.",
-        "Date Tracking: Return dates must be verified against due dates for overdue detection.",
-      ],
-      interfaces: [
-        "API / Service endpoints: `GET /api/books`, `POST /api/books`, `GET /api/members`, `POST /api/members`, `POST /api/loans/checkout`, `POST /api/loans/return`, `GET /api/dashboard`",
-      ],
-    };
-  }
-
-  if (lower.includes("auth") || lower.includes("jwt") || lower.includes("login") || lower.includes("user")) {
-    return {
-      entities: [
-        "**User**: `id`, `email`, `password_hash`, `role`, `created_at`, `status`",
-        "**Session / Token**: `id`, `user_id`, `token`, `expires_at`, `revoked`",
-      ],
-      workflows: [
-        "**Registration**: Validate email uniqueness and password complexity, hash password with secure algorithm, store user.",
-        "**Authentication**: Verify credentials, issue secure JWT / session token with appropriate expiration.",
-        "**Protected Route Guard**: Middleware validating token signature and user active status; returns 401 on missing/expired token.",
-      ],
-      businessRules: [
-        "Never store plaintext passwords.",
-        "Return generic authentication failure messages to prevent user enumeration.",
-        "Token expiration and revocation must be strictly enforced.",
-      ],
-      interfaces: [
-        "API endpoints: `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`",
-      ],
-    };
-  }
-
+  // No domain-specific templates: they invented entities and endpoints the user never asked for.
   // Universal fallback for any software domain
   return {
     entities: [
@@ -651,6 +609,9 @@ Provide targeted corrective instructions for Antigravity to resolve each defect 
         : "",
     histArr.length ? `PREVIOUS ITERATIONS:\n${histArr.join("\n\n")}` : "This is the first iteration.",
     ctx.guidance?.length ? `\nOPERATOR GUIDANCE:\n${ctx.guidance.map((g) => `- ${g}`).join("\n")}` : "",
+    ctx.adoptedScope
+      ? `\nAGREED SCOPE (proposed by you earlier in this run after declining part of the request):\n${ctx.adoptedScope.slice(0, 2000)}\nContinue strictly within this scope; do not reintroduce anything you declined.`
+      : "",
     "",
     `INSTRUCTIONS:
 Determine what engineering work is actually required now.
@@ -793,16 +754,25 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
     allowLegacyJson: true,
   });
 
-  // 2. Check for explicit STOP status or refusal
+  // 2. Check for explicit STOP status or refusal. A refusal is never forwarded to the agent and never
+  // replaced by a locally written brief. If the model offered an alternative, ask it (once) to author the
+  // brief for exactly that alternative; otherwise the run stops.
   if (extracted.action === "stop") {
     const combinedRationale = extracted.stopReason && extracted.rationale && extracted.stopReason !== extracted.rationale
       ? `${extracted.stopReason}: ${extracted.rationale}`
       : extracted.stopReason || extracted.rationale || "The reasoning model stopped the run.";
+    const parsedStop = (response.parsed ?? null) as Record<string, unknown> | null;
+    const alternative =
+      (typeof parsedStop?.alternative_offered === "string" && parsedStop.alternative_offered) || extracted.alternativeOffered || null;
+    if (alternative) {
+      return requestOfferedAlternative(provider, ctx, operation, maxOutputTokens, alternative, combinedRationale);
+    }
     return {
       action: "stop",
       instruction: "",
       rationale: combinedRationale,
       source: "model",
+      refusal: extracted.isRefusal ?? true,
     };
   }
 
@@ -877,21 +847,22 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
     isUnderSpecified(rawInstruction, ctx.taskText, { isRepair: isTargetedStage }) ||
     isSubstanceInvalid;
 
-  if (isAuditWorkflowStage && isRawUnusable) {
+  // Recovery: ask GPT-Web itself to re-author an unusable reply before anything else happens. In the
+  // audit stages a still-unusable reply ends the run as unverified; Orches never writes those briefs.
+  if (isRawUnusable) {
     try {
       const recoveryClarification = isThought
-        ? "Your previous output was an interim thought fragment or status update. You must author the complete, substantive engineering instruction inside [ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION] for Antigravity to execute."
-        : "Your previous response did not provide a usable instruction. You must author the complete, substantive engineering instruction inside [ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION].";
+        ? "Your previous output (just above in this conversation) was an interim thought fragment or status update. You must author the complete, substantive engineering instruction inside [ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION] for Antigravity to execute, preceded by the line ORCHES_STATUS: INSTRUCT. If you cannot proceed, reply ORCHES_STATUS: STOP with Reason: <why>."
+        : "Your previous response (just above in this conversation) did not provide a usable instruction. You must author the complete, substantive engineering instruction inside [ORCHES_ANTIGRAVITY_INSTRUCTION] ... [/ORCHES_ANTIGRAVITY_INSTRUCTION], preceded by the line ORCHES_STATUS: INSTRUCT. If you cannot proceed, reply ORCHES_STATUS: STOP with Reason: <why>.";
 
       const retryResponse = await provider.generate(
         {
           operation,
+          operationId: `${operation}_recovery`,
+          attempt: ctx.iteration,
+          stage: ctx.stage || (ctx.iteration === 1 ? "implementation" : "repair"),
           systemInstruction: SYSTEM,
-          messages: [
-            { role: "user", content: prompt },
-            { role: "assistant", content: response.text || "" },
-            { role: "user", content: recoveryClarification },
-          ],
+          messages: [{ role: "user", content: recoveryClarification }],
           json: false,
           temperature: 0.1,
           maxOutputTokens,
@@ -905,11 +876,19 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
         response = retryResponse;
         const retryExtracted = ResponseReader.extractInstruction(retryResponse.text, { allowLegacyJson: true });
         if (retryExtracted.action === "stop") {
+          const stopRationale = retryExtracted.stopReason || retryExtracted.rationale || "The reasoning model stopped the run.";
+          const retryParsedStop = (retryResponse.parsed ?? null) as Record<string, unknown> | null;
+          const retryAlternative =
+            (typeof retryParsedStop?.alternative_offered === "string" && retryParsedStop.alternative_offered) || retryExtracted.alternativeOffered || null;
+          if (retryAlternative) {
+            return requestOfferedAlternative(provider, ctx, operation, maxOutputTokens, retryAlternative, stopRationale);
+          }
           return {
             action: "stop",
             instruction: "",
-            rationale: retryExtracted.stopReason || retryExtracted.rationale || "The reasoning model stopped the run.",
+            rationale: stopRationale,
             source: "model",
+            refusal: retryExtracted.isRefusal ?? true,
           };
         }
         let retryRaw = retryExtracted.instructionText.trim();
@@ -933,10 +912,13 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
           extracted = retryExtracted;
         }
       }
-    } catch {
-      // Recovery attempt failed; handled below
+    } catch (recoveryErr) {
+      if (ctx.signal?.aborted) throw recoveryErr;
+      console.warn(`[instructor] GPT-Web recovery request failed: ${(recoveryErr as Error).message}`);
     }
+  }
 
+  if (isAuditWorkflowStage && isRawUnusable) {
     const postDescriptor = (response.text && isTaskDescriptor(response.text)) || (rawInstruction && isTaskDescriptor(rawInstruction));
     const postThought = (response.text && isThoughtOrStatusFragment(response.text)) || (rawInstruction && isThoughtOrStatusFragment(rawInstruction));
     const postSubstanceInvalid = rawInstruction ? rawInstruction.length < minLength : true;
@@ -984,6 +966,11 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
       isUnderSpecified(rawInstruction, ctx.taskText, { isRepair: isTargetedStage }) ||
       currentSubstanceInvalid)
   ) {
+    // Never paper over a refusal with a locally written brief.
+    const rawReply = (response.text || "").trim();
+    if (analyzeRefusal(rawReply).isRefusal && !rawReply.includes("[ORCHES_ANTIGRAVITY_INSTRUCTION]")) {
+      return { action: "stop", instruction: "", rationale: rawReply.slice(0, 4000), source: "model", refusal: true };
+    }
     source = "fallback";
     const fragmentSnippet = (rawInstruction || response.text || "").trim().slice(0, 90);
     const fallbackWarning = currentThought
@@ -1021,5 +1008,82 @@ SHORTCOMINGS TO RESOLVE: ${h.blockers.map((b) => `- ${b}`).join("\n") || "- (non
     fidelityReport: fidelityResult.report,
     initialFidelityReport: fidelityResult.initialReport,
     residualUncertainties: fidelityResult.residualUncertainties,
+  };
+}
+
+/**
+ * The model declined the request but offered a narrower alternative (e.g. "a simulator instead").
+ * Ask the model to author the brief for exactly that alternative. Orches does not write it, does not
+ * widen it, and stops the run if the model declines again or gives no usable brief.
+ */
+async function requestOfferedAlternative(
+  provider: ReasoningProvider,
+  ctx: InstructionContext,
+  operation: "code_generation" | "repair_diagnosis",
+  maxOutputTokens: number,
+  alternative: string,
+  originalRefusal: string
+): Promise<Instruction> {
+  const declinedNote = `${provider.displayName} declined the request as written: ${originalRefusal.slice(0, 600)}`;
+  let followUp;
+  try {
+    followUp = await provider.generate(
+      {
+        operation,
+        operationId: `${operation}_offered_alternative`,
+        attempt: ctx.iteration,
+        stage: ctx.stage || (ctx.iteration === 1 ? "implementation" : "repair"),
+        systemInstruction: SYSTEM,
+        messages: [{ role: "user", content: buildAlternativeFollowUp(alternative, ctx.taskText) }],
+        json: false,
+        temperature: 0.1,
+        maxOutputTokens,
+        projectId: ctx.projectId,
+        runId: ctx.runId,
+      },
+      ctx.signal
+    );
+  } catch (err) {
+    if (ctx.signal?.aborted) throw err;
+    return {
+      action: "stop",
+      instruction: "",
+      rationale: `${declinedNote} It offered an alternative, but the follow-up request failed: ${(err as Error).message}`,
+      source: "model",
+      refusal: true,
+    };
+  }
+
+  const fx = ResponseReader.extractInstruction(followUp.text || "", { allowLegacyJson: true });
+  if (fx.action === "stop") {
+    return {
+      action: "stop",
+      instruction: "",
+      rationale: `${declinedNote} When asked to proceed with the alternative it offered, it also declined: ${(fx.stopReason || fx.rationale || "").slice(0, 600)}`,
+      source: "model",
+      refusal: true,
+    };
+  }
+  let text = fx.instructionText.trim();
+  const mStart = text.indexOf("[ORCHES_ANTIGRAVITY_INSTRUCTION]");
+  const mEnd = text.indexOf("[/ORCHES_ANTIGRAVITY_INSTRUCTION]");
+  if (mStart !== -1 && mEnd > mStart) text = text.slice(mStart + 32, mEnd).trim();
+  if (!text || text.length < 60 || isTaskDescriptor(text) || isThoughtOrStatusFragment(text) || isMetaInstruction(text)) {
+    return {
+      action: "stop",
+      instruction: "",
+      rationale: `${declinedNote} It offered an alternative but did not provide a usable brief for it.`,
+      source: "model",
+      refusal: true,
+    };
+  }
+  return {
+    action: "instruct",
+    instruction: text,
+    rationale: fx.rationale || "Brief for the alternative scope proposed by the reasoning model",
+    source: "model",
+    refusal: true,
+    adoptedAlternative: alternative,
+    warning: `${provider.displayName} declined the request as written and proceeded with the alternative it offered: "${alternative.slice(0, 300)}${alternative.length > 300 ? "…" : ""}". Work is limited to that scope.`,
   };
 }

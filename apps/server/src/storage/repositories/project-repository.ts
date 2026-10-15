@@ -65,7 +65,9 @@ export class ProjectRepository {
     try {
       const parsed = JSON.parse((row.verification_commands_json as string) || "[]");
       if (Array.isArray(parsed)) commands = parsed.filter((c) => typeof c === "string");
-    } catch {}
+    } catch (err) {
+      console.error(`[ProjectRepository] Unreadable verification_commands_json for project ${String(row.id)}: ${(err as Error).message}`);
+    }
     return {
       id: row.id as string,
       name: row.name as string,

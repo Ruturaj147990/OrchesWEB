@@ -85,7 +85,11 @@ export class AttachmentUploader {
       try {
         // Create sanitized temporary file for delivery
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "orches-sanitize-"));
-        tempFilePath = path.join(tempDir, doc.filename);
+        // The upload carries the extracted (and redacted) TEXT, so binary formats are renamed to .txt;
+        // the name is reduced to a basename so it can never point outside the temp folder.
+        const baseName = path.basename(String(doc.filename).replace(/\\/g, "/")) || "document";
+        const uploadName = /\.(pdf|docx)$/i.test(baseName) ? `${baseName}.txt` : baseName;
+        tempFilePath = path.join(tempDir, uploadName);
         fs.writeFileSync(tempFilePath, redactedText, "utf8");
 
         this.repo.updateStatus(sourceId, {
@@ -191,7 +195,7 @@ export class AttachmentUploader {
                 `[ORCHES SOURCE ATTACHMENT: ${filename}]\nPlease inspect the attached source file. Do not start implementation yet.`
               );
               // Wait for ChatGPT to finish acknowledging attachment before proceeding
-              await PromptSender.waitForGenerationToFinish(page, 30_000).catch(() => {});
+              await PromptSender.waitForThreadIdle(page, 120_000).catch(() => false);
               return true;
             }
           }
@@ -221,10 +225,10 @@ export class AttachmentUploader {
     const chunks = AttachmentUploader.chunkContent(content, `${doc.id} | ${doc.filename}`, 4000);
     for (const chunkMsg of chunks) {
       // Ensure previous generation has stopped before sending next chunk
-      await PromptSender.waitForGenerationToFinish(page, 30_000).catch(() => {});
+      await PromptSender.waitForThreadIdle(page, 120_000).catch(() => false);
       await this.submitText(page, chunkMsg);
       // Wait for ChatGPT to finish generating its chunk receipt/acknowledgement
-      await PromptSender.waitForGenerationToFinish(page, 30_000).catch(() => {});
+      await PromptSender.waitForThreadIdle(page, 120_000).catch(() => false);
       await page.waitForTimeout(1000).catch(() => {});
     }
     return true;

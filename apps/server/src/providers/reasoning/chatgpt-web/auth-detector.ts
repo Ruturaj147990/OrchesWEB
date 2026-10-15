@@ -29,6 +29,26 @@ export class AuthDetector {
         }
       }
 
+      // Logged-out chatgpt.com also shows the composer, so a visible "Log in" control without any
+      // signed-in profile marker means login is required even though the composer is present.
+      let loginVisible = false;
+      for (const sel of SELECTORS.loginButton) {
+        if (await page.locator(sel).first().isVisible().catch(() => false)) {
+          loginVisible = true;
+          break;
+        }
+      }
+      if (loginVisible) {
+        let profileVisible = false;
+        for (const sel of SELECTORS.userProfile) {
+          if (await page.locator(sel).first().isVisible().catch(() => false)) {
+            profileVisible = true;
+            break;
+          }
+        }
+        if (!profileVisible) return "login_required";
+      }
+
       // Check for prompt composer (definitive sign of authenticated & ready)
       for (const sel of SELECTORS.composer) {
         const count = await page.locator(sel).count().catch(() => 0);

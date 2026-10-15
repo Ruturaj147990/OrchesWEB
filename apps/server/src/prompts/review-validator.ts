@@ -138,14 +138,22 @@ export function parseReviewProtocol(
   // 3. Parse Sections inside [ORCHES_REVIEW]
   const parsedSections = parseSections(reviewBody);
 
-  // Verdict section
-  const verdictText = (parsedSections["verdict"] || statusHeader).toLowerCase();
-  const verdict: ReviewVerdict =
-    verdictText.includes("accept") || verdictText.includes("pass")
-      ? "accept"
-      : verdictText.includes("block")
-        ? "blocked"
-        : "repair";
+  // The status line is authoritative. Free text in the Verdict section ("REPAIR — not acceptable",
+  // "cannot accept") must never flip a REPAIR into an ACCEPT; a real disagreement is sent for recovery.
+  const verdict: ReviewVerdict = statusHeader === "ACCEPT" ? "accept" : statusHeader === "BLOCKED" ? "blocked" : "repair";
+  const sectionWord = (parsedSections["verdict"] || "").trim().toUpperCase().match(/^[^A-Z]*(ACCEPT|REPAIR|BLOCKED)\b/)?.[1];
+  if (verdict === "accept" && sectionWord && sectionWord !== "ACCEPT") {
+    return {
+      status: "INVALID",
+      verdict: "repair",
+      criteria: [],
+      findings: [],
+      repairInstructions: [],
+      summary: "",
+      rawText: clean,
+      validationError: `Contradictory review: status line says ACCEPT but the Verdict section says ${sectionWord}`,
+    };
+  }
 
   // Acceptance Criteria section
   const criteria = parseCriteriaList(parsedSections["acceptance criteria"] || "");
@@ -284,10 +292,13 @@ function parseCriteriaList(text: string): ParsedReviewCriterion[] {
     const rawStatus = (parts[1] || "").toLowerCase().trim();
     let status: "passed" | "failed" | "unverified" = "unverified";
 
-    if (rawStatus.includes("pass") || rawStatus.includes("met") || rawStatus.includes("ok")) {
-      status = "passed";
-    } else if (rawStatus.includes("fail") || rawStatus.includes("not met") || rawStatus.includes("reject")) {
+    // Negative forms first: "not met" / "unmet" / "not passed" contain the positive words.
+    if (/\b(fail(ed|s|ing)?|not\s+met|unmet|not\s+pass(ed)?|not\s+satisfied|unsatisfied|reject(ed)?|missing|broken)\b/.test(rawStatus)) {
       status = "failed";
+    } else if (/\b(unverified|not\s+verified|unknown|partial(ly)?|pending|not\s+(tested|shown))\b/.test(rawStatus)) {
+      status = "unverified";
+    } else if (/\b(pass(ed|es)?|met|satisfied|ok|verified|done|completed?)\b/.test(rawStatus)) {
+      status = "passed";
     }
 
     const reason = parts.slice(2).join(" — ").trim() || (parts[1] ? parts[1].trim() : "");
@@ -308,7 +319,7 @@ function parseFindingsList(text: string): ParsedReviewFinding[] {
 
   for (const line of lines) {
     const clean = line.replace(/^[-*•\d\.)\s]+/, "");
-    if (!clean || clean.toLowerCase() === "(none)" || clean.toLowerCase() === "none") continue;
+    if (!clean || EMPTY_LIST_ITEM.test(clean)) continue;
 
     const lower = clean.toLowerCase();
     let severity: ParsedReviewFinding["severity"] = "low";
@@ -328,11 +339,14 @@ function parseFindingsList(text: string): ParsedReviewFinding[] {
   return results;
 }
 
+/** "None", "(none).", "N/A", "No repairs required." and similar mean the list is empty. */
+const EMPTY_LIST_ITEM = /^[\s(*_`"']*(none|n\/a|na|nil|nothing|not applicable|no (repairs?|repair instructions|changes|fixes|findings|issues|action)( are)?( (needed|required|necessary))?)[\s).*_`"'.!]*$/i;
+
 function parseListItems(text: string): string[] {
   return text
     .split(/\r?\n/)
     .map((l) => l.trim().replace(/^[-*•\d\.)\s]+/, ""))
-    .filter((l) => l.length > 0 && l.toLowerCase() !== "(none)" && l.toLowerCase() !== "none");
+    .filter((l) => l.length > 0 && !EMPTY_LIST_ITEM.test(l));
 }
 
 function parseLegacyJsonReview(obj: any, rawText: string): ParsedReview {

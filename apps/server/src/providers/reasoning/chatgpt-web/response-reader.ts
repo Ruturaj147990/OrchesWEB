@@ -6,6 +6,7 @@ import { BrowserStateMachine } from "./state-machine.js";
 import { AuthDetector } from "./auth-detector.js";
 import { extractJsonFromText } from "../../../prompts/json-extractor.js";
 import { isTaskDescriptor, isThoughtOrStatusFragment } from "../../../prompts/instruction-validator.js";
+import { analyzeRefusal, extractAlternative } from "../../../prompts/refusal-detector.js";
 import {
   parseReviewProtocol,
   type ParsedReview,
@@ -38,6 +39,10 @@ export interface ExtractedInstruction {
   status: ProtocolStatus;
   validationError?: string;
   isLegacyJson?: boolean;
+  /** True when the model declined the request (with or without the STOP protocol line). */
+  isRefusal?: boolean;
+  /** What the model offered to do instead, when it declined but proposed an alternative. */
+  alternativeOffered?: string | null;
 }
 
 export interface ProtocolParseOptions {
@@ -102,18 +107,19 @@ export class ResponseReader {
     const isGen = await PromptSender.isGenerating(page);
     if (isGen) return null; // Still actively generating
 
-    const assistantTexts = await PromptSender.getAssistantMessageTexts(page);
-    if (assistantTexts.length === 0) return null;
-
-    const latestText = assistantTexts[assistantTexts.length - 1];
+    // Preferred: the assistant message after our own (untagged) prompt — immune to ChatGPT unmounting
+    // older turns and to the previous reply still finishing. Message counting is only a fallback.
+    const turn = await PromptSender.getNewTurnResponse(page);
+    let latestText: string;
+    if (turn.supported) {
+      if (!turn.userPosted || !turn.text) return null;
+      latestText = turn.text;
+    } else {
+      const assistantTexts = await PromptSender.getAssistantMessageTexts(page);
+      if (assistantTexts.length <= baseline.assistantCount) return null;
+      latestText = assistantTexts[assistantTexts.length - 1];
+    }
     if (!latestText || latestText.length < 20) return null;
-
-    // Must be new compared to baseline
-    const isNew =
-      assistantTexts.length > baseline.assistantCount ||
-      latestText !== baseline.lastAssistantText;
-
-    if (!isNew) return null;
 
     // Reject attachment-only clarification inquiries, workspace initialization echoes, and thought fragments
     if (this.isAttachmentClarification(latestText)) return null;
@@ -195,11 +201,13 @@ export class ResponseReader {
         domExtractionFailureCount = 0;
       }
 
-      // Locate assistant messages
+      // Locate the reply: the assistant message after our own (untagged) prompt. Falls back to message
+      // counting only when the page has no recognizable turn markers.
       const currentTexts = discovery.texts;
-      if (currentTexts.length > 0) {
+      const turn = await PromptSender.getNewTurnResponse(page);
+      if (currentTexts.length > 0 || (turn.supported && turn.text)) {
         domExtractionFailureCount = 0;
-        const latestText = currentTexts[currentTexts.length - 1];
+        const latestText = turn.supported ? turn.text ?? "" : currentTexts[currentTexts.length - 1];
 
         // 1. If this message is an Orches workspace initialization greeting, it belongs to thread setup,
         // NOT to the new user prompt. Filter it out so we never treat it as the prompt's answer!
@@ -209,12 +217,13 @@ export class ResponseReader {
           continue;
         }
 
-        // Ensure this is not the stale baseline message
-        const isNewMessage =
-          currentTexts.length > baseline.assistantCount ||
-          (latestText.length > 0 && latestText !== baseline.lastAssistantText);
+        // Ensure this is the reply to OUR prompt, not an older message
+        const isNewMessage = turn.supported ? turn.userPosted && latestText.length > 0 : currentTexts.length > baseline.assistantCount;
 
-        if (isNewMessage && latestText.length > 20) {
+        // When the reply is anchored to our own prompt, even a very short answer ("READY") is real; it still
+        // has to stay unchanged for several polls (the short-text wait below). Without anchoring, keep the
+        // old 20-character floor that skips interim status text.
+        if (isNewMessage && latestText.length > (turn.supported ? 0 : 20)) {
           options.stateMachine?.transition("READING_RESPONSE");
           const isAttachmentQuery = this.isAttachmentClarification(latestText);
           const isThoughtFragment = isThoughtOrStatusFragment(latestText);
@@ -292,8 +301,11 @@ export class ResponseReader {
       await page.waitForTimeout(stabilizationInterval).catch(() => {});
     }
 
-    // Check if we captured substantive text that is not an attachment query or workspace initialization echo
+    // Check if we captured substantive text that is not an attachment query or workspace initialization echo.
+    // A reply that is still streaming is incomplete and must not be used.
+    const stillGenerating = await PromptSender.isGenerating(page).catch(() => false);
     if (
+      !stillGenerating &&
       lastObservedText &&
       lastObservedText.length > 20 &&
       lastObservedText !== baseline.lastAssistantText &&
@@ -341,7 +353,49 @@ export class ResponseReader {
    * Internal deterministic parser enforcing protocol validation, delimiter integrity,
    * and safe rejection of ambiguous, malformed, or task-descriptor payloads.
    */
+  /**
+   * Parses the routing protocol and then classifies refusals, so a reply such as "I can’t help build
+   * that, but I can help you build a simulator" is never treated as an instruction for the agent.
+   */
   public static parseProtocol(rawText: string, options: ProtocolParseOptions = {}): ExtractedInstruction {
+    const result = this.parseProtocolCore(rawText, options);
+    const clean = (rawText || "").trim();
+
+    if (result.action === "stop") {
+      const reason = result.stopReason || result.rationale || clean;
+      return { ...result, isRefusal: true, alternativeOffered: extractAlternative(reason) ?? extractAlternative(clean) };
+    }
+
+    // Text that sits inside the instruction markers must OPEN with the refusal; free text (no markers)
+    // may refuse anywhere near its start unless it is clearly a structured brief.
+    let refusal = { isRefusal: false, alternative: null as string | null };
+    if (result.status === "INSTRUCT" && result.isMarkerExtracted) {
+      refusal = analyzeRefusal(result.instructionText, { requireLeading: true });
+    } else if (!clean.includes(this.MARKER_START)) {
+      const leading = analyzeRefusal(clean, { requireLeading: true });
+      const anywhere = analyzeRefusal(clean);
+      const looksLikeStructuredBrief = clean.length >= 2500 && /^#{1,3}\s/m.test(clean.slice(0, 700));
+      refusal = leading.isRefusal ? leading : anywhere.isRefusal && !looksLikeStructuredBrief ? anywhere : refusal;
+    }
+    if (refusal.isRefusal) {
+      const reason = result.status === "INSTRUCT" && result.isMarkerExtracted ? result.instructionText : clean;
+      return {
+        action: "stop",
+        status: "STOP",
+        instructionText: "",
+        rationale: reason.slice(0, 4000),
+        stopReason: reason.slice(0, 4000),
+        isMarkerExtracted: false,
+        rawText: clean,
+        durationMs: result.durationMs,
+        isRefusal: true,
+        alternativeOffered: refusal.alternative,
+      };
+    }
+    return result;
+  }
+
+  private static parseProtocolCore(rawText: string, options: ProtocolParseOptions = {}): ExtractedInstruction {
     const startTime = options.startTime ?? Date.now();
     const durationMs = Date.now() - startTime;
     const clean = (rawText || "").trim();

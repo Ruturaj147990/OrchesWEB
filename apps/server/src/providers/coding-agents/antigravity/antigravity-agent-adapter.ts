@@ -4,6 +4,7 @@ import { CodingAgentAdapter, AgentExecutionInput, AgentExecutionResult, CodingAg
 import { getBridgeStatus, submitToAgent, waitForAgent, AgentTrajectory } from "../../../platform/antigravity-agent.js";
 import { isInsideOrEqual, isInternalAgentArtifact } from "../../../workspace/path-safety.js";
 import { isThoughtOrStatusFragment, isTaskDescriptor } from "../../../prompts/instruction-validator.js";
+import { analyzeRefusal } from "../../../prompts/refusal-detector.js";
 
 const PATH_ARG_KEYS = ["TargetFile", "AbsolutePath", "FilePath", "File", "Path", "DirectoryPath"];
 const WRITE_TOOLS = /write|edit|replace|create|delete|move|rename|patch/i;
@@ -82,13 +83,18 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
       }`;
       return result;
     }
+    // Last line of defence: a reasoning-model refusal is not an engineering instruction.
+    if (analyzeRefusal(instruction, { requireLeading: true }).isRefusal) {
+      result.error = `Antigravity boundary received a refusal from the reasoning model instead of an instruction: "${instruction.slice(0, 160)}"`;
+      return result;
+    }
     const status = await getBridgeStatus(input.workspacePath);
     if (!status.matchingWindow?.canSubmit) {
       result.error = status.message;
       return result;
     }
 
-    const marker = `[orches ${input.runId.slice(4, 12)}#${input.attemptNumber}]`;
+    const marker = `[orches ${input.runId.slice(4, 12)}#${input.attemptNumber}${input.dispatchRetry ? `r${input.dispatchRetry}` : ""}]`;
     const prompt = [
       `${marker} Engineering Brief from Orches Orchestrator (iteration ${input.attemptNumber}).`,
       instruction,
@@ -127,10 +133,30 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
           for (const c of t.toolCalls.slice(reported)) input.onLog(`[antigravity] agent: ${summarizeCall(c.tool, c.args)}`);
           reported = t.toolCalls.length;
         },
+        onWaitingForUser: () => {
+          input.onLog("[antigravity] The agent is waiting for your approval in the Antigravity Agent panel (for example to run a command). Approve or reject it there; Orches keeps waiting until the time limit.");
+        },
       });
 
       let state = wait.state;
       let trajectory = wait.trajectory;
+      let finalWait = wait;
+      // The agent is still working (or waiting for the user's approval): keep waiting rather than abandon it.
+      while (state === "timeout" && !input.signal?.aborted) {
+        input.onLog("[antigravity] The agent is still working after the time limit; continuing to wait (press Stop to end the run).");
+        finalWait = await waitForAgent({
+          marker,
+          submittedAt,
+          timeoutMs: Date.now() - submittedAt + (this.opts.timeoutMs ?? 20 * 60_000),
+          quietMs: this.opts.quietMs ?? 10_000,
+          startTimeoutMs: 1,
+          signal: input.signal,
+          workspaceActivity: () => lastActivity,
+          onWaitingForUser: () => input.onLog("[antigravity] The agent is waiting for your approval in the Antigravity Agent panel."),
+        });
+        state = finalWait.state;
+        trajectory = finalWait.trajectory ?? trajectory;
+      }
       if (state === "cancelled") {
         // There is no supported way to cancel the agent from outside; wait (bounded) for it to go idle
         // so a rollback does not race with edits still being written.
@@ -151,9 +177,15 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
         result.status = "completed";
         result.summary = trajectory?.finalReply.slice(0, 2000) ?? "";
         input.onLog(`[antigravity] Agent finished: ${result.summary.split("\n")[0].slice(0, 200)}`);
+      } else if (state === "error") {
+        result.errorKind = finalWait.errorKind ?? "agent_error";
+        result.error = `Antigravity Agent stopped with an error: ${finalWait.error ?? "unknown error"}`;
+        input.onLog(`[antigravity] ${result.error}`);
       } else if (state === "not_started") {
+        result.errorKind = "not_started";
         result.error = "The Antigravity Agent did not start a conversation for this instruction within 90 seconds (check the Agent panel in the IDE).";
       } else if (state === "timeout") {
+        result.errorKind = "timeout";
         result.error = "The Antigravity Agent was still working when the time limit was reached; Orches stopped waiting.";
         result.warnings.push("The Antigravity Agent may still be running in the IDE.");
       } else {

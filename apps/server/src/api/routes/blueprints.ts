@@ -55,7 +55,7 @@ export const blueprintRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const doc = importer.importFile(filename, buffer);
+      const doc = await importer.importFile(filename, buffer);
       const reqs = extractor.extractFromDocument(projectId, doc);
 
       blueprintRepo.addBlueprint(projectId, doc);

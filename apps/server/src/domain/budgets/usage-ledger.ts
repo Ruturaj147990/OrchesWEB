@@ -183,7 +183,9 @@ export class ReasoningUsageLedger {
         rows = this.db
           .prepare("SELECT total_tokens, estimated_cost_usd, cost_state FROM reasoning_usage_ledger WHERE run_id = ?")
           .all(runId) as typeof rows;
-      } catch {}
+      } catch (err) {
+        console.error(`[ReasoningUsageLedger] Failed to read usage for run ${runId}: ${(err as Error).message}`);
+      }
     } else {
       rows = this.memoryRecords
         .filter((r) => r.runId === runId)
@@ -250,7 +252,9 @@ export class ReasoningUsageLedger {
             errorMessage: r.error_message,
           })),
         };
-      } catch {}
+      } catch (err) {
+        console.error(`[ReasoningUsageLedger] Failed to read usage summary: ${(err as Error).message}`);
+      }
     }
 
     // Memory fallback

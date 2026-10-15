@@ -48,7 +48,8 @@ export async function buildApp(options: BuildAppOptions | string = {}): Promise<
   runMigrations(db);
   ReasoningUsageLedger.getShared(db);
 
-  const app = fastify({ logger: config.env === "development" ? { level: "warn" } : false });
+  // Blueprint uploads arrive base64-encoded (10 MB file ≈ 13.4 MB body); the 1 MB default rejected them.
+  const app = fastify({ logger: config.env === "development" ? { level: "warn" } : false, bodyLimit: 16 * 1024 * 1024 });
 
   // DNS-rebinding protection: only answer requests addressed to a loopback host name.
   app.addHook("onRequest", async (request, reply) => {

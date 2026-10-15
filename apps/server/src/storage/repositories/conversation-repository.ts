@@ -146,19 +146,39 @@ export class ConversationRepository {
     };
   }
 
+  /** The OLDEST messages first (paging from the start of the conversation). */
   public getMessages(conversationId: string, limit = 100, offset = 0): ConversationMessage[] {
     const rows = this.db
-      .prepare("SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?")
+      .prepare("SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?")
       .all(conversationId, limit, offset) as Record<string, unknown>[];
+    return rows.map((r) => this.toMessage(r));
+  }
 
-    return rows.map((r) => ({
+  /** The NEWEST `limit` messages, returned in chronological order. */
+  public getRecentMessages(conversationId: string, limit = 50): ConversationMessage[] {
+    const rows = this.db
+      .prepare("SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(conversationId, limit) as Record<string, unknown>[];
+    return rows.reverse().map((r) => this.toMessage(r));
+  }
+
+  /** Messages recorded after `sinceIso` (exclusive), oldest first, capped at the newest `limit`. */
+  public getMessagesSince(conversationId: string, sinceIso: string, limit = 200): ConversationMessage[] {
+    const rows = this.db
+      .prepare("SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(conversationId, sinceIso, limit) as Record<string, unknown>[];
+    return rows.reverse().map((r) => this.toMessage(r));
+  }
+
+  private toMessage(r: Record<string, unknown>): ConversationMessage {
+    return {
       id: r.id as string,
       conversationId: r.conversation_id as string,
       role: r.role as ConversationRole,
       content: r.content as string,
       meta: this.safeParseJson(r.meta_json as string),
       createdAt: r.created_at as string,
-    }));
+    };
   }
 
   public getMessageCount(conversationId: string): number {

@@ -10,7 +10,7 @@ import { InboxService } from "../domain/human-messages/inbox-service.js";
 import { ReasoningProvider } from "../providers/reasoning/provider.js";
 import { CodingAgentAdapter } from "../providers/coding-agents/adapter.js";
 import { GitManager, GitStatusResult } from "../git/git-manager.js";
-import { SnapshotStore, WorkspaceSnapshot, RestoreResult } from "../workspace/snapshot-store.js";
+import { SnapshotStore, WorkspaceSnapshot } from "../workspace/snapshot-store.js";
 import { inspectProject, ProjectProfile } from "../workspace/project-inspector.js";
 import { runChecks, validateChangedFiles, CheckResult } from "../verification/runner.js";
 import { planTask } from "./planner.js";
@@ -28,6 +28,7 @@ import { buildAuthoritativeTaskContext, updateAuthoritativeTaskContext, type Aut
 import { getProjectProfile } from "../domain/profiles/project-profiles.js";
 import { buildRequirementInventory, updateRequirementStatuses, RequirementInventory } from "../domain/requirements/requirement-inventory.js";
 import { ConversationMemoryService } from "../domain/memory/conversation-memory-service.js";
+import { SecretRedactor } from "../platform/secret-redactor.js";
 
 export const CLOUD_RUN_COST_CEILING_USD = 2.0;
 
@@ -48,12 +49,61 @@ export interface PipelineContext {
   agent: CodingAgentAdapter;
   maxAttempts: number;
   signal: AbortSignal;
+  /** Tests only: multiplies every retry wait (default 1 = real waits). */
+  waitScale?: number;
 }
 
 class RunCancelled extends Error {}
 
+/**
+ * Orches never ends a run because of an infrastructure problem (ChatGPT outage, login wait, coding
+ * agent quota or error). It waits and retries; only the reasoning model's own decision (ACCEPT after
+ * the audit, or an explicit STOP/refusal), the user's Stop button, or the configured iteration limit
+ * end a run.
+ */
+function sleepUnlessCancelled(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new RunCancelled("Stopped by user."));
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new RunCancelled("Stopped by user."));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** 30 s, 1 min, 2 min … capped at 15 min. */
+function retryBackoffMs(retry: number): number {
+  return Math.min(15 * 60_000, 30_000 * 2 ** Math.max(0, retry - 1));
+}
+
+/** Wait suggested by a quota error ("Resets in 4h35m1s" / retryDelay "625.8s"), bounded to 1–60 minutes. */
+export function quotaWaitMs(message: string | undefined): number {
+  const text = message || "";
+  let ms = 0;
+  const resets = text.match(/Resets in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i);
+  if (resets && (resets[1] || resets[2] || resets[3])) {
+    ms = ((Number(resets[1] || 0) * 60 + Number(resets[2] || 0)) * 60 + Number(resets[3] || 0)) * 1000;
+  } else {
+    const delay = text.match(/retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)s/i);
+    if (delay) ms = Number(delay[1]) * 1000;
+  }
+  if (!ms) ms = 5 * 60_000;
+  return Math.min(60 * 60_000, Math.max(60_000, ms + 15_000));
+}
+
+function formatWait(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  return m >= 1 ? `${m} minute(s)` : `${Math.round(ms / 1000)} second(s)`;
+}
+
 export async function executeRun(ctx: PipelineContext): Promise<void> {
   const { db, events, runs, project, run, provider, agent, signal } = ctx;
+  const waitScale = ctx.waitScale ?? 1;
   const root = project.rootPath;
   const inbox = new InboxService(db, events);
   const store = snapshotStoreFor(root);
@@ -68,14 +118,16 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     runs.updateFields(run.id, { conversationId: conversation.id });
     run.conversationId = conversation.id;
   }
-  const recentMsgs = memoryService.getRepository().getMessages(conversation.id, 5);
+  const recentMsgs = memoryService.getRepository().getRecentMessages(conversation.id, 5);
   const lastMsg = recentMsgs[recentMsgs.length - 1];
-  if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== ctx.taskText) {
+  if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== SecretRedactor.redactString(ctx.taskText)) {
     memoryService.recordUserMessage(conversation.id, ctx.taskText, { runId: run.id });
   }
 
   let taskId: string | null = null;
   let activeSnapshot: WorkspaceSnapshot | null = null;
+  /** Snapshot taken when the run started; kept for diffs and manual restore, never auto-applied. */
+  let runStartSnapshot: WorkspaceSnapshot | null = null;
   let activeAttemptId: string | null = null;
   const warnings: string[] = [];
 
@@ -97,23 +149,43 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     runs.setDetails(run.id, { ...runs.getDetails(run.id), warnings, usage: ReasoningUsageLedger.getShared().getRunUsage(run.id), ...extra });
     ctx.stateMachine.transition(run.id, status, summary);
     if (taskId) {
-      const taskStatus = outcome === "verified" || outcome === "unverified" ? "succeeded" : outcome === "cancelled" ? "canceled" : "failed";
+      const taskStatus = outcome === "verified" || outcome === "unverified" ? "succeeded" : outcome === "cancelled" || outcome === "declined" ? "canceled" : "failed";
       db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?").run(taskStatus, new Date().toISOString(), taskId);
     }
     events.record(project.id, "run.finished", { status, outcome, summary }, run.id, taskId);
-    memoryService.maybeCompact(conversation.id, provider, { force: false, signal }).catch(() => {});
+    memoryService.maybeCompact(conversation.id, provider, { force: false, signal }).catch((err) => {
+      console.error(`[run ${run.id}] post-run memory compaction failed: ${(err as Error).message}`);
+    });
   };
 
-  const rollbackActive = (label: string): RestoreResult | null => {
-    if (!activeSnapshot) return null;
-    const diff = store.diff(activeSnapshot);
-    const paths = diff.changes.map((c) => c.path);
-    const result = store.restore(activeSnapshot, paths, label);
-    if (activeAttemptId) {
-      db.prepare("UPDATE task_attempts SET rollback_json = ? WHERE id = ?").run(JSON.stringify(result), activeAttemptId);
+  /** History placeholder so the next instruction knows this iteration dispatched nothing. */
+  const skippedIterations: Array<{ iteration: number; reason: string }> = [];
+  const skipIteration = (iteration: number, attemptId: string, reason: string) => {
+    log(reason, "warn");
+    db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, agent_error = ? WHERE id = ?").run(new Date().toISOString(), reason, attemptId);
+    events.record(project.id, "attempt.skipped", { attempt: iteration, reason }, run.id, taskId);
+    skippedIterations.push({ iteration, reason });
+  };
+
+  /**
+   * Orches never rolls the workspace back automatically: every file the agent created or changed is
+   * kept, and the run-start snapshot stays on disk so the user can inspect or restore it by hand.
+   * This only measures what is being preserved so the outcome can be reported truthfully.
+   */
+  const describePreserved = (reason: string): { changed: number; note: string } => {
+    let changed = 0;
+    if (runStartSnapshot) {
+      try {
+        changed = store.diff(runStartSnapshot).changes.length;
+      } catch (err) {
+        console.error(`[run ${run.id}] could not measure preserved changes: ${(err as Error).message}`);
+      }
     }
-    events.record(project.id, "attempt.rolled_back", { ...result, label }, run.id, taskId);
-    return result;
+    events.record(project.id, "run.changes_preserved", { reason, filesChanged: changed, snapshotId: runStartSnapshot?.id ?? null }, run.id, taskId);
+    const note = changed
+      ? `All ${changed} changed file(s) were preserved in the workspace (no rollback). Run-start snapshot: ${runStartSnapshot?.id}.`
+      : "No files had been changed.";
+    return { changed, note };
   };
 
   try {
@@ -125,10 +197,12 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     }
     {
       // The reasoning provider plans, instructs/writes code, and reviews in every mode.
-      const health = await provider.healthCheck();
-      if (!health.ok) {
-        finish("failed", "error", `Reasoning provider is not ready: ${health.message}`);
-        return;
+      let health = await provider.healthCheck();
+      for (let retry = 1; !health.ok; retry++) {
+        const wait = retryBackoffMs(retry);
+        log(`Reasoning provider is not ready (${health.message}). Waiting ${formatWait(wait)} and checking again (sign in to ChatGPT in the browser window if asked). Press Stop to end the run.`, "warn");
+        await sleepUnlessCancelled(wait * waitScale, signal);
+        health = await provider.healthCheck();
       }
       log(`Reasoning provider: ${provider.displayName}, model ${provider.getModel()}. ${health.message ?? ""}`);
     }
@@ -249,9 +323,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     events.record(project.id, "task.planned", { taskId, title: plan.title, criteria: activeCriteriaStrings, filesToRead: plan.filesToRead, source: plan.source }, run.id, taskId);
 
     // 4. Attempts. Every attempt is judged on the cumulative change since the run started, so a
-    // repair attempt edits the previous attempt's files instead of starting over. Rollback to the
-    // run's starting snapshot happens only when the run ends without an accepted result.
+    // repair attempt edits the previous attempt's files instead of starting over. The workspace is
+    // never rolled back automatically; the run-start snapshot is kept for diffs and manual restore.
     activeSnapshot = store.take(`${run.id}-start`);
+    runStartSnapshot = activeSnapshot;
     let previousFailure: string | undefined;
     const history: IterationEvidence[] = [];
     const external = !agent.usesReasoningProvider;
@@ -265,13 +340,15 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     let stage: "implementation" | "audit" | "audit_remediation" = "implementation";
     let auditConducted = false;
     let latestAuditReport: string | undefined;
+    /** Scope the reasoning model proposed itself after declining part of the request (see composeInstruction). */
+    let adoptedScope: string | undefined;
     for (let attempt = 1; attempt <= ctx.maxAttempts; attempt++) {
       ensureNotCancelled();
       if (provider.privacyClass === "cloud" && provider.id !== "chatgpt-web") {
         const usage = ReasoningUsageLedger.getShared().getRunUsage(run.id);
         if (usage.costUsd >= CLOUD_RUN_COST_CEILING_USD) {
-          const rb = rollbackActive("budget");
-          finish("budget_exhausted", "error", `Stopped before attempt ${attempt}: cloud spend for this run reached $${usage.costUsd.toFixed(2)} (ceiling $${CLOUD_RUN_COST_CEILING_USD.toFixed(2)}). ${describeRollback(rb)}`);
+          const kept = describePreserved("budget");
+          finish("budget_exhausted", "error", `Stopped before attempt ${attempt}: cloud spend for this run reached $${usage.costUsd.toFixed(2)} (ceiling $${CLOUD_RUN_COST_CEILING_USD.toFixed(2)}). ${kept.note}`);
           return;
         }
       }
@@ -303,7 +380,6 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         });
 
         // Closed loop: the reasoning provider decides what the coding agent does in this iteration.
-        phase("instructing", attempt);
         const instructionCtx = {
           projectId: project.id,
           runId: run.id,
@@ -321,17 +397,37 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           iteration: attempt,
           maxIterations: ctx.maxAttempts,
           history,
-          guidance,
+          // Iterations that dispatched nothing (unusable reply) are reported so GPT-Web can correct course.
+          guidance: [...guidance, ...skippedIterations.splice(0).map((sk) => `Iteration ${sk.iteration} dispatched nothing: ${sk.reason}`)],
           signal,
           memoryContextSection: memoryContext.promptSection,
           stage,
           auditReport: latestAuditReport,
+          adoptedScope,
         };
         phase("instructing", attempt);
         if (stage === "audit") {
           log(`[run-pipeline] Transitioning into full-system quality & architecture audit (Iteration ${attempt} of ${ctx.maxAttempts})`, "info");
         }
-        const instr = await composeInstruction(provider, instructionCtx);
+        let instr!: Awaited<ReturnType<typeof composeInstruction>>;
+        for (let retry = 1; ; retry++) {
+          try {
+            instr = await composeInstruction(provider, instructionCtx);
+          } catch (err) {
+            if (signal.aborted || err instanceof RunCancelled) throw err;
+            const wait = retryBackoffMs(retry);
+            log(`${provider.displayName} could not produce the instruction (${diagnoseProviderError((err as Error).message, provider)}). Retrying in ${formatWait(wait)}; the run continues.`, "warn");
+            await sleepUnlessCancelled(wait * waitScale, signal);
+            continue;
+          }
+          // An unusable reply in the audit stages is re-requested from GPT-Web (never replaced locally).
+          if (instr.unrecoverable && retry < 3) {
+            log(`${provider.displayName} did not author a usable ${stage} instruction; asking again (${retry} of 2).`, "warn");
+            await sleepUnlessCancelled(30_000 * waitScale, signal);
+            continue;
+          }
+          break;
+        }
         ensureNotCancelled();
         if (instr.warning) {
           warnings.push(instr.warning);
@@ -354,24 +450,21 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           }, run.id, taskId);
         }
         memoryService.recordModelDecision(conversation.id, instr.instruction || instr.rationale, { attempt, action: instr.action, rationale: instr.rationale, runId: run.id });
+        if (instr.adoptedAlternative) {
+          adoptedScope = instr.adoptedAlternative;
+          events.record(project.id, "brain.scope_narrowed", { attempt, alternative: instr.adoptedAlternative, provider: provider.displayName }, run.id, taskId);
+        }
         if (instr.action === "stop") {
           db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = ?, instruction_text = ? WHERE id = ?").run(new Date().toISOString(), `(stopped) ${instr.rationale}`, attemptId);
           events.record(project.id, "brain.instruction", { attempt, action: "stop", rationale: instr.rationale, provider: provider.displayName, model: provider.getModel() }, run.id, taskId);
-          // GPT-Web made its own decision to refuse/stop the task. Report it accurately as model refusal.
-          const rb = rollbackActive("brain-stopped");
-          activeSnapshot = null;
-          finish("stopped", "cancelled", `${provider.displayName} declined/stopped the task: ${instr.rationale} ${describeRollback(rb)}`, { rollback: rb });
+          // GPT-Web made its own decision to refuse/stop the task. Report it accurately; keep all work.
+          const kept = describePreserved("brain-stopped");
+          finish("stopped", "declined", `${provider.displayName} declined/stopped the task: ${instr.rationale} ${kept.note}`, { filesPreserved: kept.changed });
           return;
         }
         if (instr.unrecoverable) {
-          log(`[run-pipeline] GPT-Web prompt ownership: ${instr.warning || instr.rationale}. Preserving all workspace changes and marking workflow unverified.`, "warn");
-          activeSnapshot = null;
-          finish(
-            "completed_with_warnings",
-            "unverified",
-            `Workflow incomplete: ${instr.warning || instr.rationale}. All workspace changes and audit evidence were preserved.`
-          );
-          return;
+          skipIteration(attempt, attemptId, `${provider.displayName} did not author a usable ${stage} instruction (${instr.warning || instr.rationale}). Nothing was dispatched; the next iteration asks again.`);
+          continue;
         }
 
         instructionText = instr.instruction?.trim();
@@ -385,14 +478,8 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           isTaskDescriptor(instructionText)
         ) {
           if (stage === "audit" || stage === "audit_remediation") {
-            log(`[run-pipeline] GPT-Web prompt ownership: response for ${stage} was unusable after recovery. Preserving all workspace changes and marking workflow unverified.`, "warn");
-            activeSnapshot = null;
-            finish(
-              "completed_with_warnings",
-              "unverified",
-              `Workflow incomplete: GPT-Web response for ${stage} was unusable after recovery attempt. All workspace changes and audit evidence were preserved.`
-            );
-            return;
+            skipIteration(attempt, attemptId, `${provider.displayName}'s ${stage} reply was not a usable instruction after recovery. Nothing was dispatched; the next iteration asks again.`);
+            continue;
           }
           const synthesisReason = isThoughtOrStatusFragment(instructionText || "")
             ? `Dispatched synthesized brief after model returned interim thought fragment: "${instructionText?.slice(0, 40)}"`
@@ -414,23 +501,36 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           (provider as any).getStateMachine().transition("DISPATCHING_TO_ANTIGRAVITY");
         }
       }
-      const agentResult = await agent.execute({
-        projectId: project.id,
-        runId: run.id,
-        taskId,
-        attemptNumber: attempt,
-        workspacePath: root,
-        taskText: ctx.taskText,
-        title: plan.title,
-        acceptanceCriteria: plan.acceptanceCriteria,
-        profile: baselineProfile,
-        filesToRead: [...new Set([...changedSoFar, ...plan.filesToRead])],
-        previousFailure,
-        guidance,
-        instruction: instructionText,
-        signal,
-        onLog: (l) => log(l),
-      });
+      // Quota exhaustion, agent/provider errors and an agent that never started are infrastructure
+      // problems, not results: wait and send the SAME instruction again without using up an iteration.
+      let agentResult!: Awaited<ReturnType<typeof agent.execute>>;
+      for (let dispatch = 0; ; dispatch++) {
+        agentResult = await agent.execute({
+          projectId: project.id,
+          runId: run.id,
+          taskId,
+          attemptNumber: attempt,
+          dispatchRetry: dispatch,
+          workspacePath: root,
+          taskText: ctx.taskText,
+          title: plan.title,
+          acceptanceCriteria: plan.acceptanceCriteria,
+          profile: baselineProfile,
+          filesToRead: [...new Set([...changedSoFar, ...plan.filesToRead])],
+          previousFailure,
+          guidance,
+          instruction: instructionText,
+          signal,
+          onLog: (l) => log(l),
+        });
+        ensureNotCancelled();
+        const kind = agentResult.errorKind;
+        if (agentResult.status === "completed" || !(kind === "quota" || kind === "agent_error" || kind === "not_started")) break;
+        const wait = kind === "quota" ? quotaWaitMs(agentResult.error) : retryBackoffMs(dispatch + 1);
+        log(`${agent.displayName} ${kind === "quota" ? "hit its model quota" : "stopped with an error"} (${agentResult.error}). Sending the same instruction again in ${formatWait(wait)} — this does not use up an iteration. Press Stop to end the run.`, "warn");
+        events.record(project.id, "agent.retry_scheduled", { attempt, retry: dispatch + 1, kind, error: agentResult.error, waitMs: wait }, run.id, taskId);
+        await sleepUnlessCancelled(wait * waitScale, signal);
+      }
       for (const w of agentResult.warnings) log(w, "warn");
       if (agentResult.transcript) {
         const promptToSave = agentResult.transcript.prompt || instructionText;
@@ -475,7 +575,14 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       ensureNotCancelled();
 
       let critic: CriticOutcome = { available: false, error: "not run because the attempt already failed deterministic checks", verdict: "repair", criteria: [], findings: [], repairInstructions: [], summary: "" };
-      const missingFiles = missingRequestedFiles(ctx.taskText, store.listWorkspaceFiles().files);
+      // A short task that names a file it wants is a hard requirement. In a long specification (or once the
+      // model narrowed the scope) file names are often examples or out-of-scope, so they only produce a warning.
+      const requestedMissing = missingRequestedFiles(ctx.taskText, store.listWorkspaceFiles().files);
+      const enforceRequestedFiles = ctx.taskText.length <= 4000 && !adoptedScope;
+      const missingFiles = enforceRequestedFiles ? requestedMissing : [];
+      if (!enforceRequestedFiles && requestedMissing.length) {
+        log(`Files mentioned in the task that do not exist yet (not enforced for long specifications): ${requestedMissing.slice(0, 15).join(", ")}`, "warn");
+      }
       if (stage === "audit") {
         const reportText = (agentResult.transcript?.finalReply || agentResult.summary || "").trim();
         if (reportText.length >= 20) {
@@ -495,51 +602,33 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       if (!deterministicFailure) {
         phase("reviewing", attempt);
         const settings = SettingsManager.loadSettings();
-        critic = await reviewAttempt(provider, {
-          projectId: project.id,
-          runId: run.id,
-          taskId,
-          taskText: ctx.taskText,
-          taskContext,
-          activeCriteria: taskContext.activeAcceptanceCriteria,
-          excludedRequirements: taskContext.excludedRequirements,
-          diffText: diff.diffText,
-          changes: diff.changes,
-          checks: attemptChecks,
-          agentReport: agentResult.transcript?.finalReply,
-          signal,
-          maxDiffChars: settings.reviewDiffChunkBudget,
-          auditStage: stage === "audit" || stage === "audit_remediation",
-          auditReport: latestAuditReport || agentResult.transcript?.finalReply,
-        });
-        ensureNotCancelled();
-        log(critic.available ? `Review verdict: ${critic.verdict}${critic.summary ? ` — ${critic.summary}` : ""}` : `Review unavailable: ${critic.error}`, critic.available ? "info" : "warn");
-
-        if (!critic.available && isProviderOutageOrConfigError(critic.error)) {
-          const diag = diagnoseProviderError(critic.error || "Unknown provider error", provider);
-          log(`Reviewer failed due to reasoning provider error: ${diag}`, "error");
-          persistAttempt(db, {
+        for (let retry = 1; ; retry++) {
+          critic = await reviewAttempt(provider, {
+            projectId: project.id,
+            runId: run.id,
             taskId,
-            attemptId,
-            agentResult,
-            diff,
-            staticResults,
-            attemptChecks,
-            baselineChecks: attempt === 1 ? baselineChecks : [],
-            critic,
-            gate: { accepted: false, outcome: "unverified", blockers: [diag], warnings: [critic.error ?? ""], evidence: [] },
-            root,
+            taskText: ctx.taskText,
+            iteration: attempt,
+            taskContext,
+            activeCriteria: taskContext.activeAcceptanceCriteria,
+            excludedRequirements: taskContext.excludedRequirements,
+            diffText: diff.diffText,
+            changes: diff.changes,
+            checks: attemptChecks,
+            agentReport: agentResult.transcript?.finalReply,
+            signal,
+            maxDiffChars: settings.reviewDiffChunkBudget,
+            auditStage: stage === "audit" || stage === "audit_remediation",
+            auditReport: latestAuditReport || agentResult.transcript?.finalReply,
+            scopeNote: adoptedScope,
           });
-          events.record(project.id, "attempt.evaluated", { attempt, attemptId, accepted: false, outcome: "unverified", blockers: [diag], warnings: [critic.error], files: diff.changes }, run.id, taskId);
-          activeSnapshot = null; // Preserve workspace changes on disk so work is not lost
-          finish(
-            "blocked",
-            "error",
-            `Run blocked: Independent review failed due to provider error (${diag}). Workspace changes were preserved. Fix the model configuration or start the provider to continue.`,
-            { evidence: [diag] }
-          );
-          return;
+          ensureNotCancelled();
+          if (critic.available || critic.errorKind !== "provider") break;
+          const wait = retryBackoffMs(retry);
+          log(`Independent review could not reach ${provider.displayName} (${diagnoseProviderError(critic.error || "unknown error", provider)}). Retrying the review in ${formatWait(wait)}; the run continues.`, "warn");
+          await sleepUnlessCancelled(wait * waitScale, signal);
         }
+        log(critic.available ? `Review verdict: ${critic.verdict}${critic.summary ? ` — ${critic.summary}` : ""}` : `Review unavailable: ${critic.error}`, critic.available ? "info" : "warn");
       }
 
       const gate: GateDecision = evaluateAttempt({
@@ -620,7 +709,10 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       // 4. No actionable implementation/repair instructions contradict the ACCEPT verdict.
       const hasActionableRepairs = critic.repairInstructions.length > 0;
       const isInitialAccept = gate.accepted && stage === "implementation";
+      // The deterministic gate must also hold: a reviewer ACCEPT never overrides gate blockers
+      // (protected-path edits, writes outside the workspace, regressions, concrete objections).
       const isAuditAccept = stage === "audit" &&
+        gate.accepted &&
         auditConducted &&
         critic.verdict === "accept" &&
         !hasActionableRepairs;
@@ -670,7 +762,6 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           }
         }
         if (commitSha) runs.updateFields(run.id, { commitSha });
-        store.prune();
         finish(
           "completed",
           "verified",
@@ -680,7 +771,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         return;
       }
 
-      if (gate.accepted && gate.outcome === "unverified" && attempt < ctx.maxAttempts) {
+      if (gate.accepted && gate.outcome === "unverified" && attemptChecks.length === 0 && attempt < ctx.maxAttempts) {
         log(`The project has no automated checks the orchestrator could run, so behaviour was not tested. Continuing feedback loop (${attempt} of ${ctx.maxAttempts}) so tests can be implemented and validated.`, "info");
         previousFailure = "The project currently has no automated checks, so behaviour was not tested. Implement automated verification tests (e.g. test suite or verification script) to validate the system, and complete any remaining requirements.";
       } else {
@@ -697,8 +788,20 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         diffExcerpt: diff.diffText.slice(0, 6000),
         checks: attemptChecks.length
           ? [...staticResults.filter((c) => c.status !== "passed"), ...attemptChecks].map((c) => ({ label: c.label, status: c.status, output: c.output }))
-          : [{ label: "Automated Checks", status: "unverified", output: "The project has no automated checks the orchestrator could run, so behaviour was not tested." }],
-        blockers: gate.accepted ? ["No automated checks exist: behaviour was not tested. Please implement automated verification tests (e.g. test suite) and verify remaining functionality."] : gate.blockers,
+          : staticResults.some((c) => c.status !== "passed")
+            ? staticResults.filter((c) => c.status !== "passed").map((c) => ({ label: c.label, status: c.status, output: c.output }))
+            : [{
+                label: "Automated Checks",
+                status: "not_run",
+                output: baselineProfile.checks.length
+                  ? "Project checks were not run for this iteration because it already failed earlier verification steps."
+                  : "The project has no automated checks the orchestrator could run, so behaviour was not tested.",
+              }],
+        blockers: gate.accepted
+          ? attemptChecks.length === 0 && baselineProfile.checks.length === 0
+            ? ["No automated checks exist: behaviour was not tested. Please implement automated verification tests (e.g. test suite) and verify remaining functionality."]
+            : []
+          : gate.blockers,
         reviewer: critic.available ? `${critic.verdict}: ${critic.summary} ${critic.repairInstructions.join(" ")}` : "",
       });
       if (attempt < ctx.maxAttempts) log("Preserving files for the next iteration to address feedback.");
@@ -715,16 +818,16 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     const consumedAttempts = Math.min(ctx.maxAttempts, history.length);
     const lastHistory = history[history.length - 1];
     const outstandingItems = lastHistory?.blockers ?? [];
-    const reason = !auditConducted
-      ? (history.length > 1)
-        ? `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached before mandatory full-system re-audit could be conducted.`
-        : `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached before mandatory full-system audit could be conducted.`
+    const limit = `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached`;
+    const reason = stage === "implementation"
+      ? `${limit} before ${provider.displayName} accepted the implementation.`
+      : !auditConducted
+        ? `${limit} after the implementation was accepted but before the mandatory full-system audit could be conducted.`
       : stage === "audit_remediation"
         ? `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached while remediation items remained outstanding.`
         : `Configured maximum iterations (${ctx.maxAttempts} configured, ${consumedAttempts} consumed) reached before qualifying final audit acceptance.`;
 
     activeSnapshot = null;
-    store.prune();
     const changesCount = finalDiff?.changes.length ?? 0;
     finish(
       "completed_with_warnings",
@@ -733,34 +836,24 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
     );
     return;
   } catch (err) {
+    if (activeAttemptId) {
+      try {
+        db.prepare("UPDATE task_attempts SET status = 'failed', ended_at = COALESCE(ended_at, ?) WHERE id = ? AND status = 'running'").run(new Date().toISOString(), activeAttemptId);
+      } catch (dbErr) {
+        console.error(`[run ${run.id}] could not close attempt ${activeAttemptId}: ${(dbErr as Error).message}`);
+      }
+    }
     if (err instanceof RunCancelled || signal.aborted) {
-      const rb = rollbackActive("cancelled");
-      finish("stopped", "cancelled", describeCancellation(rb));
+      const kept = describePreserved("cancelled");
+      const agentNote = agent.id === "antigravity"
+        ? " Note: Orches cannot cancel the Antigravity Agent itself; if it was still working, stop it in the Agent panel, because it may keep changing files."
+        : "";
+      finish("stopped", "cancelled", `Stopped by user. ${kept.note}${agentNote}`, { filesPreserved: kept.changed });
       return;
     }
-    let rbNote = "";
-    try {
-      const rb = rollbackActive("error");
-      if (rb) rbNote = rb.failed.length ? ` Rollback incomplete for ${rb.failed.map((f) => f.path).join(", ")}.` : ` In-progress changes were rolled back (${rb.restored.length + rb.removed.length} file(s)).`;
-    } catch (rbErr) {
-      rbNote = ` Rollback failed: ${(rbErr as Error).message}.`;
-    }
-    finish("failed", "error", `Run failed: ${(err as Error).message}.${rbNote}`);
+    const kept = describePreserved("error");
+    finish("failed", "error", `Run failed: ${(err as Error).message}. ${kept.note}`, { filesPreserved: kept.changed });
   }
-}
-
-function describeRollback(rb: RestoreResult | null): string {
-  if (!rb) return "No files had been changed.";
-  if (rb.failed.length) return `Rollback was INCOMPLETE for: ${rb.failed.map((f) => f.path).join(", ")}.`;
-  const n = rb.restored.length + rb.removed.length;
-  return n ? `All ${n} changed file(s) were rolled back; the workspace is back to its original state.` : "No files had been changed.";
-}
-
-function describeCancellation(rb: RestoreResult | null): string {
-  if (!rb) return "Stopped by user before any files were changed.";
-  if (rb.failed.length) return `Stopped by user. Rollback was INCOMPLETE for: ${rb.failed.map((f) => f.path).join(", ")}.`;
-  const n = rb.restored.length + rb.removed.length;
-  return n ? `Stopped by user. ${n} file(s) changed by the interrupted attempt were rolled back.` : "Stopped by user. The interrupted attempt had not changed any files.";
 }
 
 /** Keep the lines that explain a failure (errors, assertions, file:line) plus the tail. */
