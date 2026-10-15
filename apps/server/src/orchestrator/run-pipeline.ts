@@ -49,8 +49,6 @@ export interface PipelineContext {
   agent: CodingAgentAdapter;
   maxAttempts: number;
   signal: AbortSignal;
-  /** Tests only: multiplies every retry wait (default 1 = real waits). */
-  waitScale?: number;
 }
 
 class RunCancelled extends Error {}
@@ -103,7 +101,6 @@ function formatWait(ms: number): string {
 
 export async function executeRun(ctx: PipelineContext): Promise<void> {
   const { db, events, runs, project, run, provider, agent, signal } = ctx;
-  const waitScale = ctx.waitScale ?? 1;
   const root = project.rootPath;
   const inbox = new InboxService(db, events);
   const store = snapshotStoreFor(root);
@@ -201,7 +198,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
       for (let retry = 1; !health.ok; retry++) {
         const wait = retryBackoffMs(retry);
         log(`Reasoning provider is not ready (${health.message}). Waiting ${formatWait(wait)} and checking again (sign in to ChatGPT in the browser window if asked). Press Stop to end the run.`, "warn");
-        await sleepUnlessCancelled(wait * waitScale, signal);
+        await sleepUnlessCancelled(wait, signal);
         health = await provider.healthCheck();
       }
       log(`Reasoning provider: ${provider.displayName}, model ${provider.getModel()}. ${health.message ?? ""}`);
@@ -417,13 +414,13 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
             if (signal.aborted || err instanceof RunCancelled) throw err;
             const wait = retryBackoffMs(retry);
             log(`${provider.displayName} could not produce the instruction (${diagnoseProviderError((err as Error).message, provider)}). Retrying in ${formatWait(wait)}; the run continues.`, "warn");
-            await sleepUnlessCancelled(wait * waitScale, signal);
+            await sleepUnlessCancelled(wait, signal);
             continue;
           }
           // An unusable reply in the audit stages is re-requested from GPT-Web (never replaced locally).
           if (instr.unrecoverable && retry < 3) {
             log(`${provider.displayName} did not author a usable ${stage} instruction; asking again (${retry} of 2).`, "warn");
-            await sleepUnlessCancelled(30_000 * waitScale, signal);
+            await sleepUnlessCancelled(30_000, signal);
             continue;
           }
           break;
@@ -529,7 +526,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
         const wait = kind === "quota" ? quotaWaitMs(agentResult.error) : retryBackoffMs(dispatch + 1);
         log(`${agent.displayName} ${kind === "quota" ? "hit its model quota" : "stopped with an error"} (${agentResult.error}). Sending the same instruction again in ${formatWait(wait)} — this does not use up an iteration. Press Stop to end the run.`, "warn");
         events.record(project.id, "agent.retry_scheduled", { attempt, retry: dispatch + 1, kind, error: agentResult.error, waitMs: wait }, run.id, taskId);
-        await sleepUnlessCancelled(wait * waitScale, signal);
+        await sleepUnlessCancelled(wait, signal);
       }
       for (const w of agentResult.warnings) log(w, "warn");
       if (agentResult.transcript) {
@@ -626,7 +623,7 @@ export async function executeRun(ctx: PipelineContext): Promise<void> {
           if (critic.available || critic.errorKind !== "provider") break;
           const wait = retryBackoffMs(retry);
           log(`Independent review could not reach ${provider.displayName} (${diagnoseProviderError(critic.error || "unknown error", provider)}). Retrying the review in ${formatWait(wait)}; the run continues.`, "warn");
-          await sleepUnlessCancelled(wait * waitScale, signal);
+          await sleepUnlessCancelled(wait, signal);
         }
         log(critic.available ? `Review verdict: ${critic.verdict}${critic.summary ? ` — ${critic.summary}` : ""}` : `Review unavailable: ${critic.error}`, critic.available ? "info" : "warn");
       }

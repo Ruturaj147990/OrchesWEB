@@ -20,8 +20,6 @@ export interface RunManagerOverrides {
   /** Tests inject deterministic providers/agents; production resolves them from settings. */
   provider?: () => ReasoningProvider;
   agent?: (provider: ReasoningProvider) => CodingAgentAdapter;
-  /** Tests only: shortens retry waits. */
-  waitScale?: number;
 }
 
 export class RunStartError extends Error {
@@ -114,7 +112,6 @@ export class RunManager {
       agent,
       maxAttempts: effectiveMaxAttempts,
       signal: controller.signal,
-      waitScale: this.overrides.waitScale,
     })
       .catch((err) => {
         // executeRun handles its own failures; this guards against bugs in that handling.

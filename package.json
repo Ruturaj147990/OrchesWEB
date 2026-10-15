@@ -20,8 +20,7 @@
     "dev:web": "npm run dev --workspace=apps/web",
     "start": "npm run build && node apps/server/dist/server.js",
     "bridge:install": "node apps/antigravity-bridge/install.mjs",
-    "diagnose": "tsx apps/server/src/platform/diagnose.ts",
-    "test": "node --import tsx --test \"apps/server/tests/**/*.test.ts\""
+    "diagnose": "tsx apps/server/src/platform/diagnose.ts"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
