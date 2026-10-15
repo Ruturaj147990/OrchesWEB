@@ -182,7 +182,15 @@ export class BrowserManager {
 
       return targetPage;
     } catch (err) {
-      const errorMsg = (err as Error).message;
+      let errorMsg = (err as Error).message;
+      if (process.platform === "linux") {
+        if (/X server|\$DISPLAY|ozone|wayland/i.test(errorMsg)) {
+          errorMsg += " — No graphical session: start Orches from the Ubuntu desktop so the ChatGPT window can open.";
+        } else if (/shared librar|libnss|libatk|libgbm|libasound|error while loading/i.test(errorMsg)) {
+          errorMsg += " — Chromium is missing system libraries: run 'sudo npx playwright install-deps chromium'.";
+        }
+        (err as Error).message = errorMsg;
+      }
       this.stateMachine.transition("FAILED", errorMsg);
       console.error("[ChatGPTWeb] Failed to launch browser context:", errorMsg);
       throw err;

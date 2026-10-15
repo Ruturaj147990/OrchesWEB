@@ -25,7 +25,16 @@ echo "[2/4] Installing project dependencies..."
 npm install
 
 echo "[3/4] Ensuring Playwright browser binaries are installed..."
-npx playwright install chromium || echo "[WARN] Playwright browser installation encountered a warning. If running headless on Linux, you may also need: npx playwright install-deps chromium"
+npx playwright install chromium || echo "[WARN] Playwright browser download reported a problem; see the message above."
+# A fresh Ubuntu install lacks some libraries Chromium needs (libnss3, libgbm1, libasound2t64, ...).
+if [ "$(id -u)" -eq 0 ]; then
+    npx playwright install-deps chromium || echo "[WARN] Could not install Chromium's system libraries automatically."
+elif command -v sudo >/dev/null 2>&1; then
+    echo "Installing Chromium's system libraries (sudo may ask for your password)..."
+    sudo env "PATH=$PATH" npx playwright install-deps chromium || echo "[WARN] Could not install Chromium's system libraries. Run: sudo npx playwright install-deps chromium"
+else
+    echo "[WARN] Run as root to install Chromium's system libraries: npx playwright install-deps chromium"
+fi
 
 echo "[4/4] Building packages and applications..."
 npm run build

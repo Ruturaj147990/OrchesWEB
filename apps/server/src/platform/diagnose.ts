@@ -51,11 +51,36 @@ async function checkBrowserSubsystem() {
     const browserPath = chromium.executablePath();
     if (browserPath && fs.existsSync(browserPath)) {
       record("Browser", "Playwright Chromium Binary", "PASS", `Found browser executable at: ${browserPath}`);
+      // A binary that cannot start (missing system libraries on a fresh Linux install) only shows up on launch.
+      try {
+        const browser = await chromium.launch({ headless: true, timeout: 30_000 });
+        await browser.close();
+        record("Browser", "Chromium Starts", "PASS", "Chromium launched and closed successfully.");
+      } catch (err: any) {
+        const first = String(err.message).split("\n").find((l) => l.trim()) ?? String(err.message);
+        record(
+          "Browser",
+          "Chromium Starts",
+          "FAIL",
+          process.platform === "linux"
+            ? `Chromium could not start: ${first}. Install its system libraries with: sudo npx playwright install-deps chromium`
+            : `Chromium could not start: ${first}`
+        );
+      }
     } else {
       record("Browser", "Playwright Chromium Binary", "WARN", `Playwright executable not pre-installed. Run "npx playwright install chromium" if browser automation fails.`);
     }
   } catch (err: any) {
     record("Browser", "Playwright Module", "WARN", `Could not resolve Playwright: ${err.message}`);
+  }
+
+  // The ChatGPT window is shown (sign-in happens there), which needs a graphical session on Linux.
+  if (process.platform === "linux" && !config.chatgptWebHeadless) {
+    if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
+      record("Browser", "Graphical Session", "PASS", `Display available (${process.env.WAYLAND_DISPLAY ? `Wayland ${process.env.WAYLAND_DISPLAY}` : ""}${process.env.WAYLAND_DISPLAY && process.env.DISPLAY ? ", " : ""}${process.env.DISPLAY ? `X ${process.env.DISPLAY}` : ""}).`);
+    } else {
+      record("Browser", "Graphical Session", "WARN", "No DISPLAY or WAYLAND_DISPLAY: the ChatGPT window cannot open. Start Orches from the Ubuntu desktop session (or run it under xvfb-run after signing in once on the desktop).");
+    }
   }
 
   // Check ChatGPT Profile Dir

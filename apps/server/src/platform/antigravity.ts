@@ -73,8 +73,13 @@ async function isRunning(): Promise<boolean> {
     }
     return false;
   }
-  const res = await runCommand(["pgrep", "-f", "antigravity"], { cwd: process.cwd(), timeoutMs: 5000 });
-  return res.exitCode === 0;
+  // Match the IDE's own executable (deb/rpm/tarball/Snap installs), not any process that mentions "antigravity".
+  for (const v of PRODUCT_VARIANTS) {
+    const byName = await runCommand(["pgrep", "-x", v.cli], { cwd: process.cwd(), timeoutMs: 5000 });
+    if (byName.exitCode === 0) return true;
+  }
+  const byPath = await runCommand(["pgrep", "-f", "/(antigravity|antigravity-ide)( |$)"], { cwd: process.cwd(), timeoutMs: 5000 });
+  return byPath.exitCode === 0;
 }
 
 export async function getAntigravityStatus(workspaceRoot?: string): Promise<AntigravityStatus> {
