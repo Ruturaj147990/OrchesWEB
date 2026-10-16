@@ -97,14 +97,24 @@ export class SnapshotStore {
 
   /** Files Git would track (tracked + untracked, honoring .gitignore), else a filtered walk. */
   public listWorkspaceFiles(): { mode: "git" | "filesystem"; files: string[] } {
-    const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
-      cwd: this.workspaceRoot,
-      encoding: "utf8",
-      windowsHide: true,
-      maxBuffer: 256 * 1024 * 1024,
-    });
-    if (git.status === 0 && typeof git.stdout === "string" && this.isGitWorkTreeRoot()) {
-      const files = Array.from(new Set(git.stdout.split("\0").filter(Boolean)))
+    const lsFiles = (args: string[]) =>
+      spawnSync("git", ["ls-files", "-z", ...args], {
+        cwd: this.workspaceRoot,
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: 256 * 1024 * 1024,
+      });
+    const tracked = lsFiles(["--cached"]);
+    if (tracked.status === 0 && typeof tracked.stdout === "string" && this.isGitWorkTreeRoot()) {
+      // Untracked files: without a .gitignore (e.g. a repository Orches just initialized) an `npm install`
+      // would otherwise put every node_modules file into each snapshot, diff, review and commit.
+      // Files the user tracks are always included.
+      const others = lsFiles(["--others", "--exclude-standard"]);
+      const untracked = (others.status === 0 && typeof others.stdout === "string" ? others.stdout : "")
+        .split("\0")
+        .filter(Boolean)
+        .filter((rel) => !rel.split("/").slice(0, -1).some((seg) => IGNORED_DIRS.has(seg)));
+      const files = Array.from(new Set([...tracked.stdout.split("\0").filter(Boolean), ...untracked]))
         .filter((rel) => !isIgnoredRel(rel))
         .filter((rel) => {
           try {

@@ -113,10 +113,12 @@ function collect(child: ChildProcess, opts: RunCommandOptions, start: number): P
 
   return new Promise((resolve) => {
     let settled = false;
+    let forceTimer: NodeJS.Timeout | null = null;
     const finish = (result: Partial<RunCommandResult>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (forceTimer) clearTimeout(forceTimer);
       opts.signal?.removeEventListener("abort", onAbort);
       resolve({
         exitCode: null,
@@ -130,27 +132,35 @@ function collect(child: ChildProcess, opts: RunCommandOptions, start: number): P
       });
     };
 
+    // After a kill, 'close' waits for every holder of the output pipes; a descendant that escaped the
+    // process tree would keep them open forever. Give up waiting after a short grace period.
+    const killAndBound = () => {
+      killProcessTree(child);
+      if (!forceTimer) forceTimer = setTimeout(() => finish({ exitCode: child.exitCode ?? null }), 15_000);
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      killProcessTree(child);
+      killAndBound();
     }, opts.timeoutMs ?? 120_000);
 
     const onAbort = () => {
       cancelled = true;
-      killProcessTree(child);
+      killAndBound();
     };
     if (opts.signal) {
       if (opts.signal.aborted) onAbort();
       else opts.signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    child.stdout?.on("data", (d: Buffer) => {
-      const s = d.toString();
+    // Decode as a stream so multi-byte UTF-8 characters split across chunks stay intact.
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (s: string) => {
       stdout = append(stdout, s);
       opts.onOutput?.(s);
     });
-    child.stderr?.on("data", (d: Buffer) => {
-      const s = d.toString();
+    child.stderr?.on("data", (s: string) => {
       stderr = append(stderr, s);
       opts.onOutput?.(s);
     });

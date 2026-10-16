@@ -140,10 +140,10 @@ export function evaluateAttempt(input: GateInput): GateDecision {
       criticEndorses = true;
       evidence.push(`Critic review accepted the change${critic.summary ? `: ${critic.summary}` : "."}`);
     } else {
+      // Only the reviewer's own ACCEPT accepts the work — on the last iteration too. Accepting a REPAIR or
+      // BLOCKED verdict because the iteration budget ran out would report work as accepted that was not.
       warnings.push(`Critic asked for changes without a concrete failed criterion or serious finding${critic.summary ? ` (${critic.summary})` : ""}.`);
-      if (input.isFinalAttempt === false) {
-        blockers.push(`Critic requested repair: ${critic.summary || "revisions requested by reviewer before acceptance"}.`);
-      }
+      blockers.push(`Critic requested ${critic.verdict === "blocked" ? "more evidence" : "repair"}: ${critic.summary || "revisions requested by reviewer before acceptance"}.`);
     }
   }
 

@@ -90,6 +90,9 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
     }
     const status = await getBridgeStatus(input.workspacePath);
     if (!status.matchingWindow?.canSubmit) {
+      // The IDE window is closed or restarting: an infrastructure problem, so the pipeline waits and
+      // sends the same instruction again instead of using up an iteration.
+      result.errorKind = "not_started";
       result.error = status.message;
       return result;
     }
@@ -115,11 +118,18 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
       watcher = fs.watch(input.workspacePath, { recursive: true }, (_e, name) => {
         if (name && !/^(\.git|node_modules)([\\/]|$)/.test(String(name))) lastActivity = Date.now();
       });
+      // Without a listener an asynchronous watcher error (folder removed, inotify limit) would crash the server.
+      watcher.on("error", () => {
+        watcher?.close();
+        watcher = null;
+      });
     } catch {}
 
+    let submitted = false;
     try {
       input.onLog(`[antigravity] Submitting instruction to the Agent panel (${prompt.length} chars)…`);
       const { submittedAt, windowPid } = await submitToAgent(input.workspacePath, prompt);
+      submitted = true;
       input.onLog(`[antigravity] Submitted to window ${windowPid}; waiting for the agent's conversation ${marker}…`);
       let reported = 0;
       const wait = await waitForAgent({
@@ -193,6 +203,10 @@ export class AntigravityAgentAdapter implements CodingAgentAdapter {
       }
       return result;
     } catch (err) {
+      // Submission never reached the agent (bridge unreachable): retried by the pipeline, not counted as an
+      // iteration. After a successful submission the agent may already be working, so it is never resent.
+      // A timed-out submission may still have been delivered, so it is not resent either.
+      if (!submitted && !/timeout|timed out|aborted/i.test(`${(err as Error).name} ${(err as Error).message}`)) result.errorKind = "not_started";
       result.error = `Could not reach the Antigravity Agent: ${(err as Error).message}`;
       return result;
     } finally {
